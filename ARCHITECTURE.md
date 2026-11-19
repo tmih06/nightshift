@@ -35,7 +35,7 @@ real object you can look at with k9s (`:sbt` `:swp` `:sbc` `:sbx`).
   YOU ── apply demo-warmpool.yaml (ONCE)
     │
     ├─►  SandboxTemplate "agent-bash-template"      ← the BLUEPRINT
-    │      image: debian:12-slim, runs `sleep infinity`, has bash
+    │      image: debian:12-slim, runs `sleep infinity`, has bash, capped at 500m CPU and 256Mi
     │                     ▲
     │                     │  spec.sandboxTemplateRef
     │                     │
