@@ -1,0 +1,149 @@
+package main
+
+import (
+	"encoding/json"
+	"testing"
+)
+
+func TestCPUMillicores(t *testing.T) {
+	cases := []struct {
+		in   string
+		want int64
+	}{
+		{"100m", 100},
+		{"500m", 500},
+		{"1", 1000},
+		{"2500000n", 2},
+		{"4857n", 0},
+	}
+	for _, tc := range cases {
+		got, err := cpuMillicores(tc.in)
+		if err != nil || got != tc.want {
+			t.Errorf("cpuMillicores(%q) = %d, %v, want %d", tc.in, got, err, tc.want)
+		}
+	}
+	for _, bad := range []string{"", "abc", "12x"} {
+		if _, err := cpuMillicores(bad); err == nil {
+			t.Errorf("cpuMillicores(%q) accepted a bad quantity", bad)
+		}
+	}
+}
+
+func TestMemMiB(t *testing.T) {
+	cases := []struct {
+		in   string
+		want int64
+	}{
+		{"128Mi", 128},
+		{"256Mi", 256},
+		{"7151616", 6},
+		{"2048Ki", 2},
+		{"1Gi", 1024},
+	}
+	for _, tc := range cases {
+		got, err := memMiB(tc.in)
+		if err != nil || got != tc.want {
+			t.Errorf("memMiB(%q) = %d, %v, want %d", tc.in, got, err, tc.want)
+		}
+	}
+	for _, bad := range []string{"", "zz", "5MB"} {
+		if _, err := memMiB(bad); err == nil {
+			t.Errorf("memMiB(%q) accepted a bad quantity", bad)
+		}
+	}
+}
+
+const sandboxListFixture = `{"items":[
+ {"metadata":{"name":"sbx-warm-1","ownerReferences":[{"kind":"SandboxWarmPool","name":"agent-pool"}]}},
+ {"metadata":{"name":"sbx-orphan"}},
+ {"metadata":{"name":"sbx-claim-1","ownerReferences":[{"kind":"SandboxClaim","name":"my-agent"}]}}
+]}`
+
+const podListFixture = `{"items":[
+ {"metadata":{"name":"sbx-warm-1"},"spec":{"containers":[{"resources":{"limits":{"cpu":"500m","memory":"256Mi"}}}]},"status":{"phase":"Running"}},
+ {"metadata":{"name":"sbx-claim-1"},"spec":{"containers":[{"resources":{"limits":{"cpu":"250m","memory":"128Mi"}}}]},"status":{"phase":"Running"}}
+]}`
+
+const metricsFixture = `{"items":[
+ {"metadata":{"name":"sbx-warm-1"},"containers":[{"usage":{"cpu":"2500000n","memory":"7151616"}}]},
+ {"metadata":{"name":"sbx-gone"},"containers":[{"usage":{"cpu":"1n","memory":"1024"}}]}
+]}`
+
+func mustParse(t *testing.T, in string, out any) {
+	t.Helper()
+	if err := json.Unmarshal([]byte(in), out); err != nil {
+		t.Fatalf("fixture parse: %v", err)
+	}
+}
+
+// The observable behavior: the join maps each sandbox to its pod limits and
+// its live usage by name, warm sandboxes sort first, and a sandbox without a
+// pod still shows with an unknown phase.
+func TestBuildSandboxes(t *testing.T) {
+	var sb sandboxList
+	var pl podList
+	var ml podMetricsList
+	mustParse(t, sandboxListFixture, &sb)
+	mustParse(t, podListFixture, &pl)
+	mustParse(t, metricsFixture, &ml)
+
+	boxes, err := buildSandboxes(sb, pl, &ml)
+	if err != nil {
+		t.Fatalf("buildSandboxes: %v", err)
+	}
+	if len(boxes) != 3 {
+		t.Fatalf("got %d boxes, want 3", len(boxes))
+	}
+
+	warm := boxes[0]
+	if warm.name != "sbx-warm-1" || warm.ownerKind != "SandboxWarmPool" || warm.owner != "agent-pool" {
+		t.Errorf("warm box = %+v", warm)
+	}
+	if warm.phase != "Running" || warm.cpuLimitMC != 500 || warm.memLimitMiB != 256 {
+		t.Errorf("warm box = %+v", warm)
+	}
+	if warm.cpuUsageMC != 2 || warm.memUsageMiB != 6 {
+		t.Errorf("warm usage = %+v, want cpu 2m mem 6Mi", warm)
+	}
+
+	claim := boxes[1]
+	if claim.name != "sbx-claim-1" || claim.ownerKind != "SandboxClaim" || claim.owner != "my-agent" {
+		t.Errorf("claimed box = %+v", claim)
+	}
+	if claim.cpuLimitMC != 250 || claim.memLimitMiB != 128 {
+		t.Errorf("claimed box limits = %+v, want 250m and 128Mi from its own pod", claim)
+	}
+	if claim.cpuUsageMC != 0 || claim.memUsageMiB != 0 {
+		t.Errorf("claimed box usage = %+v, want zero: no metrics entry matches", claim)
+	}
+
+	orphan := boxes[2]
+	if orphan.name != "sbx-orphan" || orphan.phase != "…" || orphan.cpuLimitMC != 0 {
+		t.Errorf("podless box = %+v, want unknown phase and no limits", orphan)
+	}
+}
+
+func TestBuildSandboxesRejectsBadQuantities(t *testing.T) {
+	var sb sandboxList
+	var pl podList
+	var ml podMetricsList
+	mustParse(t, sandboxListFixture, &sb)
+	mustParse(t, metricsFixture, &ml)
+
+	badPods := `{"items":[
+	 {"metadata":{"name":"sbx-warm-1"},"spec":{"containers":[{"resources":{"limits":{"cpu":"1x"}}}]},"status":{"phase":"Running"}}
+	]}`
+	mustParse(t, badPods, &pl)
+	if _, err := buildSandboxes(sb, pl, &ml); err == nil {
+		t.Error("buildSandboxes accepted an unparsable cpu limit")
+	}
+
+	badMetrics := `{"items":[
+	 {"metadata":{"name":"sbx-warm-1"},"containers":[{"usage":{"cpu":"zz","memory":"10Mi"}}]}
+	]}`
+	mustParse(t, badMetrics, &ml)
+	mustParse(t, podListFixture, &pl)
+	if _, err := buildSandboxes(sb, pl, &ml); err == nil {
+		t.Error("buildSandboxes accepted an unparsable usage quantity")
+	}
+}
