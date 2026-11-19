@@ -1,8 +1,10 @@
 // The view. Left pane: navigation, warm and claimed sandboxes in
-// separate sections. Right pane: the inspect view of the selection.
-// Bordered panes get their content filled to an exact height, never a
-// Height on the style, and every string is truncated to the pane's
-// inner width.
+// separate sections, its width set by dragging the splitter. Right
+// column: a header pane with the selection's essential data and a
+// shell pane embedding the sandbox's tmux session, which never takes
+// over the whole terminal. Bordered panes get their content filled to
+// an exact height, never a Height on the style, and every string is
+// truncated to the pane's inner width.
 package dashboard
 
 import (
@@ -15,23 +17,70 @@ import (
 	"github.com/tmih06/nightshift/internal/cluster"
 )
 
-// stackedBelow is the width where the panes stop fitting side by side.
-const stackedBelow = 50
+const (
+	// stackedBelow is the width where the panes stop fitting side by
+	// side.
+	stackedBelow = 50
+	minLeftW     = 15
+	minRightW    = 20
+)
 
-// calculateLayout returns the left pane's outer width, its outer
-// height, and whether the panes stack on narrow terminals. Golden rule
-// 4: weights, not pixels. The left pane takes a third of the width.
-func (m model) calculateLayout() (leftW, leftH int, stacked bool) {
-	stacked = m.width < stackedBelow
+// layout is the one source of truth for pane geometry: the view, the
+// mouse hit tests, and the tmux pane size all read it, so they cannot
+// disagree.
+type layout struct {
+	leftW, leftH int
+	colW         int // right column outer width
+	headerH      int
+	shellH       int
+	stacked      bool
+	shellTop     int // absolute row where the shell pane starts
+}
+
+// layout derives the geometry. Golden rule 4: the drag stores a
+// clamped override, and every other size follows from weights.
+func (m model) layout() layout {
 	panelsH := max(m.height-2, 3) // title line plus status line
-	if stacked {
-		return m.width, panelsH / 2, true
+	var l layout
+	if m.width < stackedBelow {
+		l.stacked = true
+		l.leftW = m.width
+		l.leftH = m.leftHeight
+		if l.leftH <= 0 {
+			l.leftH = panelsH / 3
+		}
+		l.leftH = clamp(l.leftH, 3, max(panelsH-6, 3))
+		l.colW = m.width
+		rest := max(panelsH-l.leftH, 6)
+		l.headerH = headerHeight(rest)
+		l.shellH = max(rest-l.headerH, 3)
+		l.shellTop = contentStartY + l.leftH + l.headerH
+		return l
 	}
-	leftW = max(m.width/3, 20)
-	if leftW > m.width {
-		leftW = m.width
+	l.leftW = m.leftWidth
+	if l.leftW <= 0 {
+		l.leftW = m.width / 3
 	}
-	return leftW, panelsH, false
+	l.leftW = clamp(l.leftW, minLeftW, max(m.width-minRightW, minLeftW))
+	l.leftH = panelsH
+	l.colW = max(m.width-l.leftW-1, 1)
+	l.headerH = headerHeight(panelsH)
+	l.shellH = max(panelsH-l.headerH, 3)
+	l.shellTop = contentStartY + l.headerH
+	return l
+}
+
+// headerHeight sizes the header pane: the content needs about 12 rows,
+// never more than half the column.
+func headerHeight(avail int) int {
+	return min(14, max(avail/2, 3))
+}
+
+// shellPaneSize is the embedded shell's inner size, what the tmux
+// window is resized to.
+func (m model) shellPaneSize() (int, int) {
+	l := m.layout()
+	return max(l.colW-4, 1), max(l.shellH-2, 1)
 }
 
 // pane fills lines to innerH and renders them in the bordered style.
@@ -50,7 +99,8 @@ func pane(style lipgloss.Style, lines []string, outerW, outerH int) string {
 // holds an entry to its index in m.boxes. One function backs the view
 // and the mouse so the two cannot disagree.
 func (m model) leftLines() ([]string, map[int]int) {
-	innerW := m.leftInnerWidth()
+	l := m.layout()
+	innerW := max(l.leftW-4, 1)
 	targets := map[int]int{}
 	var lines []string
 	var warm, claimed []int
@@ -103,21 +153,10 @@ func (m model) leftLines() ([]string, map[int]int) {
 	return lines, targets
 }
 
-func (m model) leftInnerWidth() int {
-	leftW, _, _ := m.calculateLayout()
-	return max(leftW-4, 1)
-}
-
-func (m model) rightInnerWidth() int {
-	leftW, _, stacked := m.calculateLayout()
-	if stacked {
-		return max(m.width-4, 1)
-	}
-	return max(m.width-leftW-1-4, 1)
-}
-
-func (m model) rightLines() []string {
-	innerW := m.rightInnerWidth()
+// headerLines renders the inspect header: the selection's essential
+// data and usage.
+func (m model) headerLines() []string {
+	innerW := max(m.layout().colW-4, 1)
 	b := m.selectedBox()
 	if b == nil {
 		return []string{" " + dim("nothing selected")}
@@ -143,15 +182,48 @@ func (m model) rightLines() []string {
 	lines = append(lines, resourceLine("MEM", m.metricsOK, b.MemUsageMiB, b.MemLimitMiB, "Mi", innerW))
 	lines = append(lines, "")
 	if b.OwnerKind == "SandboxClaim" {
-		lines = append(lines, " "+dim("[enter] bash   [x] destroy claim"))
+		lines = append(lines, " "+dim("[enter] bash   [F] fullscreen   [x] destroy claim"))
 	} else {
-		lines = append(lines, " "+dim("[enter] bash   [c] claim a warm sandbox"))
+		lines = append(lines, " "+dim("[enter] bash   [F] fullscreen   [c] claim a warm sandbox"))
 	}
 	return lines
 }
 
-// pair renders a label and value row, truncating the value to the pane
-// width. label+value both plain strings.
+// shellLinesView renders the embedded shell: a title row, then the
+// captured pane content, bottom-aligned and truncated. The capture is
+// shown only while it matches the selection.
+func (m model) shellLinesView() []string {
+	l := m.layout()
+	innerW := max(l.colW-4, 1)
+	innerH := max(l.shellH-2, 1)
+	b := m.selectedBox()
+
+	var title string
+	switch {
+	case b == nil:
+		title = dim("shell")
+	case !m.sessions[b.Name]:
+		title = dim("no session — enter starts bash")
+	case m.shellFocus:
+		title = cursorStyle.Render("▶ bash — keys go here, esc leaves")
+	default:
+		title = dim("bash — click here or press enter to focus")
+	}
+	lines := []string{" " + title}
+
+	if b != nil && m.sessions[b.Name] && m.shellPod == b.Name {
+		content := m.shellLines
+		if len(content) > innerH-1 {
+			content = content[len(content)-(innerH-1):]
+		}
+		for _, ln := range content {
+			lines = append(lines, " "+truncate(ln, innerW-1))
+		}
+	}
+	return lines
+}
+
+// pair renders a label and value row.
 func pair(label, value string) string {
 	return dimStyle.Render(fmt.Sprintf("%-6s", label)) + " " + value
 }
@@ -165,10 +237,9 @@ func sessionName(pod string) string {
 	return "sbx-" + pod
 }
 
-// resourceLine renders one usage line: label, usage/limit, a bar, and
-// a percentage, padded to exactly innerW columns so it never wraps.
-// Fixed columns: leading space, 6 label, 11 numbers, and 4 percent,
-// three separators; the bar takes the rest.
+// resourceLine renders one usage line, padded to exactly innerW
+// columns so it never wraps. Fixed columns: leading space, 6 label, 11
+// numbers, 4 percent, three separators; the bar takes the rest.
 func resourceLine(label string, usageKnown bool, usage, limit int64, unit string, innerW int) string {
 	num := "--"
 	if usageKnown {
@@ -225,6 +296,19 @@ func truncate(s string, max int) string {
 	return s[:max-1] + "…"
 }
 
+func clamp(v, lo, hi int) int {
+	if hi < lo {
+		hi = lo
+	}
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
 func ageString(ts time.Time) string {
 	if ts.IsZero() {
 		return "…"
@@ -243,16 +327,22 @@ func ageString(ts time.Time) string {
 }
 
 func (m model) statusLine() string {
-	keys := "j/k move · enter bash · c claim · x destroy · r refresh · q quit"
-	line := dim(keys)
 	msg := m.status
 	if m.err != nil {
 		msg = badStyle.Render("fetch error: " + m.err.Error())
 	} else if msg == "" && !m.metricsOK && m.loaded {
-		msg = warnStyle.Render("live usage unavailable: metrics-server not reachable")
+		msg = warnStyle.Render("live usage unavailable (metrics-server)")
 	}
-	if msg != "" {
-		line += "   " + msg
+	// A message replaces the key hint instead of joining it: two full
+	// strings do not fit one row.
+	var line string
+	switch {
+	case msg != "":
+		line = msg + dim("  ·  q quits")
+	case m.shellFocus:
+		line = dim("esc back · keys go to bash · C-b d works inside")
+	default:
+		line = dim("j/k move · enter bash · F fullscreen · c claim · x destroy · q quit · drag resizes")
 	}
 	// MaxWidth truncates by display width, ANSI-aware.
 	return lipgloss.NewStyle().MaxWidth(m.width).Render(line)
@@ -266,19 +356,23 @@ func (m model) View() string {
 	title := titleStyle.Render("nightshift") + "  " +
 		dim(fmt.Sprintf("%d sandboxes · ns %s", len(m.boxes), cluster.Namespace))
 
-	leftW, leftH, stacked := m.calculateLayout()
+	l := m.layout()
 	leftLines, _ := m.leftLines()
-	left := pane(leftPanelStyle, leftLines, leftW, leftH)
+	left := pane(leftPanelStyle, leftLines, l.leftW, l.leftH)
+
+	header := pane(rightPanelStyle, m.headerLines(), l.colW, l.headerH)
+	shellStyle := rightPanelStyle
+	if m.shellFocus {
+		shellStyle = leftPanelStyle // accent border while keys land here
+	}
+	shell := pane(shellStyle, m.shellLinesView(), l.colW, l.shellH)
+	rightCol := lipgloss.JoinVertical(lipgloss.Left, header, shell)
 
 	var body string
-	if stacked {
-		rightH := max(m.height-2-leftH, 3)
-		right := pane(rightPanelStyle, m.rightLines(), m.width, rightH)
-		body = lipgloss.JoinVertical(lipgloss.Left, left, right)
+	if l.stacked {
+		body = lipgloss.JoinVertical(lipgloss.Left, left, rightCol)
 	} else {
-		rightW := max(m.width-leftW-1, 1)
-		right := pane(rightPanelStyle, m.rightLines(), rightW, leftH)
-		body = lipgloss.JoinHorizontal(lipgloss.Top, left, right)
+		body = lipgloss.JoinHorizontal(lipgloss.Top, left, rightCol)
 	}
 	return title + "\n" + body + "\n" + m.statusLine()
 }

@@ -1,7 +1,8 @@
 // The dashboard model. Navigation lives in the left pane (warm and
-// claimed sandboxes as separate sections), the selected sandbox's detail
-// in the right. The session map mirrors which pods have a live tmux
-// session, so bash survives navigation and quitting.
+// claimed sandboxes as separate sections), the right column holds the
+// header pane with the selection's data and the shell pane embedding
+// its tmux session. The session map mirrors which pods have a live
+// tmux session, so bash survives navigation and quitting.
 package dashboard
 
 import (
@@ -13,7 +14,10 @@ import (
 	"github.com/tmih06/nightshift/internal/session"
 )
 
-const refreshEvery = 2 * time.Second
+const (
+	refreshEvery      = 2 * time.Second
+	shellRefreshEvery = 200 * time.Millisecond
+)
 
 type model struct {
 	boxes     []cluster.Sandbox
@@ -26,8 +30,25 @@ type model struct {
 	// confirmDestroy arms the x key so one stray press cannot tear a
 	// claimed sandbox down. The second press fires.
 	confirmDestroy bool
-	width          int
-	height         int
+
+	// Pane state. leftWidth and leftHeight are drag overrides of the
+	// default split; zero means default. dragging is armed by a press
+	// on the splitter and cleared on release.
+	leftWidth  int
+	leftHeight int
+	dragging   bool
+
+	// Embedded shell. shellFocus routes keys to the tmux session
+	// instead of the navigation. shellLines and shellPod hold the last
+	// capture, shown only while it matches the selection. shellW and
+	// shellH are the pane size last sent to tmux.
+	shellFocus     bool
+	shellLines     []string
+	shellPod       string
+	shellW, shellH int
+
+	width  int
+	height int
 }
 
 // New returns the model the program runs.
@@ -36,6 +57,7 @@ func New() tea.Model {
 }
 
 type tickMsg struct{}
+type shellTickMsg struct{}
 
 type loadedMsg struct {
 	boxes     []cluster.Sandbox
@@ -54,7 +76,14 @@ type deletedMsg struct {
 	err   error
 }
 
+// attachReadyMsg: the tmux session exists, focus the embedded shell.
 type attachReadyMsg struct {
+	pod string
+	err error
+}
+
+// fullReadyMsg: the tmux session exists, take the whole terminal.
+type fullReadyMsg struct {
 	pod string
 	err error
 }
@@ -63,8 +92,22 @@ type resumeMsg struct {
 	err error
 }
 
+type shellMsg struct {
+	pod   string
+	lines []string
+	err   error
+}
+
+type sendErrMsg struct {
+	err error
+}
+
 func tickCmd() tea.Cmd {
 	return tea.Tick(refreshEvery, func(time.Time) tea.Msg { return tickMsg{} })
+}
+
+func shellTickCmd() tea.Cmd {
+	return tea.Tick(shellRefreshEvery, func(time.Time) tea.Msg { return shellTickMsg{} })
 }
 
 func fetchCmd() tea.Cmd {
@@ -93,8 +136,8 @@ func deleteClaimCmd(claim string) tea.Cmd {
 	}
 }
 
-// attachCmd ensures the tmux session exists off the render loop, then
-// the attachReadyMsg handler suspends into it.
+// attachCmd ensures the tmux session exists off the render loop; the
+// attachReadyMsg handler then focuses the embedded shell pane.
 func attachCmd(pod string) tea.Cmd {
 	return func() tea.Msg {
 		if err := session.Ensure(pod); err != nil {
@@ -104,8 +147,47 @@ func attachCmd(pod string) tea.Cmd {
 	}
 }
 
+// fullCmd ensures the session, then the fullReadyMsg handler takes the
+// whole terminal for full-screen programs.
+func fullCmd(pod string) tea.Cmd {
+	return func() tea.Msg {
+		if err := session.Ensure(pod); err != nil {
+			return fullReadyMsg{pod: pod, err: err}
+		}
+		return fullReadyMsg{pod: pod}
+	}
+}
+
+// captureCmd reads the session's pane, resizing it first when the shell
+// pane changed size.
+func captureCmd(pod string, w, h int, resize bool) tea.Cmd {
+	return func() tea.Msg {
+		if resize {
+			_ = session.Resize(pod, w, h)
+		}
+		lines, err := session.Capture(pod)
+		return shellMsg{pod: pod, lines: lines, err: err}
+	}
+}
+
+// sendCmd delivers one keypress or a literal string to the session.
+func sendCmd(pod, key, text string) tea.Cmd {
+	return func() tea.Msg {
+		var err error
+		if text != "" {
+			err = session.SendText(pod, text)
+		} else {
+			err = session.SendKey(pod, key)
+		}
+		if err != nil {
+			return sendErrMsg{err: err}
+		}
+		return nil
+	}
+}
+
 func (m model) Init() tea.Cmd {
-	return tea.Batch(fetchCmd(), tickCmd())
+	return tea.Batch(fetchCmd(), tickCmd(), shellTickCmd())
 }
 
 // selectedBox returns the sandbox under the cursor, or nil.

@@ -64,14 +64,22 @@ the pane command finishes, and tmux destroys the session, so a session
 can never outlive its sandbox. The dashboard never garbage collects
 sessions, it only lists them.
 
-The dashboard uses three tmux commands.
+The dashboard drives tmux with five commands, and the shell never
+takes over the terminal.
 
-- `new-session -d -s sbx-<pod> 'kubectl exec -it <pod> -- bash'` on the
-  first attach, detached so the session starts without a client.
-- `has-session -t` and one `list-sessions` to show the live-session dots
-  in the left pane and the tmux row in the inspect pane.
-- `attach-session -t` from the enter key, suspending the TUI while bash
-  runs, resuming it on detach with `C-b d`.
+- `new-session -d -s sbx-<pod> -x 160 -y 40 'kubectl exec -it <pod> --
+  bash'` on the first attach, detached so the session starts without a
+  client.
+- `has-session -t` and one `list-sessions` to show the live-session
+  dots in the left pane and the tmux row in the header.
+- `resize-window -x W -y H` matches the session's window to the shell
+  pane, so output wraps where the dashboard shows it.
+- `capture-pane -p -J -t` every 200ms renders the session inside the
+  dashboard's shell pane, bottom-aligned.
+- `send-keys -t` carries the keystrokes typed while the shell pane has
+  focus, so typing goes to bash without tmux owning the screen.
+- `attach-session -t` remains only behind the F key, the escape hatch
+  for full-screen programs like vim. Detach returns with C-b d.
 
 Everything else, the pool refill, the claim teardown, the refresh, is
 Kubernetes doing its own work.
@@ -83,6 +91,13 @@ enter the claimed sandbox's bash, start a loop writing a counter to
 /tmp/alive, detach with C-b d, quit the dashboard. The counter read 15
 seconds of work at detach and 19 four seconds later, measured through
 kubectl exec, so the command kept running after the dashboard exited.
+
+The embedded shell was verified the same way on a real pty: enter
+focused the shell pane, `echo E2E_EMBED_OK` typed through the pane ran
+in the sandbox and its output rendered inside the dashboard frame, and
+the alt screen was entered exactly once, at startup. Dragging the
+splitter with SGR mouse sequences resized the left pane from 33 to 60
+columns live.
 
 ## Sources
 

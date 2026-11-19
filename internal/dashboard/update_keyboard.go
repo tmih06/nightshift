@@ -35,8 +35,16 @@ func (m model) updateKeyboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status = "pod is " + b.Phase + ", no bash to enter"
 			return m, nil
 		}
-		m.status = "opening bash in " + b.Name + ", detach with C-b d"
+		m.status = "starting bash in " + b.Name
 		return m, attachCmd(b.Name)
+	case "F":
+		// Fullscreen escape hatch for full-screen programs.
+		b := m.selectedBox()
+		if b == nil || b.Phase != "Running" {
+			return m, nil
+		}
+		m.status = "opening fullscreen bash, detach with C-b d"
+		return m, fullCmd(b.Name)
 	case "x":
 		b := m.selectedBox()
 		if b == nil || b.OwnerKind != "SandboxClaim" {

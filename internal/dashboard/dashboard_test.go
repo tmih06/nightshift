@@ -370,4 +370,232 @@ func TestMoveSelectionClamps(t *testing.T) {
 	}
 }
 
+func press(x, y int) tea.MouseMsg {
+	return tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}
+}
+
+func drag(x, y int) tea.MouseMsg {
+	return tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft}
+}
+
+func release(x, y int) tea.MouseMsg {
+	return tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft}
+}
+
+func TestLayoutDefaultsAndDragOverride(t *testing.T) {
+	m := baseModel() // 100x30
+	l := m.layout()
+	if l.leftW != 33 || l.headerH != 14 || l.shellH != 14 || l.stacked {
+		t.Errorf("default layout = %+v, want leftW 33, header 14, shell 14", l)
+	}
+
+	m.leftWidth = 60
+	if got := m.layout().leftW; got != 60 {
+		t.Errorf("leftW override = %d, want 60", got)
+	}
+	// The drag cannot swallow the right column or shrink the nav away.
+	m.leftWidth = 2
+	if got := m.layout().leftW; got != minLeftW {
+		t.Errorf("leftW below minimum = %d, want %d", got, minLeftW)
+	}
+	m.leftWidth = 95
+	if got := m.layout().leftW; got != 80 { // width - minRightW
+		t.Errorf("leftW above maximum = %d, want 80", got)
+	}
+}
+
+func TestDragResizesLeftPane(t *testing.T) {
+	m := baseModel() // divider sits at x=33
+
+	newM, _ := m.updateMouse(press(33, 10))
+	if !newM.(model).dragging {
+		t.Fatal("press on the divider did not arm dragging")
+	}
+
+	newM, _ = newM.(model).updateMouse(drag(60, 10))
+	if got := newM.(model).leftWidth; got != 60 {
+		t.Errorf("leftWidth after drag = %d, want 60", got)
+	}
+	if got := newM.(model).layout().leftW; got != 60 {
+		t.Errorf("layout leftW after drag = %d, want 60", got)
+	}
+
+	newM, _ = newM.(model).updateMouse(release(60, 10))
+	if newM.(model).dragging {
+		t.Error("release did not clear dragging")
+	}
+
+	// Drags beyond the limits clamp, so the nav pane cannot swallow the
+	// right column or shrink to nothing.
+	clamped, _ := m.updateMouse(press(33, 10))
+	clamped, _ = clamped.(model).updateMouse(drag(5, 10))
+	if got := clamped.(model).layout().leftW; got != minLeftW {
+		t.Errorf("drag to 5 = %d, want clamped to %d", got, minLeftW)
+	}
+	clamped, _ = clamped.(model).updateMouse(drag(95, 10))
+	if got := clamped.(model).layout().leftW; got != 80 { // width - minRightW
+		t.Errorf("drag to 95 = %d, want clamped to 80", got)
+	}
+
+	// A plain click in the pane body does not arm the drag.
+	newM, _ = m.updateMouse(press(5, 4))
+	if newM.(model).dragging {
+		t.Error("click on an entry armed dragging")
+	}
+}
+
+func TestStackedDragResizesLeftHeight(t *testing.T) {
+	m := baseModel()
+	m.width = 40 // stacked, leftH defaults to 9
+	divY := contentStartY + m.layout().leftH - 1
+
+	newM, _ := m.updateMouse(press(20, divY))
+	if !newM.(model).dragging {
+		t.Fatal("press on the stacked divider did not arm dragging")
+	}
+	newM, _ = newM.(model).updateMouse(drag(20, 16))
+	if got := newM.(model).leftHeight; got != 15 {
+		t.Errorf("leftHeight after drag = %d, want 15", got)
+	}
+}
+
+func TestClickFocusesShellPane(t *testing.T) {
+	m := baseModel() // shellTop = 2 + headerH(14) = 16
+
+	newM, _ := m.updateMouse(press(70, 20))
+	if !newM.(model).shellFocus {
+		t.Error("click in the shell pane did not focus it")
+	}
+
+	newM, _ = m.updateMouse(press(5, 4))
+	if newM.(model).shellFocus {
+		t.Error("click on a left-pane entry must return to navigation")
+	}
+}
+
+func TestShellKeyRouting(t *testing.T) {
+	m := baseModel()
+	m.selected = 0
+	m.sessions["agent-pool-5ss7w"] = true
+	m.shellFocus = true
+
+	// Esc is the dashboard's own key: it leaves the shell.
+	newM, _ := m.updateShellKeys(tea.KeyMsg{Type: tea.KeyEsc})
+	if newM.(model).shellFocus {
+		t.Error("esc did not leave the shell focus")
+	}
+
+	// Letters, including q, go to the session instead of quitting.
+	_, cmd := m.updateShellKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if cmd == nil {
+		t.Error("a rune in shell focus produced no send command")
+	}
+
+	// Ctrl+c interrupts the bash process instead of quitting the app.
+	_, cmd = m.updateShellKeys(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd == nil {
+		t.Error("ctrl+c in shell focus produced no send command")
+	}
+
+	// Unmapped keys are dropped, not sent garbage.
+	_, cmd = m.updateShellKeys(tea.KeyMsg{Type: tea.KeyF5})
+	if cmd != nil {
+		t.Error("unmapped key produced a send command")
+	}
+
+	// Without a live session the focus falls back to navigation.
+	bare := baseModel()
+	bare.shellFocus = true
+	newM, _ = bare.updateShellKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	if newM.(model).shellFocus {
+		t.Error("keys with no session must not stay in the shell")
+	}
+}
+
+func TestTmuxKeyName(t *testing.T) {
+	cases := map[string]string{
+		"enter": "Enter", "up": "Up", "backspace": "BSpace",
+		"ctrl+c": "C-c", "ctrl+d": "C-d", "tab": "Tab",
+	}
+	for in, want := range cases {
+		got, ok := tmuxKeyName(in)
+		if !ok || got != want {
+			t.Errorf("tmuxKeyName(%q) = %q, %v, want %q", in, got, ok, want)
+		}
+	}
+	if _, ok := tmuxKeyName("f5"); ok {
+		t.Error("tmuxKeyName mapped an unknown key")
+	}
+}
+
+func TestShellCaptureDisplay(t *testing.T) {
+	m := baseModel()
+	m.selected = 0
+	m.sessions["agent-pool-5ss7w"] = true
+
+	newM, _ := m.Update(shellMsg{pod: "agent-pool-5ss7w", lines: []string{"$ echo hi", "hi"}})
+	if got := newM.(model).shellLines; len(got) != 2 {
+		t.Fatalf("shellLines = %v, want the captured two lines", got)
+	}
+	if g := newM.(model).View(); !strings.Contains(g, "$ echo hi") {
+		t.Errorf("view missing the captured shell content")
+	}
+
+	// A capture for another pod is not shown.
+	newM, _ = newM.(model).Update(shellMsg{pod: "agent-pool-lqbmx", lines: []string{"other"}})
+	if got := newM.(model).View(); strings.Contains(got, "other") {
+		t.Errorf("view showed a capture from a pod that is not selected")
+	}
+
+	// A failed capture clears the stale content.
+	newM, _ = newM.(model).Update(shellMsg{pod: "agent-pool-5ss7w", err: errFixture})
+	if got := newM.(model).shellLines; got != nil {
+		t.Errorf("failed capture left stale lines: %v", got)
+	}
+}
+
+func TestShellTick(t *testing.T) {
+	m := baseModel()
+	m.selected = 0
+	m.sessions["agent-pool-5ss7w"] = true
+
+	newM, cmd := m.Update(shellTickMsg{})
+	if cmd == nil {
+		t.Fatal("shell tick did not re-arm")
+	}
+	if newM.(model).shellW == 0 {
+		t.Error("shell tick did not record the pane size it resized to")
+	}
+
+	// Without a session the tick still re-arms but captures nothing.
+	bare := baseModel()
+	_, cmd = bare.Update(shellTickMsg{})
+	if cmd == nil {
+		t.Fatal("shell tick without a session did not re-arm")
+	}
+}
+
+func TestAttachFocusesShellInsteadOfFullscreen(t *testing.T) {
+	m := baseModel()
+	m.selected = 0
+	m.sessions["agent-pool-5ss7w"] = true
+
+	// enter issues the ensure command, not a fullscreen exec.
+	_, cmd := m.updateKeyboard(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter returned no command")
+	}
+
+	newM, _ := m.Update(attachReadyMsg{pod: "agent-pool-5ss7w"})
+	if !newM.(model).shellFocus {
+		t.Error("a ready session did not focus the embedded shell")
+	}
+
+	// F still reaches the fullscreen path.
+	_, cmd = m.updateKeyboard(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'F'}})
+	if cmd == nil {
+		t.Error("F returned no fullscreen command")
+	}
+}
+
 var errFixture = errors.New("cluster unreachable")
