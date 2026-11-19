@@ -17,5 +17,8 @@ func RunOnce() {
 	}
 	m := model{boxes: boxes, sessions: session.Existing(pods),
 		metricsOK: metricsOK, err: err, loaded: true, width: 100, height: 30}
+	if len(boxes) > 0 {
+		m.selected = boxes[0].Name
+	}
 	fmt.Println(m.View())
 }
