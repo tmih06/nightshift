@@ -1,4 +1,4 @@
-package main
+package cluster
 
 import (
 	"encoding/json"
@@ -96,29 +96,29 @@ func TestBuildSandboxes(t *testing.T) {
 	}
 
 	warm := boxes[0]
-	if warm.name != "sbx-warm-1" || warm.ownerKind != "SandboxWarmPool" || warm.owner != "agent-pool" {
+	if warm.Name != "sbx-warm-1" || warm.OwnerKind != "SandboxWarmPool" || warm.Owner != "agent-pool" {
 		t.Errorf("warm box = %+v", warm)
 	}
-	if warm.phase != "Running" || warm.cpuLimitMC != 500 || warm.memLimitMiB != 256 {
+	if warm.Phase != "Running" || warm.CPULimitMC != 500 || warm.MemLimitMiB != 256 {
 		t.Errorf("warm box = %+v", warm)
 	}
-	if warm.cpuUsageMC != 2 || warm.memUsageMiB != 6 {
+	if warm.CPUUsageMC != 2 || warm.MemUsageMiB != 6 {
 		t.Errorf("warm usage = %+v, want cpu 2m mem 6Mi", warm)
 	}
 
 	claim := boxes[1]
-	if claim.name != "sbx-claim-1" || claim.ownerKind != "SandboxClaim" || claim.owner != "my-agent" {
+	if claim.Name != "sbx-claim-1" || claim.OwnerKind != "SandboxClaim" || claim.Owner != "my-agent" {
 		t.Errorf("claimed box = %+v", claim)
 	}
-	if claim.cpuLimitMC != 250 || claim.memLimitMiB != 128 {
+	if claim.CPULimitMC != 250 || claim.MemLimitMiB != 128 {
 		t.Errorf("claimed box limits = %+v, want 250m and 128Mi from its own pod", claim)
 	}
-	if claim.cpuUsageMC != 0 || claim.memUsageMiB != 0 {
+	if claim.CPUUsageMC != 0 || claim.MemUsageMiB != 0 {
 		t.Errorf("claimed box usage = %+v, want zero: no metrics entry matches", claim)
 	}
 
 	orphan := boxes[2]
-	if orphan.name != "sbx-orphan" || orphan.phase != "…" || orphan.cpuLimitMC != 0 {
+	if orphan.Name != "sbx-orphan" || orphan.Phase != "…" || orphan.CPULimitMC != 0 {
 		t.Errorf("podless box = %+v, want unknown phase and no limits", orphan)
 	}
 }

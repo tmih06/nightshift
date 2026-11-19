@@ -5,16 +5,19 @@ import (
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/tmih06/nightshift/internal/dashboard"
 )
 
 // nightshift: a Bubble Tea dashboard for the agent-sandbox warm pool.
-// go run . opens the TUI, go run . -once prints one frame to stdout.
+// go run ./cmd/nightshift opens the TUI, go run ./cmd/nightshift -once
+// prints one frame to stdout.
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "-once" {
-		runOnce()
+		dashboard.RunOnce()
 		return
 	}
-	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
+	p := tea.NewProgram(dashboard.New(), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
