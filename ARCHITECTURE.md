@@ -89,7 +89,7 @@ real object you can look at with k9s (`:sbt` `:swp` `:sbc` `:sbx`).
 | File                             | Creates                          | Applied   |
 |----------------------------------|---------------------------------------------|
 | `sandbox-with-extensions.yaml` (upstream release, v1.0.11) | 4 CRDs + controller | once, forever |
-| `demo-warmpool.yaml`             | SandboxTemplate + SandboxWarmPool| once      |
+| `demo-warmpool.yaml`             | Namespace + SandboxTemplate + SandboxWarmPool| once      |
 | `demo-claim.yaml`                | SandboxClaim                     | per cycle |
 
 ## Same thing, mermaid version
