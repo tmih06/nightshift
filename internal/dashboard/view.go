@@ -31,6 +31,8 @@ const (
 type layout struct {
 	leftW, leftH int
 	colW         int // right column outer width
+	infoW        int // info box outer width, fitted to its text
+	usageW       int // usage box outer width, the rest of the column
 	headerH      int
 	shellH       int
 	stacked      bool
@@ -54,6 +56,7 @@ func (m model) layout() layout {
 		rest := max(panelsH-l.leftH, 6)
 		l.headerH = headerHeight(rest)
 		l.shellH = max(rest-l.headerH, 3)
+		l.infoW, l.usageW = m.headerBoxWidths(l.colW)
 		l.shellTop = contentStartY + l.leftH + l.headerH
 		return l
 	}
@@ -66,8 +69,31 @@ func (m model) layout() layout {
 	l.colW = max(m.width-l.leftW-1, 1)
 	l.headerH = headerHeight(panelsH)
 	l.shellH = max(panelsH-l.headerH, 3)
+	l.infoW, l.usageW = m.headerBoxWidths(l.colW)
 	l.shellTop = contentStartY + l.headerH
 	return l
+}
+
+// headerBoxWidths splits the header column between the two bento boxes.
+// The info box gets exactly what its text needs, never truncating, and
+// the usage box takes the remainder for charts; both keep a minimum.
+func (m model) headerBoxWidths(colW int) (infoW, usageW int) {
+	infoW = 0
+	for _, ln := range m.headerInfoLines() {
+		// Width(n) gives outer n+2 on this bordered, padded style, so
+		// the box needs the text width plus the padding and border
+		// columns: +4.
+		if w := lipgloss.Width(ln) + 4; w > infoW {
+			infoW = w
+		}
+	}
+	// The info box never cuts text: it takes exactly what its longest
+	// line needs. Only when the column is genuinely too narrow does the
+	// usage box shrink to its minimum, and then the info box itself
+	// wraps, which the pane height covers.
+	infoW = clamp(infoW, 16, max(colW-16, 16))
+	usageW = max(colW-infoW-1, 12)
+	return infoW, usageW
 }
 
 // fitLeftWidth sizes the sidebar to its content: the longest entry and
@@ -82,10 +108,10 @@ func (m model) fitLeftWidth() int {
 	return clamp(w, minLeftW, max(m.width-minRightW, minLeftW))
 }
 
-// headerHeight caps the header at three content rows plus borders,
-// never more than half the column.
+// headerHeight caps the header row at the info box's four content rows
+// plus borders, never more than half the column.
 func headerHeight(avail int) int {
-	return min(5, max(avail/2, 3))
+	return min(6, max(avail/2, 6))
 }
 
 // shellPaneSize is the embedded shell's inner size, what the tmux
@@ -96,6 +122,9 @@ func (m model) shellPaneSize() (int, int) {
 }
 
 // pane fills lines to innerH and renders them in the bordered style.
+// Measured lipgloss semantics: Width(n) with this style's border and
+// padding yields an outer width of n+2, so a pane of outer width W
+// passes Width(W-2) and its text area is W-4.
 func pane(style lipgloss.Style, lines []string, outerW, outerH int) string {
 	innerH := max(outerH-2, 1)
 	for len(lines) < innerH {
@@ -165,14 +194,12 @@ func (m model) leftLines() ([]string, map[int]int) {
 	return lines, targets
 }
 
-// headerLines renders the three-line inspect header: the info part
-// left of a vertical divider, the usage part with its history charts
-// on the right. Never more than three rows.
-func (m model) headerLines() []string {
-	inner := max(m.layout().colW-4, 1)
+// headerInfoLines renders the text of the info box, untruncated: the
+// box sizes itself to fit this content exactly.
+func (m model) headerInfoLines() []string {
 	b := m.selectedBox()
 	if b == nil {
-		return []string{" " + dim("nothing selected")}
+		return []string{"nothing selected"}
 	}
 
 	badge, badgeStyle := "warm", warmStyle
@@ -187,38 +214,27 @@ func (m model) headerLines() []string {
 		sess = warmStyle.Render("tmux live")
 	}
 
-	info := []string{
-		" " + nameStyle.Render(truncate(b.Name, 22)) + dim(" · ") + badgeStyle.Render(badge),
-		" " + dim("owner ") + truncate(b.Owner, 20) + dim(" · ") + ageString(b.Created),
-		" " + b.Phase + dim(" · ") + sess,
+	return []string{
+		" " + nameStyle.Render(b.Name),
+		" " + dim("owner ") + b.Owner,
+		" " + b.Phase + dim(" · ") + badgeStyle.Render(badge),
+		" " + sess + dim(" · ") + ageString(b.Created),
 	}
-	infoW := 0
-	for _, ln := range info {
-		if w := lipgloss.Width(ln); w > infoW {
-			infoW = w
-		}
-	}
-	infoW = clamp(infoW, 12, max(inner-24, 12))
-	usageW := max(inner-infoW-2, 8)
+}
 
+// headerUsageLines renders the text of the usage box: the two usage
+// rows with their history charts, which never wrap.
+func (m model) headerUsageLines() []string {
+	b := m.selectedBox()
+	if b == nil {
+		return []string{dim("—")}
+	}
 	h := m.hist[b.Name]
-	usage := []string{
-		usageLine("CPU", m.metricsOK, b.CPUUsageMC, b.CPULimitMC, "m", h.cpu, usageW),
-		usageLine("MEM", m.metricsOK, b.MemUsageMiB, b.MemLimitMiB, "Mi", h.mem, usageW),
+	inner := max(m.layout().usageW-4, 1)
+	return []string{
+		usageLine("CPU", m.metricsOK, b.CPUUsageMC, b.CPULimitMC, "m", h.cpu, inner),
+		usageLine("MEM", m.metricsOK, b.MemUsageMiB, b.MemLimitMiB, "Mi", h.mem, inner),
 	}
-
-	rows := make([]string, 3)
-	for i := range rows {
-		u := ""
-		if i < len(usage) {
-			u = usage[i]
-		}
-		// The info lines are styled, so padding and truncation go
-		// through lipgloss, which measures display width, not bytes.
-		padded := lipgloss.NewStyle().Width(infoW).MaxWidth(infoW).Render(info[i])
-		rows[i] = padded + dim("│ ") + u
-	}
-	return rows
 }
 
 // usageLine renders one compact usage row: label, usage over limit,
@@ -395,13 +411,15 @@ func (m model) View() string {
 	leftLines, _ := m.leftLines()
 	left := pane(leftPanelStyle, leftLines, l.leftW, l.leftH)
 
-	header := pane(rightPanelStyle, m.headerLines(), l.colW, l.headerH)
+	infoBox := pane(rightPanelStyle, m.headerInfoLines(), l.infoW, l.headerH)
+	usageBox := pane(rightPanelStyle, m.headerUsageLines(), l.usageW, l.headerH)
+	headerRow := lipgloss.JoinHorizontal(lipgloss.Top, infoBox, usageBox)
 	shellStyle := rightPanelStyle
 	if m.shellFocus {
 		shellStyle = leftPanelStyle // accent border while keys land here
 	}
 	shell := pane(shellStyle, m.shellLinesView(), l.colW, l.shellH)
-	rightCol := lipgloss.JoinVertical(lipgloss.Left, header, shell)
+	rightCol := lipgloss.JoinVertical(lipgloss.Left, headerRow, shell)
 
 	var body string
 	if l.stacked {

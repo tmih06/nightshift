@@ -56,14 +56,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.selected = b.Name
 				m.pendingPod = ""
 				if m.sessions[b.Name] {
-					// No status message: the filled status bar and the
-					// shell title are the mode indicators.
-					m.shellFocus = true
-					m.status = ""
-					w, h := m.shellPaneSize()
-					resize := w != m.shellW || h != m.shellH
-					m.shellW, m.shellH = w, h
-					return m, tea.Batch(fetchCmd(), captureCmd(b.Name, w, h, resize))
+					// The session is pre-created so enter attaches with no
+					// wait, but the dashboard stays in navigation: only
+					// enter drops into the shell.
+					m.status = "bash ready in " + b.Name + " — enter attaches"
+					return m, fetchCmd()
 				}
 				break
 			}

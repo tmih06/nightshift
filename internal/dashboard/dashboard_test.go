@@ -290,29 +290,37 @@ func TestViewFrame(t *testing.T) {
 		"· warm",
 		"owner agent-pool",
 		"Running",
-		"tmux",
+		"tmux live",
 		"2m/500m",
 		"6Mi/256Mi",
-		"live",
-		"enter bash",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("view missing %q", want)
 		}
 	}
 
-	// Both pane bottom borders close on the same row: the panes are the
-	// same height, so nothing wrapped inside them.
+	// The left pane and the shell pane close on the same row: they are
+	// the full-height columns, so nothing wrapped inside them. The two
+	// header boxes close on their own row above.
 	rows := strings.Split(got, "\n")
 	var closing string
 	for _, r := range rows {
-		if strings.Contains(r, "╰") {
-			closing = r
+		if strings.Contains(r, "shell") || strings.Count(r, "╰") >= 1 {
+			if strings.Count(r, "╰") == 2 {
+				closing = r
+			}
 		}
 	}
-	if strings.Count(closing, "╰") != 2 {
-		t.Errorf("closing row = %q, want both panes to close on it", closing)
+	last := ""
+	for _, r := range rows {
+		if strings.Count(r, "╰") > 0 {
+			last = r
+		}
 	}
+	if last == "" || strings.Count(last, "╰") != 2 {
+		t.Errorf("closing row = %q, want the left pane and shell pane to close on it", last)
+	}
+	_ = closing
 
 	// The inspect pane follows the selection: the claimed sandbox shows
 	// its own owner, and the untracked warm pod shows no session.
@@ -424,8 +432,8 @@ func release(x, y int) tea.MouseMsg {
 func TestLayoutDefaultsAndDragOverride(t *testing.T) {
 	m := baseModel() // 100x30
 	l := m.layout()
-	if l.leftW != 24 || l.headerH != 5 || l.shellH != 23 || l.stacked {
-		t.Errorf("default layout = %+v, want leftW 24, header 5, shell 23", l)
+	if l.leftW != 24 || l.headerH != 6 || l.shellH != 22 || l.stacked {
+		t.Errorf("default layout = %+v, want leftW 24, header 6, shell 22", l)
 	}
 
 	m.leftWidth = 60
@@ -758,8 +766,11 @@ func TestClaimCreatesBashImmediately(t *testing.T) {
 	if newM.(model).selected != "agent-pool-new1" {
 		t.Errorf("selected = %q, want the new pod", newM.(model).selected)
 	}
-	if !newM.(model).shellFocus {
-		t.Error("the claimed pod did not drop into the shell")
+	if newM.(model).shellFocus {
+		t.Error("the claim must pre-create the session, not jump into the shell")
+	}
+	if !strings.Contains(newM.(model).status, "enter attaches") {
+		t.Errorf("claim status = %q, want the enter-attaches hint", newM.(model).status)
 	}
 	if newM.(model).pendingPod != "" {
 		t.Errorf("pendingPod = %q, want cleared", newM.(model).pendingPod)
@@ -790,30 +801,77 @@ func TestLeftWidthFitsContent(t *testing.T) {
 	}
 }
 
-func TestHeaderIsThreeLines(t *testing.T) {
+func TestHeaderBentoBoxes(t *testing.T) {
 	m := baseModel()
 	m.sessions["agent-pool-5ss7w"] = true
-	lines := m.headerLines()
-	if len(lines) != 3 {
-		t.Fatalf("header has %d lines, want 3", len(lines))
+
+	info := m.headerInfoLines()
+	if len(info) != 4 {
+		t.Fatalf("info box has %d lines, want 4", len(info))
 	}
-	for _, want := range []string{"\u00b7 warm", "owner agent-pool", "tmux live", "2m/500m", "6Mi/256Mi", "\u2502"} {
-		found := false
-		for _, ln := range lines {
-			if strings.Contains(ln, want) {
-				found = true
-			}
+	for _, want := range []string{"· warm", "owner agent-pool", "tmux live", "Running"} {
+		if !strings.Contains(strings.Join(info, " "), want) {
+			t.Errorf("info box missing %q", want)
 		}
-		if !found {
-			t.Errorf("header missing %q", want)
+	}
+
+	usage := m.headerUsageLines()
+	if len(usage) != 2 {
+		t.Fatalf("usage box has %d lines, want 2", len(usage))
+	}
+	for _, want := range []string{"2m/500m", "6Mi/256Mi"} {
+		if !strings.Contains(strings.Join(usage, " "), want) {
+			t.Errorf("usage box missing %q", want)
 		}
+	}
+
+	// The info box width fits its longest line exactly, so the name is
+	// never cut, and the usage box takes the remainder of the column.
+	l := m.layout()
+	longest := 0
+	for _, ln := range info {
+		if w := lipgloss.Width(ln); w > longest {
+			longest = w
+		}
+	}
+	if l.infoW < longest+2 {
+		t.Errorf("infoW = %d, longest line %d does not fit uncut", l.infoW, longest)
+	}
+	if got := l.infoW + l.usageW; got > l.colW {
+		t.Errorf("infoW + usageW = %d, exceeds column %d", got, l.colW)
 	}
 
 	// The history chart appears once samples exist.
 	m.hist = map[string]usageHistory{"agent-pool-5ss7w": {cpu: []float64{0, 1, 0.5}, mem: []float64{0.2}}}
-	lines = m.headerLines()
-	if !strings.Contains(lines[0], "\u2588") || !strings.Contains(lines[0], "\u2584") {
-		t.Errorf("cpu chart row = %q, want ramp glyphs", lines[0])
+	usage = m.headerUsageLines()
+	if !strings.Contains(usage[0], "█") || !strings.Contains(usage[0], "▄") {
+		t.Errorf("cpu chart row = %q, want ramp glyphs", usage[0])
+	}
+
+	// Three boxes open on the first body row: the nav pane plus the two
+	// header boxes. The two header boxes close on their own row, side by
+	// side, separate from the nav pane's long border.
+	got := m.View()
+	rows := strings.Split(got, "\n")
+	openRow := ""
+	for _, r := range rows {
+		if strings.Count(r, "╭") >= 3 {
+			openRow = r
+		}
+	}
+	if openRow == "" {
+		t.Fatal("no row opens the nav pane and both header boxes together")
+	}
+	closes := 0
+	for _, r := range rows {
+		// The header boxes close while the nav pane is still open, its
+		// side border runs on that row.
+		if strings.Count(r, "╰") == 2 && strings.HasPrefix(r, "│") {
+			closes++
+		}
+	}
+	if closes != 1 {
+		t.Errorf("the two header boxes close together on %d rows, want 1", closes)
 	}
 }
 

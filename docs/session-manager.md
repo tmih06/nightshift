@@ -61,9 +61,10 @@ of sessions.
 
 Bash belongs to claimed sandboxes only. Warm pool pods are standby
 capacity and the dashboard refuses to open shells in them. Claiming
-through the dashboard waits for adoption, creates the session
-immediately, and drops straight into the embedded shell, so there is no
-attach wait.
+through the dashboard waits for adoption and creates the session
+immediately, so enter attaches with no wait, but the dashboard stays
+in navigation: enter is the attach, the claim only prepares the
+session.
 
 The lifecycle is self-reaping. When a pod dies its kubectl exec exits,
 the pane command finishes, and tmux destroys the session, so a session
