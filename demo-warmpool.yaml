@@ -20,6 +20,13 @@ spec:
       - name: agent
         image: debian:12-slim   # ships a real bash
         command: ["/bin/bash", "-c", "sleep infinity"]
+        resources:   # cap each sandbox so bursts can't starve the node
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
 ---
 apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxWarmPool
