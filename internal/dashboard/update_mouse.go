@@ -70,9 +70,8 @@ func (m model) applyDrag(x, y int) model {
 func (m model) applyClick(x, y int) (tea.Model, tea.Cmd) {
 	if m.inLowerPane(x, y) {
 		if m.isWarmSelected() {
-			m.focus = focusInspect
+			m.focusWarmInspect()
 			m.prefix = false
-			m.refreshInspectCache()
 			return m, nil
 		}
 		if m.canFocusShell() {

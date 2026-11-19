@@ -243,11 +243,16 @@ func TestKeyboardNavigationAndActions(t *testing.T) {
 		t.Errorf("x on warm = %q", newM.(model).status)
 	}
 
-	// Enter on a warm sandbox is refused: no bash inside the warm pool.
+	// Enter on a warm sandbox opens its config viewer; b still refuses
+	// because a warm sandbox has no bash session.
 	warm := m
-	newM, _ = warm.updateKeyboard(tea.KeyMsg{Type: tea.KeyEnter})
+	newM, cmd := warm.updateKeyboard(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil || newM.(model).focus != focusInspect {
+		t.Errorf("enter on warm = focus %v, cmd %v; want focusInspect and no command", newM.(model).focus, cmd != nil)
+	}
+	newM, _ = warm.updateKeyboard(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
 	if newM.(model).status != "warm pool sandbox — claim it with c, bash starts with the claim" {
-		t.Errorf("enter on warm = %q", newM.(model).status)
+		t.Errorf("b on warm = %q", newM.(model).status)
 	}
 
 	// Enter on a pod that is not running is refused with a reason.
@@ -263,7 +268,7 @@ func TestKeyboardNavigationAndActions(t *testing.T) {
 	// the caller executes (not here: it would start a real tmux session).
 	running := baseModel()
 	running.selected = "agent-pool-bkl2p"
-	_, cmd := running.updateKeyboard(tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd = running.updateKeyboard(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
 		t.Error("enter on a running pod returned no command")
 	}
@@ -1275,6 +1280,26 @@ func TestWarmInspectScrollableMarkdownAndYAML(t *testing.T) {
 	}
 	if !strings.Contains(joined, "\x1b[") {
 		t.Error("warm inspect rendered without ANSI color sequences")
+	}
+
+	// Enter focuses the config viewer, so j/k scroll its document instead
+	// of moving the selected sandbox.
+	entered, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	focusedByEnter := entered.(model)
+	if cmd != nil || focusedByEnter.focus != focusInspect {
+		t.Fatalf("enter focus = %v cmd=%v, want focusInspect and no command", focusedByEnter.focus, cmd != nil)
+	}
+	selected := focusedByEnter.selected
+	entered, _ = focusedByEnter.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if entered.(model).inspectScroll <= focusedByEnter.inspectScroll {
+		t.Errorf("j did not scroll config: offset=%d", entered.(model).inspectScroll)
+	}
+	entered, _ = entered.(model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if entered.(model).inspectScroll != focusedByEnter.inspectScroll {
+		t.Errorf("k returned offset %d, want %d", entered.(model).inspectScroll, focusedByEnter.inspectScroll)
+	}
+	if entered.(model).selected != selected {
+		t.Errorf("j/k changed sandbox selection to %q, want %q", entered.(model).selected, selected)
 	}
 
 	// Wheel down over the lower pane scrolls without changing selection.
