@@ -19,6 +19,16 @@ const (
 	shellRefreshEvery = 200 * time.Millisecond
 )
 
+// focusPane models which pane currently owns keyboard focus. Exactly
+// one pane carries the accent border at any time.
+type focusPane int
+
+const (
+	focusNav     focusPane = iota // left sandbox sidebar
+	focusShell                    // claimed sandbox embedded bash
+	focusInspect                  // warm sandbox scrollable configs & templates
+)
+
 type model struct {
 	boxes     []cluster.Sandbox
 	pool      cluster.Pool    // the warm pool context behind the fleet
@@ -40,18 +50,21 @@ type model struct {
 	leftHeight int
 	dragging   bool
 
-	// Embedded shell. shellFocus routes every key to the tmux session
-	// instead of the navigation: no keybind escapes. prefix holds a C-b
-	// seen while focused, so only C-b followed by q leaves the shell.
+	// Focus and embedded shell. focus tracks whether keys go to
+	// navigation, a claimed sandbox's bash tmux session, or the warm
+	// sandbox's scrollable config/template viewer. prefix holds a C-b
+	// seen while focus == focusShell, so only C-b followed by q leaves
+	// bash. inspectScroll is the top line offset in the warm viewer.
 	// shellLines and shellPod hold the last capture, shown only while it
 	// matches the selection. shellW and shellH are the pane size last
 	// sent to tmux. pending is the queued input, drained one batch at a
 	// time so keystrokes keep their order; sending marks a drain in
 	// flight. pendingPod is the pod of a claim whose bash is starting,
-	// selected and focused as soon as the fleet shows it. hist keeps the
-	// usage samples behind the header charts.
-	shellFocus     bool
+	// selected as soon as the fleet shows it. hist keeps the usage
+	// samples behind the header charts.
+	focus          focusPane
 	prefix         bool
+	inspectScroll  int
 	shellLines     []string
 	shellPod       string
 	shellW, shellH int
@@ -314,6 +327,36 @@ func (m model) selectedIndex() int {
 	return 0
 }
 
+// isWarmSelected reports whether the currently selected sandbox is a
+// warm-pool standby (which shows configs/templates rather than bash).
+func (m model) isWarmSelected() bool {
+	b := m.selectedBox()
+	return b != nil && b.OwnerKind != "SandboxClaim"
+}
+
+// canFocusShell reports whether the currently selected sandbox has a
+// live bash session that can receive shell input.
+func (m model) canFocusShell() bool {
+	b := m.selectedBox()
+	return b != nil && b.OwnerKind == "SandboxClaim" && m.sessions[b.Name]
+}
+
+// selectPod changes the selection by name, resetting warm inspect scroll
+// when the selection changes and dropping focus that no longer applies.
+func (m *model) selectPod(name string) {
+	if m.selected != name {
+		m.selected = name
+		m.inspectScroll = 0
+	}
+	if m.focus == focusShell && !m.canFocusShell() {
+		m.focus = focusNav
+		m.prefix = false
+	}
+	if m.focus == focusInspect && !m.isWarmSelected() {
+		m.focus = focusNav
+	}
+}
+
 // moveSelection clamps the cursor, so j/k and the wheel cannot leave
 // the list.
 func (m *model) moveSelection(delta int) {
@@ -321,5 +364,5 @@ func (m *model) moveSelection(delta int) {
 		return
 	}
 	i := clamp(m.selectedIndex()+delta, 0, len(m.boxes)-1)
-	m.selected = m.boxes[i].Name
+	m.selectPod(m.boxes[i].Name)
 }

@@ -18,11 +18,15 @@ func (m model) updateKeyboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveSelection(1)
 	case "g":
 		if len(m.boxes) > 0 {
-			m.selected = m.boxes[0].Name
+			m.selectPod(m.boxes[0].Name)
 		}
 	case "G":
 		if len(m.boxes) > 0 {
-			m.selected = m.boxes[len(m.boxes)-1].Name
+			m.selectPod(m.boxes[len(m.boxes)-1].Name)
+		}
+	case "tab":
+		if m.isWarmSelected() {
+			m.focus = focusInspect
 		}
 	case "r":
 		m.status, m.statusTTL = "", 0

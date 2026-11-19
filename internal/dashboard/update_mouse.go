@@ -9,17 +9,17 @@ import (
 const contentStartY = 2
 
 func (m model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	// While the shell has focus nothing escapes it: scrolling would
-	// move the hidden selection and clicks would steal focus. The
-	// splitter drag stays available, it moves panes, not focus.
-	if m.shellFocus && !m.dragging {
-		switch msg.Action {
-		case tea.MouseActionPress:
-			if msg.Button == tea.MouseButtonLeft && m.overDivider(msg.X, msg.Y) {
+	// While the shell has focus, wheel events and right-pane clicks
+	// stay out of navigation. Clicking the sidebar always drops shell
+	// focus and selects the entry; dragging the splitter keeps working
+	// without disturbing shell focus.
+	if m.focus == focusShell && !m.dragging {
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			if m.overDivider(msg.X, msg.Y) {
 				m.dragging = true
+			} else if m.inLeftPane(msg.X, msg.Y) {
+				m = m.clickLeftPane(msg.X, msg.Y)
 			}
-		case tea.MouseActionMotion:
-		case tea.MouseActionRelease:
 		}
 		return m, nil
 	}
@@ -27,14 +27,22 @@ func (m model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case tea.MouseActionPress:
 		switch msg.Button {
 		case tea.MouseButtonWheelUp:
-			m.moveSelection(-1)
+			if m.isWarmSelected() && (m.inLowerPane(msg.X, msg.Y) || (m.focus == focusInspect && !m.inLeftPane(msg.X, msg.Y))) {
+				m.scrollInspect(-3)
+			} else {
+				m.moveSelection(-1)
+			}
 		case tea.MouseButtonWheelDown:
-			m.moveSelection(1)
+			if m.isWarmSelected() && (m.inLowerPane(msg.X, msg.Y) || (m.focus == focusInspect && !m.inLeftPane(msg.X, msg.Y))) {
+				m.scrollInspect(3)
+			} else {
+				m.moveSelection(1)
+			}
 		case tea.MouseButtonLeft:
 			if m.overDivider(msg.X, msg.Y) {
 				m.dragging = true
 			} else {
-				m = m.applyClick(msg.X, msg.Y)
+				return m.applyClick(msg.X, msg.Y)
 			}
 		}
 	case tea.MouseActionMotion:
@@ -71,23 +79,46 @@ func (m model) applyDrag(x, y int) model {
 	return m
 }
 
-// applyClick routes by region: a click inside the shell pane focuses
-// it, a click on a sidebar entry selects that entry. Focus only moves
-// into the shell on an explicit click inside its pane, never on the
-// way to somewhere else, and a sidebar click never drags focus into
-// the shell.
-func (m model) applyClick(x, y int) model {
-	if m.inShellPane(x, y) {
-		m.shellFocus = true
-		m.prefix = false
-		return m
+// applyClick routes by region: a click inside the lower-right pane
+// focuses the warm config viewer for a warm sandbox or bash for a
+// claimed sandbox with a live session (never entering bash on a warm
+// sandbox). A sidebar click always returns focus to navigation.
+func (m model) applyClick(x, y int) (tea.Model, tea.Cmd) {
+	if m.inLowerPane(x, y) {
+		if m.isWarmSelected() {
+			m.focus = focusInspect
+			m.prefix = false
+			return m, nil
+		}
+		if m.canFocusShell() {
+			m.focus = focusShell
+			m.prefix = false
+			return m, nil
+		}
+		if b := m.selectedBox(); b != nil && b.OwnerKind == "SandboxClaim" && b.Phase == "Running" {
+			m.flash("starting bash in " + b.Name)
+			return m, attachCmd(b.Name)
+		}
+		return m, nil
 	}
-	return m.clickLeftPane(x, y)
+	return m.clickLeftPane(x, y), nil
 }
 
-// inShellPane reports whether a point sits inside the embedded shell
-// pane.
-func (m model) inShellPane(x, y int) bool {
+// inLeftPane reports whether a point sits inside the sidebar pane.
+func (m model) inLeftPane(x, y int) bool {
+	l := m.layout()
+	if y < 1 || y >= m.height-1 {
+		return false
+	}
+	if l.stacked {
+		return y < 1+l.leftH
+	}
+	return x >= 0 && x < l.leftW
+}
+
+// inLowerPane reports whether a point sits inside the lower-right pane
+// (embedded bash for claimed sandboxes, configs/templates for warm).
+func (m model) inLowerPane(x, y int) bool {
 	l := m.layout()
 	if y < l.shellTop || y >= m.height-1 {
 		return false
@@ -100,24 +131,16 @@ func (m model) inShellPane(x, y int) bool {
 // line-to-entry map comes from the same leftLines the view renders, so
 // clicks cannot drift from what is on screen.
 func (m model) clickLeftPane(x, y int) model {
-	l := m.layout()
-	if l.stacked {
-		if y < contentStartY || y >= contentStartY+l.leftH-1 {
-			return m
-		}
-	} else {
-		if x < 0 || x >= l.leftW {
-			return m
-		}
+	if !m.inLeftPane(x, y) {
+		return m
 	}
-	// A click that lands on the sidebar leaves shell focus off: the
-	// user chose the sidebar, and shell focus only returns through the
-	// shell pane itself or enter.
-	m.shellFocus = false
+	// A click that lands on the sidebar always returns focus to
+	// navigation.
+	m.focus = focusNav
 	m.prefix = false
 	_, targets := m.leftLines()
 	if idx, ok := targets[y-contentStartY]; ok && idx < len(m.boxes) {
-		m.selected = m.boxes[idx].Name
+		m.selectPod(m.boxes[idx].Name)
 	}
 	return m
 }

@@ -13,11 +13,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-	case tea.KeyMsg:
-		if m.shellFocus {
-			return m.updateShellKeys(msg)
+		if m.isWarmSelected() {
+			m.scrollInspect(0)
 		}
-		return m.updateKeyboard(msg)
+	case tea.KeyMsg:
+		switch m.focus {
+		case focusShell:
+			return m.updateShellKeys(msg)
+		case focusInspect:
+			return m.updateInspectKeys(msg)
+		default:
+			return m.updateKeyboard(msg)
+		}
 	case tea.MouseMsg:
 		return m.updateMouse(msg)
 	case tickMsg:
@@ -47,16 +54,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The selected pod may be gone (destroyed) or the fleet may
 		// have arrived for the first time: snap to the nearest entry.
 		if m.selectedBox() == nil && len(m.boxes) > 0 {
-			m.selected = m.boxes[clamp(prev, 0, len(m.boxes)-1)].Name
+			m.selectPod(m.boxes[clamp(prev, 0, len(m.boxes)-1)].Name)
+		} else {
+			m.selectPod(m.selected)
 		}
-		// A claim whose bash was pre-created: select it and drop straight
-		// into the shell.
+		// A claim whose bash was pre-created: select it while staying in
+		// navigation so enter attaches with no wait.
 		if m.pendingPod != "" {
 			for _, b := range m.boxes {
 				if b.Name != m.pendingPod {
 					continue
 				}
-				m.selected = b.Name
+				m.selectPod(b.Name)
 				m.pendingPod = ""
 				if m.sessions[b.Name] {
 					// The session is pre-created so enter attaches with no
@@ -96,9 +105,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.sticky("session failed: " + msg.err.Error())
 			return m, nil
 		}
-		m.shellFocus = true
-		m.flash("bash ready — enter in the shell pane to focus")
-		if b := m.selectedBox(); b != nil && m.sessions[b.Name] {
+		if m.sessions == nil {
+			m.sessions = map[string]bool{}
+		}
+		m.sessions[msg.pod] = true
+		if b := m.selectedBox(); b != nil && b.Name == msg.pod && b.OwnerKind == "SandboxClaim" {
+			m.focus = focusShell
+			m.prefix = false
+			m.flash("bash ready — C-b q or click sidebar to leave")
 			w, h := m.shellPaneSize()
 			resize := w != m.shellW || h != m.shellH
 			m.shellW, m.shellH = w, h

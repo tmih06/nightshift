@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"regexp"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -8,15 +9,19 @@ import (
 	"github.com/tmih06/nightshift/internal/session"
 )
 
+// sgrMouseLeakRe matches raw SGR mouse escape suffixes that leak as
+// KeyRunes when a terminal/SSH/tmux splits ESC from the rest of the
+// sequence across read boundaries.
+var sgrMouseLeakRe = regexp.MustCompile(`^(?:\[?<\d+;\d+;\d+[Mm])+$`)
+
 // updateShellKeys routes every keystroke into the sandbox's tmux session
 // while the shell pane has focus. No keybind escapes the sandbox: only
 // C-b followed by q leaves, like a tmux prefix chord. Keys queue and
 // drain one batch at a time, so fast typing is batched and never
 // reorders.
 func (m model) updateShellKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	b := m.selectedBox()
-	if b == nil || !m.sessions[b.Name] {
-		m.shellFocus = false
+	if !m.canFocusShell() {
+		m.focus = focusNav
 		m.prefix = false
 		return m, nil
 	}
@@ -25,7 +30,7 @@ func (m model) updateShellKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// swallowed, the way an unbound tmux prefix chord does nothing.
 		m.prefix = false
 		if msg.String() == "q" {
-			m.shellFocus = false
+			m.focus = focusNav
 			m.status, m.statusTTL = "", 0
 		}
 		return m, nil
@@ -45,9 +50,28 @@ func (m model) updateShellKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, m.startDrain()
 }
 
+// isMouseEscapeFragment reports whether a KeyMsg is a broken CSI/SGR
+// mouse sequence fragment rather than user-typed input.
+func isMouseEscapeFragment(msg tea.KeyMsg) bool {
+	if msg.Type != tea.KeyRunes {
+		return false
+	}
+	// An orphaned CSI introducer (ESC [) arrives as Alt+[.
+	if msg.Alt && len(msg.Runes) == 1 && msg.Runes[0] == '[' {
+		return true
+	}
+	if !msg.Paste && sgrMouseLeakRe.MatchString(string(msg.Runes)) {
+		return true
+	}
+	return false
+}
+
 // shellKeyFromMsg turns a keypress into a session input event: runes
 // become literal text, mapped keys become their tmux names.
 func shellKeyFromMsg(msg tea.KeyMsg) (session.Key, bool) {
+	if isMouseEscapeFragment(msg) {
+		return session.Key{}, false
+	}
 	if msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace {
 		return session.Key{Text: string(msg.Runes)}, true
 	}
