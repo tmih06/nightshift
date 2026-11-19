@@ -23,7 +23,7 @@ func (m model) updateKeyboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "tab":
 		if m.isWarmSelected() {
-			m.focus = focusInspect
+			m.focusWarmInspect()
 		}
 	case "r":
 		m.status, m.statusTTL = "", 0
@@ -31,7 +31,13 @@ func (m model) updateKeyboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "c":
 		m.flash("claiming from the warm pool…")
 		return m, claimCmd()
-	case "enter", "b":
+	case "enter":
+		if m.isWarmSelected() {
+			m.focusWarmInspect()
+			return m, nil
+		}
+		fallthrough
+	case "b":
 		b := m.selectedBox()
 		if b == nil {
 			return m, nil

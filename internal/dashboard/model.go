@@ -300,6 +300,11 @@ func (m model) canFocusShell() bool {
 	return b != nil && b.OwnerKind == "SandboxClaim" && m.sessions[b.Name]
 }
 
+func (m *model) focusWarmInspect() {
+	m.focus = focusInspect
+	m.refreshInspectCache()
+}
+
 func (m *model) selectPod(name string) {
 	if m.selected != name {
 		m.selected = name
