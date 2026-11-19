@@ -84,9 +84,11 @@ func (m *model) appendHistory() {
 		h := m.hist[b.Name]
 		h.cpu = append(h.cpu, float64(b.CPUUsageMC)/float64(b.CPULimitMC))
 		h.mem = append(h.mem, float64(b.MemUsageMiB)/float64(b.MemLimitMiB))
-		if len(h.cpu) > 60 {
-			h.cpu = h.cpu[len(h.cpu)-60:]
-			h.mem = h.mem[len(h.mem)-60:]
+		// Two minutes of samples fill the widest braille graph the
+		// header can show.
+		if len(h.cpu) > 120 {
+			h.cpu = h.cpu[len(h.cpu)-120:]
+			h.mem = h.mem[len(h.mem)-120:]
 		}
 		m.hist[b.Name] = h
 	}
