@@ -26,6 +26,21 @@ jobs:
       - name: Actionlint
         run: bash <(curl -s https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
 
+  go:
+    name: Go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Test
+        run: go test ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Format
+        run: test -z "$(gofmt -l .)"
+
   commit-convention:
     name: Commit subjects
     runs-on: ubuntu-latest
@@ -35,7 +50,7 @@ jobs:
           fetch-depth: 0
       - name: Check subjects against the AGENTS.md ruling
         run: |
-          bad=$(git log --format='%s' | grep -v '^Merge ' | grep -vE '^(feat|fix|docs|chore|refactor|ci)(\((sbx|warmpool|claim|docs)\))?!?: [a-z].{0,49}$' || true)
+          bad=$(git log --format='%s' | grep -v '^Merge ' | grep -vE '^(feat|fix|docs|chore|refactor|ci)(\((sbx|warmpool|claim|docs|go)\))?!?: [a-z].{0,49}$' || true)
           if [ -n "$bad" ]; then
             echo "These subjects do not follow AGENTS.md:"
             echo "$bad"
