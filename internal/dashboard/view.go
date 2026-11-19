@@ -508,14 +508,20 @@ func (m model) View() string {
 
 	l := m.layout()
 	leftLines, _ := m.leftLines()
-	left := pane(leftPanelStyle, leftLines, l.leftW, l.leftH)
+	// Exactly one accent border: the nav pane in navigation, the shell
+	// pane in shell focus, never both.
+	leftStyle := navFocusStyle
+	if m.shellFocus {
+		leftStyle = rightPanelStyle
+	}
+	left := pane(leftStyle, leftLines, l.leftW, l.leftH)
 
 	infoBox := pane(rightPanelStyle, m.headerInfoLines(), l.infoW, l.headerH)
 	usageBox := pane(rightPanelStyle, m.headerUsageLines(), l.usageW, l.headerH)
 	headerRow := lipgloss.JoinHorizontal(lipgloss.Top, infoBox, usageBox)
 	shellStyle := rightPanelStyle
 	if m.shellFocus {
-		shellStyle = leftPanelStyle // accent border while keys land here
+		shellStyle = shellFocusStyle
 	}
 	shell := pane(shellStyle, m.shellLinesView(), l.colW, l.shellH)
 	rightCol := lipgloss.JoinVertical(lipgloss.Left, headerRow, shell)

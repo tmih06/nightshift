@@ -9,6 +9,20 @@ import (
 const contentStartY = 2
 
 func (m model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	// While the shell has focus nothing escapes it: scrolling would
+	// move the hidden selection and clicks would steal focus. The
+	// splitter drag stays available, it moves panes, not focus.
+	if m.shellFocus && !m.dragging {
+		switch msg.Action {
+		case tea.MouseActionPress:
+			if msg.Button == tea.MouseButtonLeft && m.overDivider(msg.X, msg.Y) {
+				m.dragging = true
+			}
+		case tea.MouseActionMotion:
+		case tea.MouseActionRelease:
+		}
+		return m, nil
+	}
 	switch msg.Action {
 	case tea.MouseActionPress:
 		switch msg.Button {
@@ -58,8 +72,9 @@ func (m model) applyDrag(x, y int) model {
 }
 
 // applyClick routes focus by region: clicking the shell pane focuses
-// it. Clicks elsewhere select entries but never steal the shell focus,
-// matching the no-escaping rule: only C-b q leaves the shell.
+// it, clicking a left-pane entry selects it. It runs only while the
+// dashboard already has focus, so nothing here can steal the shell
+// from bash.
 func (m model) applyClick(x, y int) model {
 	if m.inShellPane(x, y) {
 		m.shellFocus = true

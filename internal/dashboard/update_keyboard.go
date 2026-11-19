@@ -25,10 +25,10 @@ func (m model) updateKeyboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.selected = m.boxes[len(m.boxes)-1].Name
 		}
 	case "r":
-		m.status = ""
+		m.status, m.statusTTL = "", 0
 		return m, fetchCmd()
 	case "c":
-		m.status = "claiming from the warm pool…"
+		m.flash("claiming from the warm pool…")
 		return m, claimCmd()
 	case "enter", "b":
 		b := m.selectedBox()
@@ -36,14 +36,14 @@ func (m model) updateKeyboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if b.OwnerKind != "SandboxClaim" {
-			m.status = "warm pool sandbox — claim it with c, bash starts with the claim"
+			m.flash("warm pool sandbox — claim it with c, bash starts with the claim")
 			return m, nil
 		}
 		if b.Phase != "Running" {
-			m.status = "pod is " + b.Phase + ", no bash to enter"
+			m.flash("pod is " + b.Phase + ", no bash to enter")
 			return m, nil
 		}
-		m.status = "starting bash in " + b.Name
+		m.flash("starting bash in " + b.Name)
 		return m, attachCmd(b.Name)
 	case "F":
 		// Fullscreen escape hatch for full-screen programs.
@@ -52,20 +52,20 @@ func (m model) updateKeyboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if b.OwnerKind != "SandboxClaim" {
-			m.status = "warm pool sandbox — claim it with c first"
+			m.flash("warm pool sandbox — claim it with c first")
 			return m, nil
 		}
-		m.status = "opening fullscreen bash, detach with C-b d"
+		m.flash("opening fullscreen bash, detach with C-b d")
 		return m, fullCmd(b.Name)
 	case "x":
 		b := m.selectedBox()
 		if b == nil || b.OwnerKind != "SandboxClaim" {
-			m.status = "only a claimed sandbox can be destroyed"
+			m.flash("only a claimed sandbox can be destroyed")
 			return m, nil
 		}
 		if !m.confirmDestroy {
 			m.confirmDestroy = true
-			m.status = "press x again to destroy claim " + b.Owner
+			m.sticky("press x again to destroy claim " + b.Owner)
 			return m, nil
 		}
 		return m, deleteClaimCmd(b.Owner)

@@ -26,7 +26,7 @@ func (m model) updateShellKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.prefix = false
 		if msg.String() == "q" {
 			m.shellFocus = false
-			m.status = ""
+			m.status, m.statusTTL = "", 0
 		}
 		return m, nil
 	}
