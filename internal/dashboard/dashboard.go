@@ -1,8 +1,7 @@
-package main
-
 // The view layer. Every sandbox renders as one bordered box in a grid:
 // name, owner badge, pod phase, and two usage bars measured against the
 // container limits. Warm boxes sit first and left, claimed ones follow.
+package dashboard
 
 import (
 	"fmt"
@@ -11,6 +10,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/tmih06/nightshift/internal/cluster"
 )
 
 const (
@@ -21,21 +22,22 @@ const (
 )
 
 type model struct {
-	boxes     []sandbox
+	boxes     []cluster.Sandbox
 	metricsOK bool
 	err       error
 	loaded    bool
 	width     int
 }
 
-func initialModel() model {
+// New returns the model the program runs.
+func New() tea.Model {
 	return model{}
 }
 
 type tickMsg struct{}
 
 type loadedMsg struct {
-	boxes     []sandbox
+	boxes     []cluster.Sandbox
 	metricsOK bool
 	err       error
 }
@@ -46,7 +48,7 @@ func tickCmd() tea.Cmd {
 
 func fetchCmd() tea.Cmd {
 	return func() tea.Msg {
-		boxes, metricsOK, err := fetchSandboxData()
+		boxes, metricsOK, err := cluster.Fetch()
 		return loadedMsg{boxes: boxes, metricsOK: metricsOK, err: err}
 	}
 }
@@ -133,24 +135,24 @@ func truncate(s string, max int) string {
 	return s[:max-1] + "…"
 }
 
-func boxView(b sandbox, metricsOK bool) string {
+func boxView(b cluster.Sandbox, metricsOK bool) string {
 	badge, border := "warm", warmColor
-	switch b.ownerKind {
+	switch b.OwnerKind {
 	case "SandboxClaim":
 		badge, border = "claimed", claimColor
 	case "SandboxWarmPool":
 	default:
-		badge, border = b.ownerKind, warnColor
+		badge, border = b.OwnerKind, warnColor
 	}
-	if b.phase != "Running" && b.phase != "…" {
+	if b.Phase != "Running" && b.Phase != "…" {
 		border = warnColor
 	}
 
 	inner := boxWidth - 4 // border plus padding
-	name := lipgloss.NewStyle().Bold(true).MaxWidth(inner).Render(truncate(b.name, inner))
-	owner := lipgloss.NewStyle().Foreground(border).Render(badge) + dim(" · ") + b.phase
-	cpu := resourceLine("CPU", metricsOK, b.cpuUsageMC, b.cpuLimitMC, "m")
-	mem := resourceLine("MEM", metricsOK, b.memUsageMiB, b.memLimitMiB, "Mi")
+	name := lipgloss.NewStyle().Bold(true).MaxWidth(inner).Render(truncate(b.Name, inner))
+	owner := lipgloss.NewStyle().Foreground(border).Render(badge) + dim(" · ") + b.Phase
+	cpu := resourceLine("CPU", metricsOK, b.CPUUsageMC, b.CPULimitMC, "m")
+	mem := resourceLine("MEM", metricsOK, b.MemUsageMiB, b.MemLimitMiB, "Mi")
 
 	content := lipgloss.JoinVertical(lipgloss.Left, name, owner, cpu, mem)
 	return lipgloss.NewStyle().
@@ -167,7 +169,7 @@ func (m model) View() string {
 	}
 
 	head := titleStyle.Render("nightshift") + "  " +
-		dim(fmt.Sprintf("%d sandboxes · ns %s", len(m.boxes), namespace))
+		dim(fmt.Sprintf("%d sandboxes · ns %s", len(m.boxes), cluster.Namespace))
 	if m.err != nil {
 		head += "\n" + lipgloss.NewStyle().Foreground(badColor).Render("fetch error: "+m.err.Error())
 	}
@@ -190,7 +192,7 @@ func (m model) View() string {
 	}
 	grid := lipgloss.JoinVertical(lipgloss.Left, rows...)
 	if len(m.boxes) == 0 && m.err == nil {
-		grid = dim(fmt.Sprintf("no sandboxes in namespace %s", namespace))
+		grid = dim(fmt.Sprintf("no sandboxes in namespace %s", cluster.Namespace))
 	}
 
 	legend := lipgloss.NewStyle().Foreground(warmColor).Render("● warm") + "  " +
@@ -203,10 +205,10 @@ func (m model) View() string {
 	return head + "\n\n" + grid + "\n\n" + footer
 }
 
-// runOnce prints one dashboard frame without a terminal, the headless
+// RunOnce prints one dashboard frame without a terminal, the headless
 // check of the whole pipeline against the live cluster.
-func runOnce() {
-	boxes, metricsOK, err := fetchSandboxData()
+func RunOnce() {
+	boxes, metricsOK, err := cluster.Fetch()
 	m := model{boxes: boxes, metricsOK: metricsOK, err: err, loaded: true, width: 100}
 	fmt.Println(m.View())
 }

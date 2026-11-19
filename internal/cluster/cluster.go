@@ -1,11 +1,10 @@
-package main
-
 // Data shape. The dashboard's unit is a sandbox, one box in the grid. A
 // sandbox is a Sandbox object in the demo namespace; the controller runs a
 // pod with the same name, so sandbox, pod, and metrics lines all join on
 // that name. A box carries who owns the sandbox (warm pool or claim), the
 // pod phase, the container limits from the pod spec, and live usage from
 // the metrics API. Zero usage means unknown, not idle.
+package cluster
 
 import (
 	"bytes"
@@ -19,18 +18,19 @@ import (
 
 const (
 	kubeContext = "kind-agent-sandbox"
-	namespace   = "sandbox-demo"
+	// Namespace is the demo namespace every read targets.
+	Namespace = "sandbox-demo"
 )
 
-type sandbox struct {
-	name        string
-	ownerKind   string // SandboxWarmPool or SandboxClaim
-	owner       string
-	phase       string // pod phase, "…" until the pod exists
-	cpuLimitMC  int64  // container cpu limit, millicores
-	memLimitMiB int64  // container memory limit, MiB
-	cpuUsageMC  int64  // live cpu usage, millicores
-	memUsageMiB int64  // live memory usage, MiB
+type Sandbox struct {
+	Name        string
+	OwnerKind   string // SandboxWarmPool or SandboxClaim
+	Owner       string
+	Phase       string // pod phase, "…" until the pod exists
+	CPULimitMC  int64  // container cpu limit, millicores
+	MemLimitMiB int64  // container memory limit, MiB
+	CPUUsageMC  int64  // live cpu usage, millicores
+	MemUsageMiB int64  // live memory usage, MiB
 }
 
 type ownerReference struct {
@@ -87,7 +87,7 @@ type podMetricsList struct {
 
 // buildSandboxes joins the three cluster views into the boxes the grid
 // shows. It is pure: the kubectl calls stay outside.
-func buildSandboxes(sb sandboxList, pl podList, ml *podMetricsList) ([]sandbox, error) {
+func buildSandboxes(sb sandboxList, pl podList, ml *podMetricsList) ([]Sandbox, error) {
 	podByName := map[string]*podItem{}
 	for i := range pl.Items {
 		podByName[pl.Items[i].Metadata.Name] = &pl.Items[i]
@@ -112,34 +112,34 @@ func buildSandboxes(sb sandboxList, pl podList, ml *podMetricsList) ([]sandbox, 
 		}
 	}
 
-	var boxes []sandbox
+	var boxes []Sandbox
 	for _, item := range sb.Items {
-		b := sandbox{name: item.Metadata.Name, phase: "…"}
+		b := Sandbox{Name: item.Metadata.Name, Phase: "…"}
 		if len(item.Metadata.OwnerReferences) > 0 {
-			b.ownerKind = item.Metadata.OwnerReferences[0].Kind
-			b.owner = item.Metadata.OwnerReferences[0].Name
+			b.OwnerKind = item.Metadata.OwnerReferences[0].Kind
+			b.Owner = item.Metadata.OwnerReferences[0].Name
 		}
 		if p := podByName[item.Metadata.Name]; p != nil {
-			b.phase = p.Status.Phase
+			b.Phase = p.Status.Phase
 			for _, c := range p.Spec.Containers {
 				if q, ok := c.Resources.Limits["cpu"]; ok {
 					v, err := cpuMillicores(q)
 					if err != nil {
 						return nil, err
 					}
-					b.cpuLimitMC += v
+					b.CPULimitMC += v
 				}
 				if q, ok := c.Resources.Limits["memory"]; ok {
 					v, err := memMiB(q)
 					if err != nil {
 						return nil, err
 					}
-					b.memLimitMiB += v
+					b.MemLimitMiB += v
 				}
 			}
 		}
 		if u, ok := usedByName[item.Metadata.Name]; ok {
-			b.cpuUsageMC, b.memUsageMiB = u[0], u[1]
+			b.CPUUsageMC, b.MemUsageMiB = u[0], u[1]
 		}
 		boxes = append(boxes, b)
 	}
@@ -155,17 +155,17 @@ func buildSandboxes(sb sandboxList, pl podList, ml *podMetricsList) ([]sandbox, 
 		}
 	}
 	sort.SliceStable(boxes, func(i, j int) bool {
-		if ri, rj := rank(boxes[i].ownerKind), rank(boxes[j].ownerKind); ri != rj {
+		if ri, rj := rank(boxes[i].OwnerKind), rank(boxes[j].OwnerKind); ri != rj {
 			return ri < rj
 		}
-		return boxes[i].name < boxes[j].name
+		return boxes[i].Name < boxes[j].Name
 	})
 	return boxes, nil
 }
 
-// fetchSandboxData reads the cluster once. A metrics failure degrades to
-// budgets without usage rather than failing the dashboard.
-func fetchSandboxData() (boxes []sandbox, metricsOK bool, err error) {
+// Fetch reads the cluster once. A metrics failure degrades to budgets
+// without usage rather than failing the dashboard.
+func Fetch() (boxes []Sandbox, metricsOK bool, err error) {
 	raw, err := kubectlOutput("get", "sandboxes", "-o", "json")
 	if err != nil {
 		return nil, false, err
@@ -186,7 +186,7 @@ func fetchSandboxData() (boxes []sandbox, metricsOK bool, err error) {
 
 	var ml *podMetricsList
 	raw, merr := kubectlOutput("get", "--raw",
-		"/apis/metrics.k8s.io/v1beta1/namespaces/"+namespace+"/pods")
+		"/apis/metrics.k8s.io/v1beta1/namespaces/"+Namespace+"/pods")
 	if merr == nil {
 		var list podMetricsList
 		if jerr := json.Unmarshal(raw, &list); jerr == nil {
@@ -199,7 +199,7 @@ func fetchSandboxData() (boxes []sandbox, metricsOK bool, err error) {
 }
 
 func kubectlOutput(args ...string) ([]byte, error) {
-	full := append([]string{"--context", kubeContext, "-n", namespace}, args...)
+	full := append([]string{"--context", kubeContext, "-n", Namespace}, args...)
 	cmd := exec.Command("kubectl", full...)
 	var out, errOut bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errOut

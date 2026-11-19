@@ -1,9 +1,11 @@
-package main
+package dashboard
 
 import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/tmih06/nightshift/internal/cluster"
 )
 
 func TestBar(t *testing.T) {
@@ -41,11 +43,11 @@ func TestResourceLine(t *testing.T) {
 
 func TestViewFrame(t *testing.T) {
 	m := model{
-		boxes: []sandbox{
-			{name: "agent-pool-5ss7w", ownerKind: "SandboxWarmPool", owner: "agent-pool",
-				phase: "Running", cpuLimitMC: 500, memLimitMiB: 256, cpuUsageMC: 2, memUsageMiB: 6},
-			{name: "agent-pool-bkl2p", ownerKind: "SandboxClaim", owner: "my-agent",
-				phase: "Running", cpuLimitMC: 500, memLimitMiB: 256, cpuUsageMC: 0, memUsageMiB: 3},
+		boxes: []cluster.Sandbox{
+			{Name: "agent-pool-5ss7w", OwnerKind: "SandboxWarmPool", Owner: "agent-pool",
+				Phase: "Running", CPULimitMC: 500, MemLimitMiB: 256, CPUUsageMC: 2, MemUsageMiB: 6},
+			{Name: "agent-pool-bkl2p", OwnerKind: "SandboxClaim", Owner: "my-agent",
+				Phase: "Running", CPULimitMC: 500, MemLimitMiB: 256, CPUUsageMC: 0, MemUsageMiB: 3},
 		},
 		metricsOK: true,
 		loaded:    true,
@@ -79,8 +81,8 @@ func TestViewFrame(t *testing.T) {
 
 func TestViewStates(t *testing.T) {
 	m := model{
-		boxes: []sandbox{{name: "agent-pool-5ss7w", ownerKind: "SandboxWarmPool",
-			phase: "Running", cpuLimitMC: 500, memLimitMiB: 256}},
+		boxes: []cluster.Sandbox{{Name: "agent-pool-5ss7w", OwnerKind: "SandboxWarmPool",
+			Phase: "Running", CPULimitMC: 500, MemLimitMiB: 256}},
 		metricsOK: false,
 		loaded:    true,
 		width:     100,
