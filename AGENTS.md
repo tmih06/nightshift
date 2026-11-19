@@ -4,7 +4,7 @@ This directory holds the demo for kubernetes-sigs/agent-sandbox. The demo runs o
 
 ## What lives here
 
-- `demo-warmpool.yaml` creates the standing pool: one `SandboxTemplate` and one `SandboxWarmPool` that keeps two warm sandboxes.
+- `demo-warmpool.yaml` creates the namespace `sandbox-demo` and the standing pool: one `SandboxTemplate` and one `SandboxWarmPool` that keeps two warm sandboxes.
 - `demo-claim.yaml` claims one sandbox from the pool. Apply it, work, then delete it.
 - `sbx.sh` wraps that loop in one command. It is installed as `sbx` through a symlink in `~/.local/bin`.
 - `ARCHITECTURE.md` explains how the parts connect, with diagrams.
