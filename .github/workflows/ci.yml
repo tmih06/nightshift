@@ -22,7 +22,7 @@ jobs:
       - name: Yamllint
         run: pipx run yamllint demo/
       - name: Markdownlint
-        run: npx --yes markdownlint-cli2 "*.md"
+        run: npx --yes markdownlint-cli2 "*.md" "docs/*.md"
       - name: Actionlint
         run: bash <(curl -s https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
 
