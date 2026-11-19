@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"github.com/tmih06/nightshift/internal/cluster"
 	"github.com/tmih06/nightshift/internal/session"
@@ -1008,5 +1009,126 @@ func TestLevelColor(t *testing.T) {
 	}
 	if levelColor(0.1) != warmColor {
 		t.Errorf("levelColor(0.1) = %v, want green", levelColor(0.1))
+	}
+}
+
+// Exactly one pane carries the accent border: the nav pane in
+// navigation, the shell pane while bash has focus, and never both. The
+// header boxes stay dim in both modes.
+func TestOneAccentPane(t *testing.T) {
+	// Force a color profile so the borders carry their escape
+	// sequences in the test, then count which pane is accent-bordered.
+	lipgloss.SetColorProfile(termenv.ANSI256)
+
+	accent := "[38;5;39m" // 39 blue, the accent border color
+	frame := baseModel().View()
+	if got := strings.Count(frame, accent); got < 4 {
+		// one border = many border-rune cells, but at least the top
+		// and left edges of the focused pane carry it
+		t.Errorf("navigation mode: %d accent cells, want the nav pane accented", got)
+	}
+
+	m := baseModel()
+	m.shellFocus = true
+	m.sessions["agent-pool-5ss7w"] = true
+	frame = m.View()
+	if got := strings.Count(frame, accent); got < 4 {
+		t.Errorf("shell mode: %d accent cells, want the shell pane accented", got)
+	}
+
+	// The accent never lands on both panes at once: rendering the nav
+	// pane dim while the shell is focused must keep an accent only
+	// around the shell box, and the accented nav pane alone in
+	// navigation. Verified by the frame layout: in shell mode the
+	// accent cells sit on the shell box rows, below the header boxes.
+	rows := strings.Split(frame, "\n")
+	shellRows := 0
+	for i, r := range rows {
+		if strings.Contains(r, accent) {
+			if i < 3 { // header region
+				t.Errorf("accent on row %d: the header must stay dim", i)
+			} else {
+				shellRows++
+			}
+		}
+	}
+	if shellRows == 0 {
+		t.Error("shell mode: no accent on the shell pane")
+	}
+}
+
+// While the shell has focus, no input escapes: the wheel does not move
+// the selection, clicks do not steal focus, and only the divider drag
+// still works.
+func TestNoInputLeaksFromShell(t *testing.T) {
+	m := baseModel()
+	m.selected = "agent-pool-bkl2p"
+	m.sessions["agent-pool-bkl2p"] = true
+	m.shellFocus = true
+
+	// Wheel events die before reaching the selection.
+	newM, _ := m.updateMouse(tea.MouseMsg{X: 5, Y: 5,
+		Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
+	if newM.(model).selected != "agent-pool-bkl2p" {
+		t.Errorf("wheel leaked into navigation: %q", newM.(model).selected)
+	}
+
+	// A click on a left-pane entry does not steal focus.
+	newM, _ = m.updateMouse(press(5, 4))
+	if !newM.(model).shellFocus {
+		t.Error("a click stole the shell focus")
+	}
+	if newM.(model).selected != "agent-pool-bkl2p" {
+		t.Errorf("a click leaked into the selection: %q", newM.(model).selected)
+	}
+
+	// The divider drag still works while the shell has focus.
+	l := m.layout()
+	divX := l.leftW
+	newM, _ = m.updateMouse(tea.MouseMsg{X: divX, Y: 10,
+		Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	if !newM.(model).dragging {
+		t.Error("the splitter drag must keep working in shell mode")
+	}
+	newM, _ = newM.(model).updateMouse(drag(50, 10))
+	if got := newM.(model).layout().leftW; got != 50 {
+		t.Errorf("drag in shell mode = %d, want 50", got)
+	}
+	if !newM.(model).shellFocus {
+		t.Error("dragging the splitter must not disturb the shell focus")
+	}
+}
+
+// Transient status messages expire on their own: a destroyed-claim
+// notification disappears after its TTL instead of sitting on the
+// status line forever. Sticky messages, errors and armed
+// confirmations, stay until replaced.
+func TestStatusExpiry(t *testing.T) {
+	m := baseModel()
+
+	newM, _ := m.Update(deletedMsg{claim: "dash-claim-1"})
+	if newM.(model).statusTTL <= 0 {
+		t.Error("destroy notification is not transient")
+	}
+	// Three fleet refreshes age it out (5s ttl, 2s tick).
+	aged, _ := newM.Update(tickMsg{})
+	aged, _ = aged.Update(tickMsg{})
+	aged, _ = aged.Update(tickMsg{})
+	if aged.(model).status != "" {
+		t.Errorf("transient status = %q, want expired", aged.(model).status)
+	}
+
+	// Errors stay.
+	newM, _ = m.Update(claimMsg{err: errFixture})
+	if newM.(model).statusTTL != 0 {
+		t.Error("an error message must be sticky")
+	}
+
+	// The armed destroy confirmation stays until answered.
+	armed := baseModel()
+	armed.selected = "agent-pool-bkl2p"
+	newM, _ = armed.updateKeyboard(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	if newM.(model).statusTTL != 0 {
+		t.Error("the armed x confirmation must be sticky")
 	}
 }

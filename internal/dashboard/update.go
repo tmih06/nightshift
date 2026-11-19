@@ -7,6 +7,9 @@ import (
 )
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if _, transient := msg.(tickMsg); transient {
+		m.expireStatus() // each fleet refresh ages transient messages
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -59,7 +62,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					// The session is pre-created so enter attaches with no
 					// wait, but the dashboard stays in navigation: only
 					// enter drops into the shell.
-					m.status = "bash ready in " + b.Name + " — enter attaches"
+					m.flash("bash ready in " + b.Name + " — enter attaches")
 					return m, fetchCmd()
 				}
 				break
@@ -67,34 +70,34 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case claimMsg:
 		if msg.err != nil {
-			m.status = "claim failed: " + msg.err.Error()
+			m.sticky("claim failed: " + msg.err.Error())
 			return m, nil
 		}
-		m.status = "claiming " + msg.name + ", waiting for a warm sandbox…"
+		m.flash("claiming " + msg.name + ", waiting for a warm sandbox…")
 		return m, waitClaimCmd(msg.name)
 	case claimAdoptedMsg:
 		if msg.err != nil {
-			m.status = "claim failed: " + msg.err.Error()
+			m.sticky("claim failed: " + msg.err.Error())
 			return m, fetchCmd()
 		}
 		m.pendingPod = msg.pod
-		m.status = "bash ready in " + msg.pod
+		m.flash("bash ready in " + msg.pod)
 		return m, fetchCmd()
 	case deletedMsg:
 		if msg.err != nil {
-			m.status = "destroy failed: " + msg.err.Error()
+			m.sticky("destroy failed: " + msg.err.Error())
 			return m, nil
 		}
-		m.status = "destroyed claim " + msg.claim + ", pool is restocking"
+		m.flash("destroyed claim " + msg.claim + ", pool is restocking")
 		m.confirmDestroy = false
 		return m, fetchCmd()
 	case attachReadyMsg:
 		if msg.err != nil {
-			m.status = "session failed: " + msg.err.Error()
+			m.sticky("session failed: " + msg.err.Error())
 			return m, nil
 		}
 		m.shellFocus = true
-		m.status = "bash runs in the shell pane, esc returns to navigation"
+		m.flash("bash ready — enter in the shell pane to focus")
 		if b := m.selectedBox(); b != nil && m.sessions[b.Name] {
 			w, h := m.shellPaneSize()
 			resize := w != m.shellW || h != m.shellH
@@ -104,7 +107,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case fullReadyMsg:
 		if msg.err != nil {
-			m.status = "session failed: " + msg.err.Error()
+			m.sticky("session failed: " + msg.err.Error())
 			return m, nil
 		}
 		return m, tea.ExecProcess(session.Attach(msg.pod), func(err error) tea.Msg {
@@ -112,15 +115,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 	case resumeMsg:
 		if msg.err != nil {
-			m.status = "bash ended: " + msg.err.Error()
+			m.sticky("bash ended: " + msg.err.Error())
 		} else {
-			m.status = "back from fullscreen, session still running"
+			m.flash("back from fullscreen, session still running")
 		}
 		return m, fetchCmd()
 	case sentMsg:
 		m.sending = false
 		if msg.err != nil {
-			m.status = "send failed: " + msg.err.Error()
+			m.sticky("send failed: " + msg.err.Error())
 			m.pending = nil
 			return m, nil
 		}

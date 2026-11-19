@@ -27,6 +27,7 @@ type model struct {
 	err       error
 	loaded    bool
 	status    string
+	statusTTL time.Duration // 0 means the message stays until replaced
 	// confirmDestroy arms the x key so one stray press cannot tear a
 	// claimed sandbox down. The second press fires.
 	confirmDestroy bool
@@ -91,6 +92,32 @@ func (m *model) appendHistory() {
 			h.mem = h.mem[len(h.mem)-120:]
 		}
 		m.hist[b.Name] = h
+	}
+}
+
+// flash sets a transient status message that expires on its own, so
+// notifications like "destroyed claim, pool is restocking" do not sit
+// on screen forever.
+func (m *model) flash(msg string) {
+	m.status = msg
+	m.statusTTL = 5 * time.Second
+}
+
+// sticky sets a status message that stays until replaced: errors and
+// armed confirmations must not vanish while the user reads them.
+func (m *model) sticky(msg string) {
+	m.status = msg
+	m.statusTTL = 0
+}
+
+// expireStatus drops an elapsed transient message, called on each
+// update so the status line is honest without a timer goroutine.
+func (m *model) expireStatus() {
+	if m.statusTTL > 0 {
+		m.statusTTL -= refreshEvery
+		if m.statusTTL <= 0 {
+			m.status, m.statusTTL = "", 0
+		}
 	}
 }
 

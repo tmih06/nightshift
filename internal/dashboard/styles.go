@@ -25,7 +25,12 @@ var (
 	nameStyle    = lipgloss.NewStyle().Bold(true)
 	sectionStyle = lipgloss.NewStyle().Bold(true)
 
-	leftPanelStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).
+	// Exactly one pane carries the accent border: the nav pane while
+	// the dashboard has focus, the shell pane while bash has it. The
+	// header boxes stay dim in both modes.
+	navFocusStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).
+			BorderForeground(accent).Padding(0, 1)
+	shellFocusStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).
 			BorderForeground(accent).Padding(0, 1)
 	rightPanelStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).
 			BorderForeground(dimColor).Padding(0, 1)
