@@ -211,6 +211,28 @@ func TestCleanManifestYAML(t *testing.T) {
 	}
 }
 
+func TestParseClusterList(t *testing.T) {
+	raw := []byte(`{"apiVersion":"v1","kind":"List","items":[
+		{"kind":"Sandbox","metadata":{"name":"sbx-1","ownerReferences":[{"kind":"SandboxWarmPool","name":"agent-pool"}]}},
+		{"kind":"Pod","metadata":{"name":"sbx-1"},"status":{"phase":"Running"}},
+		{"kind":"SandboxWarmPool","metadata":{"name":"agent-pool"},"spec":{"replicas":2,"sandboxTemplateRef":{"name":"agent-bash-template"},"updateStrategy":{"type":"Recreate"}},"status":{"readyReplicas":2}},
+		{"kind":"SandboxTemplate","metadata":{"name":"agent-bash-template"},"spec":{"failedPodPolicy":"Retain"}}
+	]}`)
+	sb, pl, pool, err := parseClusterList(raw)
+	if err != nil {
+		t.Fatalf("parseClusterList: %v", err)
+	}
+	if len(sb.Items) != 1 || len(pl.Items) != 1 {
+		t.Fatalf("items = %d sandboxes, %d pods, want 1 and 1", len(sb.Items), len(pl.Items))
+	}
+	if pool.Name != "agent-pool" || pool.Template != "agent-bash-template" || pool.Ready != 2 || pool.Desired != 2 {
+		t.Errorf("pool = %+v", pool)
+	}
+	if !strings.Contains(pool.ManifestYAML, "kind: SandboxWarmPool") || !strings.Contains(pool.TemplateYAML, "kind: SandboxTemplate") {
+		t.Errorf("missing pool/template YAML: %+v", pool)
+	}
+}
+
 func TestBuildSandboxesRejectsBadQuantities(t *testing.T) {
 	var sb sandboxList
 	var pl podList

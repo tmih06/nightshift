@@ -1,10 +1,3 @@
-// The view. Left pane: navigation, warm and claimed sandboxes in
-// separate sections, its width set by dragging the splitter. Right
-// column: a header pane with the selection's essential data and a
-// shell pane embedding the sandbox's tmux session, which never takes
-// over the whole terminal. Bordered panes get their content filled to
-// an exact height, never a Height on the style, and every string is
-// truncated to the pane's inner width.
 package dashboard
 
 import (
@@ -18,32 +11,31 @@ import (
 )
 
 const (
-	// stackedBelow is the width where the panes stop fitting side by
-	// side.
 	stackedBelow = 50
 	minLeftW     = 15
 	minRightW    = 20
+	headerH      = 6 // 4 content rows + top/bottom borders
 )
 
-// layout is the one source of truth for pane geometry: the view, the
-// mouse hit tests, and the tmux pane size all read it, so they cannot
-// disagree.
 type layout struct {
 	leftW, leftH int
-	colW         int // right column outer width
-	infoW        int // info box outer width, fitted to its text
-	usageW       int // usage box outer width, the rest of the column
+	colW         int
+	infoW        int
+	usageW       int
 	headerH      int
 	shellH       int
 	stacked      bool
-	shellTop     int // absolute row where the shell pane starts
+	shellTop     int
 }
 
-// layout derives the geometry. Golden rule 4: the drag stores a
-// clamped override, and every other size follows from weights.
 func (m model) layout() layout {
-	panelsH := max(m.height-2, 3) // title line plus status line
+	return m.layoutWithInfo(m.headerInfoLines())
+}
+
+func (m model) layoutWithInfo(info []string) layout {
+	panelsH := max(m.height-2, 3) // title + status line
 	var l layout
+	l.headerH = headerH
 	if m.width < stackedBelow {
 		l.stacked = true
 		l.leftW = m.width
@@ -54,9 +46,8 @@ func (m model) layout() layout {
 		l.leftH = clamp(l.leftH, 3, max(panelsH-6, 3))
 		l.colW = m.width
 		rest := max(panelsH-l.leftH, 6)
-		l.headerH = headerHeight(rest)
 		l.shellH = max(rest-l.headerH, 3)
-		l.infoW, l.usageW = m.headerBoxWidths(l.colW)
+		l.infoW, l.usageW = headerBoxWidths(l.colW, info)
 		l.shellTop = 1 + l.leftH + l.headerH
 		return l
 	}
@@ -67,23 +58,18 @@ func (m model) layout() layout {
 	l.leftW = clamp(l.leftW, minLeftW, max(m.width-minRightW, minLeftW))
 	l.leftH = panelsH
 	l.colW = max(m.width-l.leftW, 1)
-	l.headerH = headerHeight(panelsH)
 	l.shellH = max(panelsH-l.headerH, 3)
-	l.infoW, l.usageW = m.headerBoxWidths(l.colW)
+	l.infoW, l.usageW = headerBoxWidths(l.colW, info)
 	l.shellTop = 1 + l.headerH
 	return l
 }
 
-// headerBoxWidths splits the header column between the two bento boxes.
-// The info box gets what its text needs (bounded so the usage box stays
-// readable), and the usage box takes the exact remainder so both right
-// borders align flush with the lower pane.
-func (m model) headerBoxWidths(colW int) (infoW, usageW int) {
-	infoW = 0
-	for _, ln := range m.headerInfoLines() {
-		// Width(n) gives outer n+2 on this bordered, padded style, so
-		// the box needs the text width plus the padding and border
-		// columns: +4.
+// headerBoxWidths fits the info box to its longest line (bounded so the
+// usage box stays readable) and gives usageW the exact remainder so
+// infoW + usageW == colW.
+func headerBoxWidths(colW int, info []string) (infoW, usageW int) {
+	for _, ln := range info {
+		// Border (2) + Padding(0, 1) (2) = 4 columns around content.
 		if w := lipgloss.Width(ln) + 4; w > infoW {
 			infoW = w
 		}
@@ -92,14 +78,11 @@ func (m model) headerBoxWidths(colW int) (infoW, usageW int) {
 	minUsage := min(24, max(colW-minInfo, 1))
 	maxInfo := max(colW-minUsage, minInfo)
 	infoW = clamp(infoW, minInfo, maxInfo)
-	usageW = max(colW-infoW, 1)
-	return infoW, usageW
+	return infoW, max(colW-infoW, 1)
 }
 
-// fitLeftWidth sizes the sidebar to its content: the longest entry and
-// the section headers, so no name truncates at the default width.
 func (m model) fitLeftWidth() int {
-	w := 18 // room for a section header row
+	w := 18
 	for _, b := range m.boxes {
 		if n := len([]rune(b.Name)) + 8; n > w {
 			w = n
@@ -108,46 +91,34 @@ func (m model) fitLeftWidth() int {
 	return clamp(w, minLeftW, max(m.width-minRightW, minLeftW))
 }
 
-// headerHeight caps the header row at the usage box's four content
-// rows (value row plus one graph row per metric) plus borders, and
-// never more than half the column.
-func headerHeight(avail int) int {
-	return min(6, max(avail/2, 6))
-}
-
-// shellPaneSize is the embedded shell's inner size, what the tmux
-// window is resized to.
 func (m model) shellPaneSize() (int, int) {
 	l := m.layout()
 	return max(l.colW-4, 1), max(l.shellH-2, 1)
 }
 
-// pane truncates each line to innerW (golden rule 2: never auto-wrap
-// inside bordered panes), fills lines to innerH, and renders them in
-// the bordered style. Measured lipgloss semantics: Width(n) with this
-// style's border and padding yields an outer width of n+2, so a pane of
-// outer width W passes Width(W-2) and its text area is W-4.
+// pane truncates every line to innerW so bordered boxes never auto-wrap
+// or change height. Lipgloss Width(n) on this padded border style yields
+// outer width n+2, so outerW passes Width(outerW-2).
 func pane(style lipgloss.Style, lines []string, outerW, outerH int) string {
 	innerW := max(outerW-4, 1)
 	innerH := max(outerH-2, 1)
-	fit := make([]string, 0, innerH)
+	fit := make([]string, innerH)
 	for i := 0; i < len(lines) && i < innerH; i++ {
-		fit = append(fit, truncateANSI(lines[i], innerW))
+		fit[i] = truncateANSI(lines[i], innerW)
 	}
-	for len(fit) < innerH {
-		fit = append(fit, "")
-	}
-	return style.Width(outerW - 2).Render(lipgloss.JoinVertical(lipgloss.Left, fit...))
+	return style.Width(outerW - 2).Render(strings.Join(fit, "\n"))
 }
 
-// leftLines renders the navigation lines and maps every line that
-// holds an entry to its index in m.boxes. One function backs the view
-// and the mouse so the two cannot disagree.
 func (m model) leftLines() ([]string, map[int]int) {
-	l := m.layout()
+	return m.leftLinesWith(m.layout())
+}
+
+func (m model) leftLinesWith(l layout) ([]string, map[int]int) {
 	innerW := max(l.leftW-4, 1)
 	targets := map[int]int{}
-	var lines []string
+	if len(m.boxes) == 0 {
+		return []string{dim("no sandboxes…")}, targets
+	}
 	var warm, claimed []int
 	for i, b := range m.boxes {
 		if b.OwnerKind == "SandboxWarmPool" {
@@ -163,15 +134,14 @@ func (m model) leftLines() ([]string, map[int]int) {
 		if b.Name == m.selected {
 			marker = cursorStyle.Render("▶")
 		}
-		kindStyle := warmStyle
-		if b.OwnerKind != "SandboxWarmPool" {
-			kindStyle = claimStyle
-		}
-		text := truncate(b.Name, innerW-4)
-		if b.Name == m.selected {
+		text := truncateANSI(b.Name, max(innerW-4, 1))
+		switch {
+		case b.Name == m.selected:
 			text = cursorStyle.Render(text)
-		} else {
-			text = kindStyle.Render(text)
+		case b.OwnerKind == "SandboxWarmPool":
+			text = warmStyle.Render(text)
+		default:
+			text = claimStyle.Render(text)
 		}
 		sess := dim("○")
 		if m.sessions[b.Name] {
@@ -180,17 +150,13 @@ func (m model) leftLines() ([]string, map[int]int) {
 		return marker + " " + text + " " + sess
 	}
 
-	if len(m.boxes) == 0 {
-		lines = append(lines, dim("no sandboxes…"))
-		return lines, targets
-	}
+	lines := make([]string, 0, len(m.boxes)+3)
 	lines = append(lines, sectionStyle.Render(fmt.Sprintf("WARM POOL (%d)", len(warm))))
 	for _, i := range warm {
 		targets[len(lines)] = i
 		lines = append(lines, entry(i))
 	}
-	lines = append(lines, "")
-	lines = append(lines, sectionStyle.Render(fmt.Sprintf("CLAIMED (%d)", len(claimed))))
+	lines = append(lines, "", sectionStyle.Render(fmt.Sprintf("CLAIMED (%d)", len(claimed))))
 	for _, i := range claimed {
 		targets[len(lines)] = i
 		lines = append(lines, entry(i))
@@ -198,14 +164,11 @@ func (m model) leftLines() ([]string, map[int]int) {
 	return lines, targets
 }
 
-// headerInfoLines renders the text of the info box: the box sizes
-// itself to fit this content unless constrained by a narrow column.
 func (m model) headerInfoLines() []string {
 	b := m.selectedBox()
 	if b == nil {
 		return []string{"nothing selected"}
 	}
-
 	badge, badgeStyle := "warm", warmStyle
 	switch {
 	case b.OwnerKind == "SandboxClaim":
@@ -217,7 +180,6 @@ func (m model) headerInfoLines() []string {
 	if m.sessions[b.Name] {
 		sess = warmStyle.Render("tmux live")
 	}
-
 	return []string{
 		nameStyle.Render(b.Name),
 		dim("owner ") + b.Owner,
@@ -226,75 +188,52 @@ func (m model) headerInfoLines() []string {
 	}
 }
 
-// headerUsageLines renders the text of the usage box, one metric per
-// two-row group: a table-aligned value row with a bar under the
-// percentage, then a btop-style history graph. Columns align across
-// CPU and MEM, so the numbers read as a table.
 func (m model) headerUsageLines() []string {
+	return m.headerUsageLinesWith(m.layout())
+}
+
+func (m model) headerUsageLinesWith(l layout) []string {
 	b := m.selectedBox()
 	if b == nil {
 		return []string{dim("—")}
 	}
-	inner := max(m.layout().usageW-4, 1)
-	// A warm sandbox has no live session or usage story to tell: show
-	// what it is made of instead, its image, command, and budget.
+	inner := max(l.usageW-4, 1)
 	if b.OwnerKind != "SandboxClaim" {
-		return m.specLines(b, inner)
+		return specLines(b, inner)
 	}
 	h := m.hist[b.Name]
-	var lines []string
-	for _, row := range []struct {
-		label string
-		known bool
-		usage int64
-		limit int64
-		unit  string
-		hist  []float64
-	}{
-		{"CPU", m.metricsOK, b.CPUUsageMC, b.CPULimitMC, "m", h.cpu},
-		{"MEM", m.metricsOK, b.MemUsageMiB, b.MemLimitMiB, "Mi", h.mem},
-	} {
-		lines = append(lines, usageLines(row.label, row.known, row.usage, row.limit, row.unit, row.hist, inner)...)
-	}
+	lines := make([]string, 0, 4)
+	lines = append(lines, usageLines("CPU", m.metricsOK, b.CPUUsageMC, b.CPULimitMC, "m", h.cpu, inner)...)
+	lines = append(lines, usageLines("MEM", m.metricsOK, b.MemUsageMiB, b.MemLimitMiB, "Mi", h.mem, inner)...)
 	return lines
 }
 
-// specLines renders the warm sandbox's configuration as the table the
-// usage box uses for claimed sandboxes: image, command, restart
-// policy, and the request/limit budget, aligned columns.
-func (m model) specLines(b *cluster.Sandbox, width int) []string {
+func specLines(b *cluster.Sandbox, width int) []string {
 	cpu := fmt.Sprintf("%d/%dm", b.CPUReqMC, b.CPULimitMC)
 	mem := fmt.Sprintf("%dMi/%dMi", b.MemReqMiB, b.MemLimitMiB)
 	lbl := func(s string) string { return dim(fmt.Sprintf("%-5s", s)) }
 	imgMax := max(width-10-len(b.RestartPolicy), 8)
 	cmdMax := max(width-6, 8)
 	return []string{
-		fmt.Sprintf("%s %s %s %s", lbl("image"), truncate(b.Image, imgMax), dim("rc"), b.RestartPolicy),
-		fmt.Sprintf("%s %s", lbl("cmd"), truncate(b.Command, cmdMax)),
+		fmt.Sprintf("%s %s %s %s", lbl("image"), truncateANSI(b.Image, imgMax), dim("rc"), b.RestartPolicy),
+		fmt.Sprintf("%s %s", lbl("cmd"), truncateANSI(b.Command, cmdMax)),
 		fmt.Sprintf("%s %-16s %s", lbl("CPU"), cpu, dim("req/lim")),
 		fmt.Sprintf("%s %-16s %s", lbl("MEM"), mem, dim("req/lim")),
 	}
 }
 
-// usageLines renders one metric's group: the table value row, then the
-// braille history graph rows. The fixed columns are the table: label,
-// value, percent, bar.
 func usageLines(label string, known bool, usage, limit int64, unit string, hist []float64, width int) []string {
 	lbl := dim(fmt.Sprintf("%-3s", label))
 	if limit <= 0 {
-		value := fmt.Sprintf("%s %-18s", lbl, dim("no limit"))
-		return []string{truncateANSI(value, width), usageGraph(nil, width)}
+		return []string{truncateANSI(fmt.Sprintf("%s %-18s", lbl, dim("no limit")), width), usageGraph(nil, width)}
 	}
-	num := "--"
-	ratio := 0.0
+	num, ratio := "--", 0.0
 	if known {
 		num = fmt.Sprintf("%d%s", usage, unit)
 		ratio = float64(usage) / float64(limit)
 	}
 	value := fmt.Sprintf("%s / %d%s", num, limit, unit)
 	text := fmt.Sprintf("%s %-15s %3.0f%%", lbl, value, ratio*100)
-	// One separator column between the percent and the bar; the total
-	// row lands on exactly width columns.
 	barW := width - lipgloss.Width(text) - 1
 	var valueRow string
 	if barW > 0 {
@@ -305,17 +244,8 @@ func usageLines(label string, known bool, usage, limit int64, unit string, hist 
 	return []string{valueRow, usageGraph(hist, width)}
 }
 
-// usageGraph renders one metric's history as a single-row braille
-// graph, btop style: each character cell holds two dot columns by four
-// dot rows, and a sample fills its column from the baseline up to its
-// own height — one dot at rest, four dots at the limit — so stress
-// reads as a tall stack and calm as a short one. The height is the
-// sample's ratio against the limit, not a scale of the window's own
-// peak: 45% of the limit draws two dot rows even when it is the
-// highest thing on screen, and the wave keeps its true shape. Each
-// cell is colored on the green-to-red ramp by its stronger sample, so
-// a spike reads red wherever it happened. A young history grows from
-// the right edge.
+// usageGraph draws a 1-row braille history chart (2 samples per cell,
+// 4 dot rows scaled against the limit) batching same-color runs.
 func usageGraph(hist []float64, width int) string {
 	if width < 1 {
 		return ""
@@ -323,14 +253,11 @@ func usageGraph(hist []float64, width int) string {
 	if len(hist) == 0 {
 		return dim(strings.Repeat("\u00b7", width))
 	}
-	dotCols := 2 * width
 	vals := hist
-	if len(vals) > dotCols {
+	if dotCols := 2 * width; len(vals) > dotCols {
 		vals = vals[len(vals)-dotCols:]
 	}
 	const dotRows = 4
-	// A young history grows from the right edge, the way a scrolling
-	// chart fills, so the first cells stay blank.
 	firstCell := width - (len(vals)+1)/2
 	type graphCell struct {
 		mask rune
@@ -338,59 +265,69 @@ func usageGraph(hist []float64, width int) string {
 	}
 	cells := make([]graphCell, width)
 	for j, v := range vals {
-		// Absolute scale: the sample's ratio against the limit is its
-		// dot height, one row minimum so the baseline stays visible.
-		h := int(v*float64(dotRows) + 0.5)
-		if h < 1 {
-			h = 1
-		}
-		if h > dotRows {
-			h = dotRows
-		}
+		h := clamp(int(v*dotRows+0.5), 1, dotRows)
 		c := firstCell + j/2
 		col := j % 2
-		// A column, not a point: every dot row from the baseline up to
-		// the sample's height lights up.
-		for top := dotRows - h; top <= dotRows-1; top++ {
+		for top := dotRows - h; top < dotRows; top++ {
 			cells[c].mask |= dotBit(col, top)
 		}
 		if v > cells[c].maxV {
 			cells[c].maxV = v
 		}
 	}
-	var b strings.Builder
-	for c, cell := range cells {
-		if c < firstCell {
-			b.WriteByte(' ')
-			continue
-		}
-		b.WriteString(lipgloss.NewStyle().Foreground(levelColor(cell.maxV)).
-			Render(string(0x2800 + cell.mask)))
+
+	var out strings.Builder
+	if firstCell > 0 {
+		out.WriteString(strings.Repeat(" ", firstCell))
 	}
-	return b.String()
+	var run strings.Builder
+	curBucket := -1
+	flush := func() {
+		if run.Len() > 0 {
+			out.WriteString(levelStyles[curBucket].Render(run.String()))
+			run.Reset()
+		}
+	}
+	for c := firstCell; c < width; c++ {
+		bucket := levelBucket(cells[c].maxV)
+		if bucket != curBucket {
+			flush()
+			curBucket = bucket
+		}
+		run.WriteRune(0x2800 + cells[c].mask)
+	}
+	flush()
+	return out.String()
 }
 
-// levelColor maps a usage ratio to a color: green at rest, yellow as
-// it climbs, red at the top. The graph uses this per sample, so each
-// point carries its own stress color.
-func levelColor(ratio float64) lipgloss.Color {
+func levelBucket(ratio float64) int {
 	switch {
 	case ratio >= 0.9:
-		return badColor
+		return 3
 	case ratio >= 0.6:
-		return warnColor
+		return 2
 	case ratio >= 0.3:
-		return lipgloss.Color("112") // light green
+		return 1
+	default:
+		return 0
+	}
+}
+
+func levelColor(ratio float64) lipgloss.Color {
+	switch levelBucket(ratio) {
+	case 3:
+		return badColor
+	case 2:
+		return warnColor
+	case 1:
+		return midGreenColor
 	default:
 		return warmColor
 	}
 }
 
-// dotBit maps a dot position inside a braille cell to its bit in the
-// Unicode pattern. A cell is two dot columns by four dot rows: dots 1,
-// 2, 3 run down the left column, 4, 5, 6 down the right, and 7, 8 sit
-// on the fourth row. Shifting a column's base bit would work only for
-// the top three rows, so the fourth row is its own case.
+// dotBit maps (col 0..1, row 0..3) to its Unicode braille bit: dots 1-3
+// run down col 0, dots 4-6 down col 1, and dots 7-8 sit on row 3.
 func dotBit(col, row int) rune {
 	if row < 3 {
 		return 1 << rune(col*3+row)
@@ -398,8 +335,7 @@ func dotBit(col, row int) rune {
 	return 1 << rune(6+col)
 }
 
-func (m model) shellLinesView() []string {
-	l := m.layout()
+func (m model) shellLinesView(l layout) []string {
 	innerW := max(l.colW-4, 1)
 	innerH := max(l.shellH-2, 1)
 	b := m.selectedBox()
@@ -415,7 +351,8 @@ func (m model) shellLinesView() []string {
 	default:
 		title = dim("bash — click here or enter to focus")
 	}
-	lines := []string{title}
+	lines := make([]string, 0, innerH)
+	lines = append(lines, title)
 
 	if b != nil && m.sessions[b.Name] && m.shellPod == b.Name {
 		content := m.shellLines
@@ -423,60 +360,29 @@ func (m model) shellLinesView() []string {
 			content = content[len(content)-(innerH-1):]
 		}
 		for _, ln := range content {
-			lines = append(lines, truncate(ln, innerW))
+			lines = append(lines, truncateANSI(ln, innerW))
 		}
 	}
 	return lines
 }
 
-// bar draws a usage bar of the given width: the filled part colored by
-// the level, the empty part dim, so the whole bar stays visible.
 func bar(ratio float64, width int) string {
-	filled := int(ratio * float64(width))
-	if filled < 0 {
-		filled = 0
-	}
-	if filled > width {
-		filled = width
-	}
-	filledPart := lipgloss.NewStyle().Foreground(barColor(ratio)).
-		Render(strings.Repeat("█", filled))
-	emptyPart := dim(strings.Repeat("░", width-filled))
-	return filledPart + emptyPart
-}
-
-func barColor(ratio float64) lipgloss.Color {
+	filled := clamp(int(ratio*float64(width)), 0, width)
+	st := warmStyle
 	switch {
 	case ratio >= 0.9:
-		return badColor
+		st = badStyle
 	case ratio >= 0.6:
-		return warnColor
-	default:
-		return warmColor
+		st = warnStyle
 	}
-}
-
-func truncate(s string, max int) string {
-	if max < 1 {
-		return "…"
-	}
-	if len(s) <= max {
-		return s
-	}
-	return s[:max-1] + "…"
+	return st.Render(strings.Repeat("█", filled)) + dim(strings.Repeat("░", width-filled))
 }
 
 func clamp(v, lo, hi int) int {
 	if hi < lo {
-		hi = lo
-	}
-	if v < lo {
 		return lo
 	}
-	if v > hi {
-		return hi
-	}
-	return v
+	return min(max(v, lo), hi)
 }
 
 func ageString(ts time.Time) string {
@@ -504,27 +410,18 @@ func (m model) statusLine() string {
 		msg = warnStyle.Render("live usage unavailable (metrics-server)")
 	}
 	if msg != "" {
-		return lipgloss.NewStyle().MaxWidth(m.width).Render(msg)
+		return truncateANSI(msg, m.width)
 	}
-	// Shell mode fills the bar so the mode is unmistakable, and carries
-	// its own tips: no keybind escapes the sandbox.
-	var line string
-	var bg lipgloss.Color
 	switch {
 	case m.focus == focusShell && m.prefix:
-		line, bg = "C-b armed · q leaves bash, any other key cancels", warnColor
+		return truncateANSI(prefixBarStyle.Render(" C-b armed · q leaves bash, any other key cancels "), m.width)
 	case m.focus == focusShell:
-		line, bg = "C-b q leaves bash · click sidebar to exit · every key goes to the sandbox", accent
+		return truncateANSI(shellBarStyle.Render(" C-b q leaves bash · click sidebar to exit · every key goes to the sandbox "), m.width)
 	case m.focus == focusInspect:
-		return lipgloss.NewStyle().MaxWidth(m.width).Render(
-			dim("j/k/pgup/pgdn scroll · esc or click sidebar back · c claim+bash · q quit"))
+		return truncateANSI(dim("j/k/pgup/pgdn scroll · esc or click sidebar back · c claim+bash · q quit"), m.width)
 	default:
-		return lipgloss.NewStyle().MaxWidth(m.width).Render(
-			dim("j/k move · enter bash (claimed) · F fullscreen · c claim+bash · x destroy · q quit · drag resizes"))
+		return truncateANSI(dim("j/k move · enter bash (claimed) · F fullscreen · c claim+bash · x destroy · q quit · drag resizes"), m.width)
 	}
-	return lipgloss.NewStyle().MaxWidth(m.width).
-		Background(bg).Foreground(lipgloss.Color("16")).Bold(true).
-		Render(" " + line + " ")
 }
 
 func (m model) View() string {
@@ -535,32 +432,32 @@ func (m model) View() string {
 	title := titleStyle.Render("nightshift") + "  " +
 		dim(fmt.Sprintf("%d sandboxes · ns %s", len(m.boxes), cluster.Namespace))
 
-	l := m.layout()
-	leftLines, _ := m.leftLines()
-	// Exactly one accent border: the nav pane in navigation, the lower
-	// right pane while shell or warm inspect has focus, never both.
+	info := m.headerInfoLines()
+	l := m.layoutWithInfo(info)
+	leftLines, _ := m.leftLinesWith(l)
 	leftStyle := navFocusStyle
 	if m.focus != focusNav {
 		leftStyle = rightPanelStyle
 	}
 	left := pane(leftStyle, leftLines, l.leftW, l.leftH)
 
-	infoBox := pane(rightPanelStyle, m.headerInfoLines(), l.infoW, l.headerH)
-	usageBox := pane(rightPanelStyle, m.headerUsageLines(), l.usageW, l.headerH)
+	infoBox := pane(rightPanelStyle, info, l.infoW, l.headerH)
+	usageBox := pane(rightPanelStyle, m.headerUsageLinesWith(l), l.usageW, l.headerH)
 	headerRow := lipgloss.JoinHorizontal(lipgloss.Top, infoBox, usageBox)
+
 	var lowerPane string
 	if m.isWarmSelected() {
-		inspectStyle := rightPanelStyle
+		st := rightPanelStyle
 		if m.focus == focusInspect {
-			inspectStyle = shellFocusStyle
+			st = shellFocusStyle
 		}
-		lowerPane = pane(inspectStyle, m.warmInspectView(), l.colW, l.shellH)
+		lowerPane = pane(st, m.warmInspectView(l), l.colW, l.shellH)
 	} else {
-		shellStyle := rightPanelStyle
+		st := rightPanelStyle
 		if m.focus == focusShell {
-			shellStyle = shellFocusStyle
+			st = shellFocusStyle
 		}
-		lowerPane = pane(shellStyle, m.shellLinesView(), l.colW, l.shellH)
+		lowerPane = pane(st, m.shellLinesView(l), l.colW, l.shellH)
 	}
 	rightCol := lipgloss.JoinVertical(lipgloss.Left, headerRow, lowerPane)
 

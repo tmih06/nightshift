@@ -1,11 +1,8 @@
 package dashboard
 
-import (
-	tea "github.com/charmbracelet/bubbletea"
-)
+import tea "github.com/charmbracelet/bubbletea"
 
 func (m model) updateKeyboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Any key but x disarms the armed destroy confirmation.
 	if m.confirmDestroy && msg.String() != "x" {
 		m.confirmDestroy = false
 	}
@@ -50,7 +47,6 @@ func (m model) updateKeyboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.flash("starting bash in " + b.Name)
 		return m, attachCmd(b.Name)
 	case "F":
-		// Fullscreen escape hatch for full-screen programs.
 		b := m.selectedBox()
 		if b == nil || b.Phase != "Running" {
 			return m, nil
@@ -73,6 +69,40 @@ func (m model) updateKeyboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, deleteClaimCmd(b.Owner)
+	}
+	return m, nil
+}
+
+func (m model) updateInspectKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if !m.isWarmSelected() {
+		m.focus = focusNav
+		return m, nil
+	}
+	page := max(m.inspectPageSize()/2, 1)
+	switch msg.String() {
+	case "esc", "tab":
+		m.focus = focusNav
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	case "up", "k":
+		m.scrollInspect(-1)
+	case "down", "j":
+		m.scrollInspect(1)
+	case "pgup", "ctrl+u":
+		m.scrollInspect(-page)
+	case "pgdown", "ctrl+d":
+		m.scrollInspect(page)
+	case "g", "home":
+		m.inspectScroll = 0
+	case "G", "end":
+		m.scrollInspect(1 << 20)
+	case "c":
+		m.focus = focusNav
+		m.flash("claiming from the warm pool…")
+		return m, claimCmd()
+	case "r":
+		m.status, m.statusTTL = "", 0
+		return m, fetchCmd()
 	}
 	return m, nil
 }
