@@ -10,14 +10,14 @@ import (
 )
 
 // nightshift: a Bubble Tea dashboard for the agent-sandbox warm pool.
-// go run ./cmd/nightshift opens the TUI, go run ./cmd/nightshift -once
-// prints one frame to stdout.
+// go run ./cmd/nightshift opens the TUI (two panes, mouse enabled),
+// go run ./cmd/nightshift -once prints one frame to stdout.
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "-once" {
 		dashboard.RunOnce()
 		return
 	}
-	p := tea.NewProgram(dashboard.New(), tea.WithAltScreen())
+	p := tea.NewProgram(dashboard.New(), tea.WithAltScreen(), tea.WithMouseAllMotion())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
