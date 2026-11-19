@@ -86,8 +86,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "back from fullscreen, session still running"
 		}
 		return m, fetchCmd()
-	case sendErrMsg:
-		m.status = "send failed: " + msg.err.Error()
+	case sentMsg:
+		m.sending = false
+		if msg.err != nil {
+			m.status = "send failed: " + msg.err.Error()
+			m.pending = nil
+			return m, nil
+		}
+		cmds := []tea.Cmd{}
+		if cmd := m.startDrain(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		// Capture right after the input landed, so the echo comes back
+		// in milliseconds instead of waiting for the next shell tick.
+		if b := m.selectedBox(); b != nil && m.sessions[b.Name] && b.Phase == "Running" {
+			w, h := m.shellPaneSize()
+			resize := w != m.shellW || h != m.shellH
+			m.shellW, m.shellH = w, h
+			cmds = append(cmds, captureCmd(b.Name, w, h, resize))
+		}
+		if len(cmds) == 0 {
+			return m, nil
+		}
+		return m, tea.Batch(cmds...)
 	}
 	return m, nil
 }

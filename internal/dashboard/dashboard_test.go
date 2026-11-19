@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/tmih06/nightshift/internal/cluster"
+	"github.com/tmih06/nightshift/internal/session"
 )
 
 func testBoxes() []cluster.Sandbox {
@@ -247,14 +248,13 @@ func TestViewFrame(t *testing.T) {
 		"agent-pool-lqbmx",
 		"agent-pool-bkl2p",
 		"▶",
-		"kind",
-		"SandboxWarmPool",
-		"agent-pool",
+		"· warm ·",
+		"owner agent-pool",
 		"Running",
 		"tmux",
 		"2m/500m",
 		"6Mi/256Mi",
-		"sbx-agent-pool-5ss7w",
+		"live",
 		"[enter] bash",
 	} {
 		if !strings.Contains(got, want) {
@@ -279,14 +279,14 @@ func TestViewFrame(t *testing.T) {
 	// its own owner, and the untracked warm pod shows no session.
 	m.selected = 2
 	g := m.View()
-	for _, want := range []string{"SandboxClaim", "my-agent", "none — enter starts one", "[x] destroy claim", "0m/500m"} {
+	for _, want := range []string{"· claimed ·", "my-agent", "tmux off", "[x] destroy claim", "0m/500m"} {
 		if !strings.Contains(g, want) {
 			t.Errorf("claimed inspect missing %q", want)
 		}
 	}
 	m.selected = 1
-	if g := m.View(); strings.Contains(g, "sbx-agent-pool-lqbmx") || !strings.Contains(g, "none — enter starts one") {
-		t.Errorf("inspect of a session-less pod = missing the none row")
+	if g := m.View(); !strings.Contains(g, "tmux off") {
+		t.Errorf("inspect of a session-less pod = missing the off state")
 	}
 }
 
@@ -321,7 +321,7 @@ func TestViewStates(t *testing.T) {
 		if strings.Contains(r, "WARM POOL") {
 			leftBottom = i
 		}
-		if strings.Contains(r, "nothing selected") || strings.Contains(r, "kind") {
+		if strings.Contains(r, "nothing selected") || strings.Contains(r, "owner ") {
 			if leftBottom >= 0 && rightTop == -1 {
 				rightTop = i
 			}
@@ -385,8 +385,8 @@ func release(x, y int) tea.MouseMsg {
 func TestLayoutDefaultsAndDragOverride(t *testing.T) {
 	m := baseModel() // 100x30
 	l := m.layout()
-	if l.leftW != 33 || l.headerH != 14 || l.shellH != 14 || l.stacked {
-		t.Errorf("default layout = %+v, want leftW 33, header 14, shell 14", l)
+	if l.leftW != 33 || l.headerH != 7 || l.shellH != 21 || l.stacked {
+		t.Errorf("default layout = %+v, want leftW 33, header 7, shell 21", l)
 	}
 
 	m.leftWidth = 60
@@ -572,6 +572,70 @@ func TestShellTick(t *testing.T) {
 	_, cmd = bare.Update(shellTickMsg{})
 	if cmd == nil {
 		t.Fatal("shell tick without a session did not re-arm")
+	}
+}
+
+// The input queue: keystrokes typed while a drain is in flight wait
+// for it, batches keep their order, and a finished drain immediately
+// sends the rest and captures so the echo comes back fast.
+func TestShellInputQueue(t *testing.T) {
+	m := baseModel()
+	m.selected = 0
+	m.sessions["agent-pool-5ss7w"] = true
+	m.shellFocus = true
+
+	// A drain in flight: the key queues instead of racing it.
+	m.sending = true
+	newM, cmd := m.updateShellKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	if cmd != nil {
+		t.Error("key typed during a drain started a second drain")
+	}
+	if len(newM.(model).pending) != 1 {
+		t.Fatalf("pending = %v, want the queued key", newM.(model).pending)
+	}
+
+	// The drain finishing sends the queue and captures right after.
+	newM, cmd = newM.(model).Update(sentMsg{pod: "agent-pool-5ss7w", count: 3})
+	if cmd == nil {
+		t.Fatal("finished drain did not send the queued input")
+	}
+	if !newM.(model).sending {
+		t.Error("the next drain did not start")
+	}
+	if len(newM.(model).pending) != 0 {
+		t.Errorf("pending = %v, want it drained", newM.(model).pending)
+	}
+
+	// A failed drain drops the queue instead of replaying stale keys.
+	failed := newM.(model)
+	failed.sending = true
+	failed.pending = []session.Key{{Text: "z"}}
+	newM, cmd = failed.Update(sentMsg{pod: "agent-pool-5ss7w", count: 1, err: errFixture})
+	if cmd != nil {
+		t.Error("failed drain started another drain")
+	}
+	if len(newM.(model).pending) != 0 || newM.(model).sending {
+		t.Errorf("after a failed drain: pending %v, sending %v", newM.(model).pending, newM.(model).sending)
+	}
+}
+
+// The shell tick and the post-send capture both size the tmux window to
+// the pane, so the embedded output wraps where it is shown.
+func TestShellResizeFollowsPaneSize(t *testing.T) {
+	m := baseModel()
+	m.selected = 0
+	m.sessions["agent-pool-5ss7w"] = true
+	m.shellFocus = true
+
+	_, cmd := m.updateShellKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	if cmd == nil {
+		t.Fatal("first key produced no drain command")
+	}
+	newM, _ := m.Update(sentMsg{pod: "agent-pool-5ss7w", count: 1})
+	w, h := newM.(model).shellW, newM.(model).shellH
+	wantW, wantH := m.shellPaneSize()
+	if w != wantW || h != wantH {
+		t.Errorf("shell pane size = %dx%d, want %dx%d", w, h, wantW, wantH)
 	}
 }
 
