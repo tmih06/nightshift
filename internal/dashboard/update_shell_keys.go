@@ -4,11 +4,15 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/tmih06/nightshift/internal/session"
 )
 
 // updateShellKeys routes keystrokes into the sandbox's tmux session
 // while the shell pane has focus. Esc is the only key the dashboard
 // keeps for itself, so there is no way to get stuck in the shell.
+// Keys queue and drain one batch at a time, so fast typing is batched
+// and never reorders.
 func (m model) updateShellKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "esc" {
 		m.shellFocus = false
@@ -19,14 +23,25 @@ func (m model) updateShellKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.shellFocus = false
 		return m, nil
 	}
-	if msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace {
-		return m, sendCmd(b.Name, "", string(msg.Runes))
-	}
-	key, ok := tmuxKeyName(msg.String())
+	key, ok := shellKeyFromMsg(msg)
 	if !ok {
 		return m, nil
 	}
-	return m, sendCmd(b.Name, key, "")
+	m.pending = append(m.pending, key)
+	if m.sending {
+		return m, nil // a drain is in flight, the queue keeps order
+	}
+	return m, m.startDrain()
+}
+
+// shellKeyFromMsg turns a keypress into a session input event: runes
+// become literal text, mapped keys become their tmux names.
+func shellKeyFromMsg(msg tea.KeyMsg) (session.Key, bool) {
+	if msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace {
+		return session.Key{Text: string(msg.Runes)}, true
+	}
+	name, ok := tmuxKeyName(msg.String())
+	return session.Key{Name: name}, ok
 }
 
 // tmuxKeyName maps a bubbletea key string to the tmux key name

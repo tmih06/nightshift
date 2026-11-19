@@ -82,14 +82,48 @@ func Capture(pod string) ([]string, error) {
 	return lines, nil
 }
 
-// SendText types literal text into the session's pane.
-func SendText(pod, text string) error {
-	return exec.Command("tmux", "send-keys", "-t", Name(pod), "-l", text).Run()
+// Key is one input event for a session pane: literal text or a named
+// key such as Enter.
+type Key struct {
+	Text string // literal, sent with -l
+	Name string // tmux key name
 }
 
-// SendKey presses a tmux key name, Enter or C-c, in the session's pane.
-func SendKey(pod, key string) error {
-	return exec.Command("tmux", "send-keys", "-t", Name(pod), key).Run()
+// SendBatch delivers keys in order, merging consecutive literals into
+// one send-keys call, so fast typing costs one spawn instead of one per
+// keystroke.
+func SendBatch(pod string, keys []Key) error {
+	for _, group := range sendGroups(keys) {
+		args := []string{"send-keys", "-t", Name(pod)}
+		args = append(args, group...)
+		if err := exec.Command("tmux", args...).Run(); err != nil {
+			return fmt.Errorf("tmux send-keys: %w", err)
+		}
+	}
+	return nil
+}
+
+// sendGroups turns keys into send-keys argument groups. Consecutive
+// literals merge into one -l group; a named key is its own group.
+func sendGroups(keys []Key) [][]string {
+	var groups [][]string
+	var lit strings.Builder
+	flush := func() {
+		if lit.Len() > 0 {
+			groups = append(groups, []string{"-l", lit.String()})
+			lit.Reset()
+		}
+	}
+	for _, k := range keys {
+		if k.Text != "" {
+			lit.WriteString(k.Text)
+		} else {
+			flush()
+			groups = append(groups, []string{k.Name})
+		}
+	}
+	flush()
+	return groups
 }
 
 // Existing returns the set of the given pods that have a live session,

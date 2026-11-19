@@ -77,7 +77,10 @@ takes over the terminal.
 - `capture-pane -p -J -t` every 200ms renders the session inside the
   dashboard's shell pane, bottom-aligned.
 - `send-keys -t` carries the keystrokes typed while the shell pane has
-  focus, so typing goes to bash without tmux owning the screen.
+  focus. Input queues and drains one batch at a time, consecutive
+  literals merged into one call, so fast typing is one spawn and never
+  reorders. A capture follows every batch, so the echo of a keystroke
+  comes back in milliseconds instead of waiting for the tick.
 - `attach-session -t` remains only behind the F key, the escape hatch
   for full-screen programs like vim. Detach returns with C-b d.
 

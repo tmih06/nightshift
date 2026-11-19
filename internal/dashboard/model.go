@@ -41,11 +41,15 @@ type model struct {
 	// Embedded shell. shellFocus routes keys to the tmux session
 	// instead of the navigation. shellLines and shellPod hold the last
 	// capture, shown only while it matches the selection. shellW and
-	// shellH are the pane size last sent to tmux.
+	// shellH are the pane size last sent to tmux. pending is the queued
+	// input, drained one batch at a time so keystrokes keep their order;
+	// sending marks a drain in flight.
 	shellFocus     bool
 	shellLines     []string
 	shellPod       string
 	shellW, shellH int
+	pending        []session.Key
+	sending        bool
 
 	width  int
 	height int
@@ -98,8 +102,11 @@ type shellMsg struct {
 	err   error
 }
 
-type sendErrMsg struct {
-	err error
+// sentMsg reports a drained input batch, so the next one can start.
+type sentMsg struct {
+	pod   string
+	count int
+	err   error
 }
 
 func tickCmd() tea.Cmd {
@@ -170,20 +177,25 @@ func captureCmd(pod string, w, h int, resize bool) tea.Cmd {
 	}
 }
 
-// sendCmd delivers one keypress or a literal string to the session.
-func sendCmd(pod, key, text string) tea.Cmd {
+// drainCmd delivers a batch of queued input in one serialized pass.
+func drainCmd(pod string, keys []session.Key) tea.Cmd {
 	return func() tea.Msg {
-		var err error
-		if text != "" {
-			err = session.SendText(pod, text)
-		} else {
-			err = session.SendKey(pod, key)
-		}
-		if err != nil {
-			return sendErrMsg{err: err}
-		}
+		err := session.SendBatch(pod, keys)
+		return sentMsg{pod: pod, count: len(keys), err: err}
+	}
+}
+
+// startDrain begins sending the queued input if no drain is in flight.
+// Batches keep keystrokes in order.
+func (m *model) startDrain() tea.Cmd {
+	b := m.selectedBox()
+	if m.sending || len(m.pending) == 0 || b == nil || !m.sessions[b.Name] {
 		return nil
 	}
+	m.sending = true
+	keys := m.pending
+	m.pending = nil
+	return drainCmd(b.Name, keys)
 }
 
 func (m model) Init() tea.Cmd {

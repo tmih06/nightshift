@@ -70,10 +70,10 @@ func (m model) layout() layout {
 	return l
 }
 
-// headerHeight sizes the header pane: the content needs about 12 rows,
-// never more than half the column.
+// headerHeight sizes the compact header: five content rows plus the
+// border, and never more than half the column.
 func headerHeight(avail int) int {
-	return min(14, max(avail/2, 3))
+	return min(7, max(avail/2, 3))
 }
 
 // shellPaneSize is the embedded shell's inner size, what the tmux
@@ -153,40 +153,42 @@ func (m model) leftLines() ([]string, map[int]int) {
 	return lines, targets
 }
 
-// headerLines renders the inspect header: the selection's essential
-// data and usage.
+// headerLines renders the compact inspect header: identity on one
+// row, provenance on the next, the two usage bars, and one hint row.
 func (m model) headerLines() []string {
-	innerW := max(m.layout().colW-4, 1)
+	l := m.layout()
+	innerW := max(l.colW-4, 1)
 	b := m.selectedBox()
 	if b == nil {
 		return []string{" " + dim("nothing selected")}
 	}
 
-	sess := dim("none — enter starts one")
-	if m.sessions[b.Name] {
-		sess = warmStyle.Render("live (" + sessionName(b.Name) + ")")
-	}
-
-	rows := []string{stringPair("kind", b.OwnerKind), stringPair("owner", b.Owner),
-		stringPair("phase", b.Phase), stringPair("age", ageString(b.Created)),
-		pair("tmux", sess)}
-
-	var lines []string
-	lines = append(lines, " "+nameStyle.Render(truncate(b.Name, innerW-2)))
-	lines = append(lines, "")
-	for _, r := range rows {
-		lines = append(lines, " "+r)
-	}
-	lines = append(lines, "")
-	lines = append(lines, resourceLine("CPU", m.metricsOK, b.CPUUsageMC, b.CPULimitMC, "m", innerW))
-	lines = append(lines, resourceLine("MEM", m.metricsOK, b.MemUsageMiB, b.MemLimitMiB, "Mi", innerW))
-	lines = append(lines, "")
+	badge, badgeStyle := "warm", warmStyle
 	if b.OwnerKind == "SandboxClaim" {
-		lines = append(lines, " "+dim("[enter] bash   [F] fullscreen   [x] destroy claim"))
-	} else {
-		lines = append(lines, " "+dim("[enter] bash   [F] fullscreen   [c] claim a warm sandbox"))
+		badge, badgeStyle = "claimed", claimStyle
+	} else if b.OwnerKind != "SandboxWarmPool" {
+		badge, badgeStyle = b.OwnerKind, warnStyle
 	}
-	return lines
+	sess := dim("off")
+	if m.sessions[b.Name] {
+		sess = warmStyle.Render("live")
+	}
+
+	name := truncate(b.Name, max(innerW-len(badge)-len(b.Phase)-10, 4))
+	row1 := " " + nameStyle.Render(name) + dim(" · ") + badgeStyle.Render(badge) +
+		dim(" · ") + b.Phase
+	owner := truncate(b.Owner, max(innerW-26, 4))
+	row2 := " " + dim("owner ") + owner + dim(" · age ") + ageString(b.Created) +
+		dim(" · tmux ") + sess
+	row3 := resourceLine("CPU", m.metricsOK, b.CPUUsageMC, b.CPULimitMC, "m", innerW)
+	row4 := resourceLine("MEM", m.metricsOK, b.MemUsageMiB, b.MemLimitMiB, "Mi", innerW)
+
+	hint := "[enter] bash · [F] fullscreen · [c] claim"
+	if b.OwnerKind == "SandboxClaim" {
+		hint = "[enter] bash · [F] fullscreen · [x] destroy claim"
+	}
+	row5 := " " + dim(hint)
+	return []string{row1, row2, row3, row4, row5}
 }
 
 // shellLinesView renders the embedded shell: a title row, then the
@@ -226,15 +228,6 @@ func (m model) shellLinesView() []string {
 // pair renders a label and value row.
 func pair(label, value string) string {
 	return dimStyle.Render(fmt.Sprintf("%-6s", label)) + " " + value
-}
-
-// stringPair truncates the value before pairing.
-func stringPair(label, value string) string {
-	return pair(label, truncate(value, 40))
-}
-
-func sessionName(pod string) string {
-	return "sbx-" + pod
 }
 
 // resourceLine renders one usage line, padded to exactly innerW
