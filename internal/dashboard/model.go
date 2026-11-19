@@ -21,7 +21,7 @@ const (
 
 type model struct {
 	boxes     []cluster.Sandbox
-	selected  int
+	selected  string          // pod name under the cursor, stable across refreshes
 	sessions  map[string]bool // pod name → live tmux session
 	metricsOK bool
 	err       error
@@ -38,21 +38,58 @@ type model struct {
 	leftHeight int
 	dragging   bool
 
-	// Embedded shell. shellFocus routes keys to the tmux session
-	// instead of the navigation. shellLines and shellPod hold the last
-	// capture, shown only while it matches the selection. shellW and
-	// shellH are the pane size last sent to tmux. pending is the queued
-	// input, drained one batch at a time so keystrokes keep their order;
-	// sending marks a drain in flight.
+	// Embedded shell. shellFocus routes every key to the tmux session
+	// instead of the navigation: no keybind escapes. prefix holds a C-b
+	// seen while focused, so only C-b followed by q leaves the shell.
+	// shellLines and shellPod hold the last capture, shown only while it
+	// matches the selection. shellW and shellH are the pane size last
+	// sent to tmux. pending is the queued input, drained one batch at a
+	// time so keystrokes keep their order; sending marks a drain in
+	// flight. pendingPod is the pod of a claim whose bash is starting,
+	// selected and focused as soon as the fleet shows it. hist keeps the
+	// usage samples behind the header charts.
 	shellFocus     bool
+	prefix         bool
 	shellLines     []string
 	shellPod       string
 	shellW, shellH int
 	pending        []session.Key
 	sending        bool
+	pendingPod     string
+	hist           map[string]usageHistory
 
 	width  int
 	height int
+}
+
+// usageHistory is the sampled cpu and memory ratios of one sandbox,
+// the data behind the btop-style charts in the header.
+type usageHistory struct {
+	cpu, mem []float64
+}
+
+// appendHistory records the latest usage ratios, capped at a minute of
+// samples at the refresh rate.
+func (m *model) appendHistory() {
+	if !m.metricsOK {
+		return
+	}
+	if m.hist == nil {
+		m.hist = map[string]usageHistory{}
+	}
+	for _, b := range m.boxes {
+		if b.CPULimitMC <= 0 || b.MemLimitMiB <= 0 {
+			continue
+		}
+		h := m.hist[b.Name]
+		h.cpu = append(h.cpu, float64(b.CPUUsageMC)/float64(b.CPULimitMC))
+		h.mem = append(h.mem, float64(b.MemUsageMiB)/float64(b.MemLimitMiB))
+		if len(h.cpu) > 60 {
+			h.cpu = h.cpu[len(h.cpu)-60:]
+			h.mem = h.mem[len(h.mem)-60:]
+		}
+		m.hist[b.Name] = h
+	}
 }
 
 // New returns the model the program runs.
@@ -73,6 +110,12 @@ type loadedMsg struct {
 type claimMsg struct {
 	name string
 	err  error
+}
+
+// claimAdoptedMsg: the claim took a sandbox and its bash session exists.
+type claimAdoptedMsg struct {
+	pod string
+	err error
 }
 
 type deletedMsg struct {
@@ -143,6 +186,21 @@ func deleteClaimCmd(claim string) tea.Cmd {
 	}
 }
 
+// waitClaimCmd blocks until the claim adopts a sandbox, then creates
+// its bash session, so the attach is immediate when the pod appears.
+func waitClaimCmd(claim string) tea.Cmd {
+	return func() tea.Msg {
+		pod, err := cluster.WaitForClaim(claim, 30*time.Second)
+		if err != nil {
+			return claimAdoptedMsg{err: err}
+		}
+		if err := session.Ensure(pod); err != nil {
+			return claimAdoptedMsg{err: err}
+		}
+		return claimAdoptedMsg{pod: pod}
+	}
+}
+
 // attachCmd ensures the tmux session exists off the render loop; the
 // attachReadyMsg handler then focuses the embedded shell pane.
 func attachCmd(pod string) tea.Cmd {
@@ -202,26 +260,35 @@ func (m model) Init() tea.Cmd {
 	return tea.Batch(fetchCmd(), tickCmd(), shellTickCmd())
 }
 
-// selectedBox returns the sandbox under the cursor, or nil.
+// selectedBox returns the sandbox under the cursor, or nil. The
+// selection is a pod name, not an index, because the fleet is resorted
+// on every refresh and positions move when the pool refills.
 func (m model) selectedBox() *cluster.Sandbox {
-	if m.selected < 0 || m.selected >= len(m.boxes) {
-		return nil
+	for i := range m.boxes {
+		if m.boxes[i].Name == m.selected {
+			return &m.boxes[i]
+		}
 	}
-	return &m.boxes[m.selected]
+	return nil
+}
+
+// selectedIndex maps the selection back to a position, 0 when the name
+// is gone.
+func (m model) selectedIndex() int {
+	for i, b := range m.boxes {
+		if b.Name == m.selected {
+			return i
+		}
+	}
+	return 0
 }
 
 // moveSelection clamps the cursor, so j/k and the wheel cannot leave
 // the list.
 func (m *model) moveSelection(delta int) {
 	if len(m.boxes) == 0 {
-		m.selected = 0
 		return
 	}
-	m.selected += delta
-	if m.selected < 0 {
-		m.selected = 0
-	}
-	if m.selected > len(m.boxes)-1 {
-		m.selected = len(m.boxes) - 1
-	}
+	i := clamp(m.selectedIndex()+delta, 0, len(m.boxes)-1)
+	m.selected = m.boxes[i].Name
 }

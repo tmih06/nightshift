@@ -26,7 +26,8 @@ func testBoxes() []cluster.Sandbox {
 }
 
 func baseModel() model {
-	return model{boxes: testBoxes(), sessions: map[string]bool{}, metricsOK: true,
+	return model{boxes: testBoxes(), selected: "agent-pool-5ss7w",
+		sessions: map[string]bool{}, metricsOK: true,
 		loaded: true, width: 100, height: 30}
 }
 
@@ -73,20 +74,20 @@ func TestMouseClickSelectsEntry(t *testing.T) {
 
 	// Click the second warm entry: row 1 is the first entry, row 2 the second.
 	m = m.clickLeftPane(5, contentStartY+2)
-	if m.selected != 1 {
-		t.Errorf("selected = %d after clicking the second entry, want 1", m.selected)
+	if m.selected != "agent-pool-lqbmx" {
+		t.Errorf("selected = %q after clicking the second entry, want agent-pool-lqbmx", m.selected)
 	}
 
 	// A click in the right pane selects nothing.
 	m = m.clickLeftPane(90, contentStartY+2)
-	if m.selected != 1 {
-		t.Errorf("right-pane click moved the selection to %d, want no change", m.selected)
+	if m.selected != "agent-pool-lqbmx" {
+		t.Errorf("right-pane click moved the selection to %q, want no change", m.selected)
 	}
 
 	// Below the left pane's content changes nothing.
 	m = m.clickLeftPane(5, contentStartY+20)
-	if m.selected != 1 {
-		t.Errorf("empty-row click moved the selection to %d, want no change", m.selected)
+	if m.selected != "agent-pool-lqbmx" {
+		t.Errorf("empty-row click moved the selection to %q, want no change", m.selected)
 	}
 }
 
@@ -94,13 +95,13 @@ func TestMouseWheelMoves(t *testing.T) {
 	m := baseModel()
 	newM, _ := m.updateMouse(tea.MouseMsg{X: 5, Y: 5,
 		Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
-	if newM.(model).selected != 1 {
-		t.Errorf("wheel down moved selection to %d, want 1", newM.(model).selected)
+	if newM.(model).selected != "agent-pool-lqbmx" {
+		t.Errorf("wheel down moved selection to %q, want agent-pool-lqbmx", newM.(model).selected)
 	}
 	newM, _ = newM.(model).updateMouse(tea.MouseMsg{X: 5, Y: 5,
 		Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
-	if newM.(model).selected != 0 {
-		t.Errorf("wheel up moved selection to %d, want 0", newM.(model).selected)
+	if newM.(model).selected != "agent-pool-5ss7w" {
+		t.Errorf("wheel up moved selection to %q, want agent-pool-5ss7w", newM.(model).selected)
 	}
 }
 
@@ -109,30 +110,58 @@ func TestStackedClickUsesY(t *testing.T) {
 	m.width = 40 // below stackedBelow
 	// The left pane is the top half; clicking its rows selects entries.
 	m = m.clickLeftPane(5, contentStartY+2)
-	if m.selected != 1 {
-		t.Errorf("stacked click selected %d, want 1", m.selected)
+	if m.selected != "agent-pool-lqbmx" {
+		t.Errorf("stacked click selected %q, want agent-pool-lqbmx", m.selected)
 	}
 }
 
 // The usage line is exactly innerW wide, so golden rule 2 holds: no
 // auto-wrap inside the bordered pane.
-func TestResourceLineWidth(t *testing.T) {
-	for _, tc := range []struct {
-		name       string
-		known      bool
-		usage, lim int64
-		unit       string
-	}{
-		{"known", true, 2, 500, "m"},
-		{"unknown", false, 0, 256, "Mi"},
-	} {
-		got := lipgloss.Width(resourceLine("CPU", tc.known, tc.usage, tc.lim, tc.unit, 60))
-		if got != 60 {
-			t.Errorf("%s: width = %d, want 60", tc.name, got)
+func TestSparkline(t *testing.T) {
+	if got := sparkline([]float64{0, 0.5, 1}, 3); got != " ▄█" {
+		t.Errorf("sparkline = %q, want \" ▄█\"", got)
+	}
+	// Older samples drop off the left when the chart is narrower than
+	// the history.
+	if got := sparkline([]float64{1, 1, 0, 0, 0.5}, 3); got != "  ▄" {
+		t.Errorf("sparkline tail = %q", got)
+	}
+	if got := sparkline(nil, 3); got != "" {
+		t.Errorf("empty sparkline = %q, want empty", got)
+	}
+	// Ratios over 1 clamp to the top of the ramp.
+	if got := sparkline([]float64{2}, 1); got != "█" {
+		t.Errorf("clamped sparkline = %q", got)
+	}
+}
+
+func TestUsageLine(t *testing.T) {
+	withHist := usageLine("CPU", true, 250, 500, "m", []float64{0, 0.5, 1}, 40)
+	for _, want := range []string{"CPU", "250m/500m", "50%", "▄", "█"} {
+		if !strings.Contains(withHist, want) {
+			t.Errorf("usage line = %q, missing %q", withHist, want)
 		}
 	}
-	if got := resourceLine("CPU", true, 4, 0, "m", 60); !strings.Contains(got, "no limit") {
-		t.Errorf("no-limit line = %q", got)
+	if got := lipgloss.Width(withHist); got > 40 {
+		t.Errorf("usage line width = %d, want at most 40", got)
+	}
+
+	// No history yet: the chart area is a dim placeholder.
+	noHist := usageLine("MEM", false, 0, 256, "Mi", nil, 40)
+	if !strings.Contains(noHist, "--/256Mi") || !strings.Contains(noHist, "·") {
+		t.Errorf("history-less usage line = %q", noHist)
+	}
+	if got := lipgloss.Width(noHist); got != 40 {
+		t.Errorf("history-less usage line width = %d, want 40", got)
+	}
+
+	if got := usageLine("CPU", true, 4, 0, "m", nil, 40); !strings.Contains(got, "no limit") {
+		t.Errorf("no-limit usage line = %q", got)
+	}
+
+	// Narrow pane: the text truncates instead of wrapping.
+	if got := lipgloss.Width(usageLine("MEM", true, 6, 256, "Mi", nil, 10)); got != 10 {
+		t.Errorf("narrow usage line width = %d, want 10", got)
 	}
 }
 
@@ -140,8 +169,8 @@ func TestKeyboardNavigationAndActions(t *testing.T) {
 	m := baseModel()
 
 	newM, _ := m.updateKeyboard(tea.KeyMsg{Type: tea.KeyDown})
-	if newM.(model).selected != 1 {
-		t.Errorf("j moved selection to %d, want 1", newM.(model).selected)
+	if newM.(model).selected != "agent-pool-lqbmx" {
+		t.Errorf("j moved selection to %q, want agent-pool-lqbmx", newM.(model).selected)
 	}
 
 	// Destroy on a warm sandbox is refused.
@@ -150,19 +179,26 @@ func TestKeyboardNavigationAndActions(t *testing.T) {
 		t.Errorf("x on warm = %q", newM.(model).status)
 	}
 
+	// Enter on a warm sandbox is refused: no bash inside the warm pool.
+	warm := m
+	newM, _ = warm.updateKeyboard(tea.KeyMsg{Type: tea.KeyEnter})
+	if newM.(model).status != "warm pool sandbox — claim it with c, bash starts with the claim" {
+		t.Errorf("enter on warm = %q", newM.(model).status)
+	}
+
 	// Enter on a pod that is not running is refused with a reason.
 	claim := m
 	claim.boxes[2].Phase = "Pending"
-	claim.selected = 2
+	claim.selected = "agent-pool-bkl2p"
 	newM, _ = claim.updateKeyboard(tea.KeyMsg{Type: tea.KeyEnter})
 	if newM.(model).status != "pod is Pending, no bash to enter" {
 		t.Errorf("enter on pending = %q", newM.(model).status)
 	}
 
-	// Enter on a running pod returns the attach command, which the
-	// caller executes (not here: it would start a real tmux session).
-	running := m
-	running.selected = 0
+	// Enter on a running claimed pod returns the attach command, which
+	// the caller executes (not here: it would start a real tmux session).
+	running := baseModel()
+	running.selected = "agent-pool-bkl2p"
 	_, cmd := running.updateKeyboard(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
 		t.Error("enter on a running pod returned no command")
@@ -179,7 +215,7 @@ func TestKeyboardNavigationAndActions(t *testing.T) {
 // disarms it.
 func TestDestroyConfirmation(t *testing.T) {
 	m := baseModel()
-	m.selected = 2 // the claimed sandbox, owner my-agent
+	m.selected = "agent-pool-bkl2p" // the claimed sandbox, owner my-agent
 
 	newM, _ := m.updateKeyboard(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
 	armed := newM.(model)
@@ -206,12 +242,15 @@ func TestDestroyConfirmation(t *testing.T) {
 func TestUpdateMessages(t *testing.T) {
 	m := baseModel()
 
-	// A loaded batch clamps the selection to the fleet size.
+	// A loaded batch whose fleet lost the selected pod snaps to the
+	// nearest entry instead of pointing at whatever shuffled into its
+	// old index.
 	short := m
-	short.selected = 9
-	newM, _ := short.Update(loadedMsg{boxes: m.boxes[:1], sessions: map[string]bool{}})
-	if newM.(model).selected != 0 {
-		t.Errorf("selection after shrink = %d, want 0", newM.(model).selected)
+	short.selected = "agent-pool-bkl2p" // index 2, destroyed
+	shrunk := append([]cluster.Sandbox{}, m.boxes[0], m.boxes[1])
+	newM, _ := short.Update(loadedMsg{boxes: shrunk, sessions: map[string]bool{}})
+	if newM.(model).selected != "agent-pool-lqbmx" {
+		t.Errorf("selection after shrink = %q, want the neighbor agent-pool-lqbmx", newM.(model).selected)
 	}
 
 	newM, _ = m.Update(claimMsg{err: errFixture})
@@ -248,14 +287,14 @@ func TestViewFrame(t *testing.T) {
 		"agent-pool-lqbmx",
 		"agent-pool-bkl2p",
 		"▶",
-		"· warm ·",
+		"· warm",
 		"owner agent-pool",
 		"Running",
 		"tmux",
 		"2m/500m",
 		"6Mi/256Mi",
 		"live",
-		"[enter] bash",
+		"enter bash",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("view missing %q", want)
@@ -277,14 +316,14 @@ func TestViewFrame(t *testing.T) {
 
 	// The inspect pane follows the selection: the claimed sandbox shows
 	// its own owner, and the untracked warm pod shows no session.
-	m.selected = 2
+	m.selected = "agent-pool-bkl2p"
 	g := m.View()
-	for _, want := range []string{"· claimed ·", "my-agent", "tmux off", "[x] destroy claim", "0m/500m"} {
+	for _, want := range []string{"· claimed", "my-agent", "tmux off", "0m/500m"} {
 		if !strings.Contains(g, want) {
 			t.Errorf("claimed inspect missing %q", want)
 		}
 	}
-	m.selected = 1
+	m.selected = "agent-pool-lqbmx"
 	if g := m.View(); !strings.Contains(g, "tmux off") {
 		t.Errorf("inspect of a session-less pod = missing the off state")
 	}
@@ -356,17 +395,17 @@ func TestAgeString(t *testing.T) {
 func TestMoveSelectionClamps(t *testing.T) {
 	m := baseModel()
 	m.moveSelection(-5)
-	if m.selected != 0 {
-		t.Errorf("selected = %d above the top, want 0", m.selected)
+	if m.selected != "agent-pool-5ss7w" {
+		t.Errorf("selected = %q above the top, want the first entry", m.selected)
 	}
 	m.moveSelection(99)
-	if m.selected != len(m.boxes)-1 {
-		t.Errorf("selected = %d below the bottom, want %d", m.selected, len(m.boxes)-1)
+	if m.selected != "agent-pool-bkl2p" {
+		t.Errorf("selected = %q below the bottom, want the last entry", m.selected)
 	}
 	empty := model{}
 	empty.moveSelection(3)
-	if empty.selected != 0 {
-		t.Errorf("empty fleet selection = %d, want 0", empty.selected)
+	if empty.selected != "" {
+		t.Errorf("empty fleet selection = %q, want none", empty.selected)
 	}
 }
 
@@ -385,8 +424,8 @@ func release(x, y int) tea.MouseMsg {
 func TestLayoutDefaultsAndDragOverride(t *testing.T) {
 	m := baseModel() // 100x30
 	l := m.layout()
-	if l.leftW != 33 || l.headerH != 7 || l.shellH != 21 || l.stacked {
-		t.Errorf("default layout = %+v, want leftW 33, header 7, shell 21", l)
+	if l.leftW != 24 || l.headerH != 5 || l.shellH != 23 || l.stacked {
+		t.Errorf("default layout = %+v, want leftW 24, header 5, shell 23", l)
 	}
 
 	m.leftWidth = 60
@@ -405,9 +444,10 @@ func TestLayoutDefaultsAndDragOverride(t *testing.T) {
 }
 
 func TestDragResizesLeftPane(t *testing.T) {
-	m := baseModel() // divider sits at x=33
+	m := baseModel() // divider sits at the fitted left edge, x=24
+	divX := m.layout().leftW
 
-	newM, _ := m.updateMouse(press(33, 10))
+	newM, _ := m.updateMouse(press(divX, 10))
 	if !newM.(model).dragging {
 		t.Fatal("press on the divider did not arm dragging")
 	}
@@ -427,7 +467,7 @@ func TestDragResizesLeftPane(t *testing.T) {
 
 	// Drags beyond the limits clamp, so the nav pane cannot swallow the
 	// right column or shrink to nothing.
-	clamped, _ := m.updateMouse(press(33, 10))
+	clamped, _ := m.updateMouse(press(divX, 10))
 	clamped, _ = clamped.(model).updateMouse(drag(5, 10))
 	if got := clamped.(model).layout().leftW; got != minLeftW {
 		t.Errorf("drag to 5 = %d, want clamped to %d", got, minLeftW)
@@ -475,31 +515,52 @@ func TestClickFocusesShellPane(t *testing.T) {
 
 func TestShellKeyRouting(t *testing.T) {
 	m := baseModel()
-	m.selected = 0
+	m.selected = "agent-pool-5ss7w"
 	m.sessions["agent-pool-5ss7w"] = true
 	m.shellFocus = true
 
-	// Esc is the dashboard's own key: it leaves the shell.
-	newM, _ := m.updateShellKeys(tea.KeyMsg{Type: tea.KeyEsc})
-	if newM.(model).shellFocus {
-		t.Error("esc did not leave the shell focus")
+	// No keybind escapes: esc is delivered to the session and the
+	// focus stays.
+	newM, cmd := m.updateShellKeys(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd == nil || newM.(model).shellFocus != true {
+		t.Error("esc must go to the session, not leave the shell")
 	}
 
-	// Letters, including q, go to the session instead of quitting.
-	_, cmd := m.updateShellKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
-	if cmd == nil {
-		t.Error("a rune in shell focus produced no send command")
+	// q alone is typed into bash, it does not quit anything.
+	newM, cmd = m.updateShellKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if cmd == nil || !newM.(model).shellFocus {
+		t.Error("q must go to the session, not quit")
+	}
+
+	// C-b arms the prefix and is not sent to bash.
+	newM, cmd = m.updateShellKeys(tea.KeyMsg{Type: tea.KeyCtrlB})
+	if cmd != nil || !newM.(model).prefix {
+		t.Error("C-b did not arm the prefix chord")
+	}
+
+	// C-b then q is the only way out.
+	newM, _ = newM.(model).updateShellKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if newM.(model).shellFocus || newM.(model).prefix {
+		t.Error("C-b q did not leave the shell")
+	}
+
+	// An armed prefix with any other key cancels and swallows the key.
+	armed := m
+	armed.prefix = true
+	newM, cmd = armed.updateShellKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	if cmd != nil || newM.(model).prefix || len(newM.(model).pending) != 0 {
+		t.Error("an unbound prefix chord must do nothing")
 	}
 
 	// Ctrl+c interrupts the bash process instead of quitting the app.
-	_, cmd = m.updateShellKeys(tea.KeyMsg{Type: tea.KeyCtrlC})
-	if cmd == nil {
-		t.Error("ctrl+c in shell focus produced no send command")
+	newM, cmd = m.updateShellKeys(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd == nil || !newM.(model).shellFocus {
+		t.Error("ctrl+c must go to the session")
 	}
 
 	// Unmapped keys are dropped, not sent garbage.
-	_, cmd = m.updateShellKeys(tea.KeyMsg{Type: tea.KeyF5})
-	if cmd != nil {
+	newM, cmd = m.updateShellKeys(tea.KeyMsg{Type: tea.KeyF5})
+	if cmd != nil || len(newM.(model).pending) != 0 {
 		t.Error("unmapped key produced a send command")
 	}
 
@@ -530,7 +591,7 @@ func TestTmuxKeyName(t *testing.T) {
 
 func TestShellCaptureDisplay(t *testing.T) {
 	m := baseModel()
-	m.selected = 0
+	m.selected = "agent-pool-5ss7w"
 	m.sessions["agent-pool-5ss7w"] = true
 
 	newM, _ := m.Update(shellMsg{pod: "agent-pool-5ss7w", lines: []string{"$ echo hi", "hi"}})
@@ -556,7 +617,7 @@ func TestShellCaptureDisplay(t *testing.T) {
 
 func TestShellTick(t *testing.T) {
 	m := baseModel()
-	m.selected = 0
+	m.selected = "agent-pool-5ss7w"
 	m.sessions["agent-pool-5ss7w"] = true
 
 	newM, cmd := m.Update(shellTickMsg{})
@@ -580,7 +641,7 @@ func TestShellTick(t *testing.T) {
 // sends the rest and captures so the echo comes back fast.
 func TestShellInputQueue(t *testing.T) {
 	m := baseModel()
-	m.selected = 0
+	m.selected = "agent-pool-5ss7w"
 	m.sessions["agent-pool-5ss7w"] = true
 	m.shellFocus = true
 
@@ -623,7 +684,7 @@ func TestShellInputQueue(t *testing.T) {
 // the pane, so the embedded output wraps where it is shown.
 func TestShellResizeFollowsPaneSize(t *testing.T) {
 	m := baseModel()
-	m.selected = 0
+	m.selected = "agent-pool-5ss7w"
 	m.sessions["agent-pool-5ss7w"] = true
 	m.shellFocus = true
 
@@ -641,8 +702,8 @@ func TestShellResizeFollowsPaneSize(t *testing.T) {
 
 func TestAttachFocusesShellInsteadOfFullscreen(t *testing.T) {
 	m := baseModel()
-	m.selected = 0
-	m.sessions["agent-pool-5ss7w"] = true
+	m.selected = "agent-pool-bkl2p"
+	m.sessions["agent-pool-bkl2p"] = true
 
 	// enter issues the ensure command, not a fullscreen exec.
 	_, cmd := m.updateKeyboard(tea.KeyMsg{Type: tea.KeyEnter})
@@ -650,7 +711,7 @@ func TestAttachFocusesShellInsteadOfFullscreen(t *testing.T) {
 		t.Fatal("enter returned no command")
 	}
 
-	newM, _ := m.Update(attachReadyMsg{pod: "agent-pool-5ss7w"})
+	newM, _ := m.Update(attachReadyMsg{pod: "agent-pool-bkl2p"})
 	if !newM.(model).shellFocus {
 		t.Error("a ready session did not focus the embedded shell")
 	}
@@ -663,3 +724,151 @@ func TestAttachFocusesShellInsteadOfFullscreen(t *testing.T) {
 }
 
 var errFixture = errors.New("cluster unreachable")
+
+// The claim flow pre-creates bash: claiming waits for adoption, the
+// adopted pod is remembered, and the fleet that shows it selects it
+// and drops straight into the shell.
+func TestClaimCreatesBashImmediately(t *testing.T) {
+	m := baseModel()
+
+	newM, cmd := m.Update(claimMsg{name: "dash-claim-1"})
+	if cmd == nil {
+		t.Fatal("claim returned no wait command")
+	}
+	if !strings.Contains(newM.(model).status, "waiting") {
+		t.Errorf("claim status = %q", newM.(model).status)
+	}
+
+	adopted := newM.(model)
+	adopted.boxes = append(adopted.boxes, cluster.Sandbox{
+		Name: "agent-pool-new1", OwnerKind: "SandboxClaim", Owner: "dash-claim-1",
+		Phase: "Running", CPULimitMC: 500, MemLimitMiB: 256})
+	adopted.sessions["agent-pool-new1"] = true
+	newM, cmd = adopted.Update(claimAdoptedMsg{pod: "agent-pool-new1"})
+	if cmd == nil {
+		t.Fatal("adoption returned no fetch command")
+	}
+	if newM.(model).pendingPod != "agent-pool-new1" {
+		t.Fatalf("pendingPod = %q", newM.(model).pendingPod)
+	}
+
+	loaded := newM.(model)
+	loaded.hist = map[string]usageHistory{}
+	newM, _ = loaded.Update(loadedMsg{boxes: loaded.boxes, sessions: loaded.sessions, metricsOK: true})
+	if newM.(model).selected != "agent-pool-new1" {
+		t.Errorf("selected = %q, want the new pod", newM.(model).selected)
+	}
+	if !newM.(model).shellFocus {
+		t.Error("the claimed pod did not drop into the shell")
+	}
+	if newM.(model).pendingPod != "" {
+		t.Errorf("pendingPod = %q, want cleared", newM.(model).pendingPod)
+	}
+
+	// A failed claim reports and refreshes.
+	newM, cmd = m.Update(claimAdoptedMsg{err: errFixture})
+	if cmd == nil || !strings.Contains(newM.(model).status, "claim failed") {
+		t.Errorf("failed claim = %q cmd=%v", newM.(model).status, cmd != nil)
+	}
+}
+
+func TestLeftWidthFitsContent(t *testing.T) {
+	m := baseModel() // longest name is 16 runes
+	if got := m.layout().leftW; got != 24 {
+		t.Errorf("default leftW = %d, want 24 fitted to the longest name", got)
+	}
+	long := baseModel()
+	long.boxes[0].Name = "agent-pool-with-a-much-longer-name-123456"
+	if got := long.layout().leftW; got != 49 { // 41 runes + 8
+		t.Errorf("fitted leftW = %d, want 49", got)
+	}
+	// The fit never swallows the right column.
+	huge := baseModel()
+	huge.boxes[0].Name = strings.Repeat("x", 90)
+	if got := huge.layout().leftW; got != 80 { // width - minRightW
+		t.Errorf("capped leftW = %d, want 80", got)
+	}
+}
+
+func TestHeaderIsThreeLines(t *testing.T) {
+	m := baseModel()
+	m.sessions["agent-pool-5ss7w"] = true
+	lines := m.headerLines()
+	if len(lines) != 3 {
+		t.Fatalf("header has %d lines, want 3", len(lines))
+	}
+	for _, want := range []string{"\u00b7 warm", "owner agent-pool", "tmux live", "2m/500m", "6Mi/256Mi", "\u2502"} {
+		found := false
+		for _, ln := range lines {
+			if strings.Contains(ln, want) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("header missing %q", want)
+		}
+	}
+
+	// The history chart appears once samples exist.
+	m.hist = map[string]usageHistory{"agent-pool-5ss7w": {cpu: []float64{0, 1, 0.5}, mem: []float64{0.2}}}
+	lines = m.headerLines()
+	if !strings.Contains(lines[0], "\u2588") || !strings.Contains(lines[0], "\u2584") {
+		t.Errorf("cpu chart row = %q, want ramp glyphs", lines[0])
+	}
+}
+
+func TestStatusLineModes(t *testing.T) {
+	m := baseModel()
+	if got := m.statusLine(); !strings.Contains(got, "j/k move") {
+		t.Errorf("nav status = %q", got)
+	}
+
+	m.shellFocus = true
+	got := m.statusLine()
+	if !strings.Contains(got, "C-b q leaves bash") {
+		t.Errorf("shell status = %q, want the C-b q tip", got)
+	}
+
+	m.prefix = true
+	if got := m.statusLine(); !strings.Contains(got, "C-b armed") {
+		t.Errorf("prefix status = %q", got)
+	}
+
+	m = baseModel()
+	m.status = "something happened"
+	if got := m.statusLine(); !strings.Contains(got, "something happened") {
+		t.Errorf("message status = %q", got)
+	}
+}
+
+func TestWarmSandboxRefusesFullscreenToo(t *testing.T) {
+	m := baseModel() // selected 0 is warm
+	newM, cmd := m.updateKeyboard(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'F'}})
+	if cmd != nil {
+		t.Error("F on a warm sandbox returned a command")
+	}
+	if !strings.Contains(newM.(model).status, "warm pool sandbox") {
+		t.Errorf("F on warm = %q", newM.(model).status)
+	}
+}
+
+// The pool refills with alphabetically-earlier pods while a sandbox is
+// claimed, resorting the fleet. The selection must follow the pod name,
+// not the stale index, or keystrokes land in the wrong sandbox.
+func TestSelectionFollowsNameAcrossResort(t *testing.T) {
+	m := baseModel()
+	m.selected = "agent-pool-bkl2p" // index 2 in the base fleet
+
+	refilled := append([]cluster.Sandbox{}, m.boxes...)
+	newWarm := cluster.Sandbox{Name: "agent-pool-2pj7v", OwnerKind: "SandboxWarmPool",
+		Owner: "agent-pool", Phase: "Running"}
+	refilled = append([]cluster.Sandbox{newWarm}, refilled...) // sorts to index 0
+
+	newM, _ := m.Update(loadedMsg{boxes: refilled, sessions: m.sessions, metricsOK: true})
+	if newM.(model).selected != "agent-pool-bkl2p" {
+		t.Errorf("selection after refill = %q, want the same pod by name", newM.(model).selected)
+	}
+	if got := newM.(model).selectedBox().OwnerKind; got != "SandboxClaim" {
+		t.Errorf("selected box kind = %q, want the claimed sandbox", got)
+	}
+}

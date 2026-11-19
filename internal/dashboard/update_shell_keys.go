@@ -8,19 +8,30 @@ import (
 	"github.com/tmih06/nightshift/internal/session"
 )
 
-// updateShellKeys routes keystrokes into the sandbox's tmux session
-// while the shell pane has focus. Esc is the only key the dashboard
-// keeps for itself, so there is no way to get stuck in the shell.
-// Keys queue and drain one batch at a time, so fast typing is batched
-// and never reorders.
+// updateShellKeys routes every keystroke into the sandbox's tmux session
+// while the shell pane has focus. No keybind escapes the sandbox: only
+// C-b followed by q leaves, like a tmux prefix chord. Keys queue and
+// drain one batch at a time, so fast typing is batched and never
+// reorders.
 func (m model) updateShellKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.String() == "esc" {
-		m.shellFocus = false
-		return m, nil
-	}
 	b := m.selectedBox()
 	if b == nil || !m.sessions[b.Name] {
 		m.shellFocus = false
+		m.prefix = false
+		return m, nil
+	}
+	if m.prefix {
+		// A chord is armed: q leaves, anything else cancels and is
+		// swallowed, the way an unbound tmux prefix chord does nothing.
+		m.prefix = false
+		if msg.String() == "q" {
+			m.shellFocus = false
+			m.status = ""
+		}
+		return m, nil
+	}
+	if msg.String() == "ctrl+b" {
+		m.prefix = true
 		return m, nil
 	}
 	key, ok := shellKeyFromMsg(msg)
@@ -49,6 +60,7 @@ func shellKeyFromMsg(msg tea.KeyMsg) (session.Key, bool) {
 func tmuxKeyName(s string) (string, bool) {
 	if name, ok := map[string]string{
 		"enter":     "Enter",
+		"esc":       "Escape",
 		"up":        "Up",
 		"down":      "Down",
 		"left":      "Left",

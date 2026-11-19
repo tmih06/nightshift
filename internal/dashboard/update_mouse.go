@@ -58,14 +58,14 @@ func (m model) applyDrag(x, y int) model {
 }
 
 // applyClick routes focus by region: clicking the shell pane focuses
-// it, anything else returns to navigation and selects the clicked
-// entry.
+// it. Clicks elsewhere select entries but never steal the shell focus,
+// matching the no-escaping rule: only C-b q leaves the shell.
 func (m model) applyClick(x, y int) model {
 	if m.inShellPane(x, y) {
 		m.shellFocus = true
+		m.prefix = false
 		return m
 	}
-	m.shellFocus = false
 	return m.clickLeftPane(x, y)
 }
 
@@ -95,8 +95,8 @@ func (m model) clickLeftPane(x, y int) model {
 		}
 	}
 	_, targets := m.leftLines()
-	if idx, ok := targets[y-contentStartY]; ok {
-		m.selected = idx
+	if idx, ok := targets[y-contentStartY]; ok && idx < len(m.boxes) {
+		m.selected = m.boxes[idx].Name
 	}
 	return m
 }
