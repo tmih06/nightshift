@@ -3,6 +3,9 @@ package cluster
 import (
 	"encoding/json"
 	"testing"
+	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestCPUMillicores(t *testing.T) {
@@ -120,6 +123,58 @@ func TestBuildSandboxes(t *testing.T) {
 	orphan := boxes[2]
 	if orphan.Name != "sbx-orphan" || orphan.Phase != "…" || orphan.CPULimitMC != 0 {
 		t.Errorf("podless box = %+v, want unknown phase and no limits", orphan)
+	}
+}
+
+func TestBuildSandboxesParsesCreationTime(t *testing.T) {
+	var sb sandboxList
+	var pl podList
+	mustParse(t, sandboxListFixture, &sb)
+	mustParse(t, podListFixture, &pl)
+
+	withTime := `{"items":[
+	 {"metadata":{"name":"sbx-warm-1","creationTimestamp":"2026-11-19T08:00:00Z","ownerReferences":[{"kind":"SandboxWarmPool","name":"agent-pool"}]}}
+	]}`
+	mustParse(t, withTime, &sb)
+
+	boxes, err := buildSandboxes(sb, pl, nil)
+	if err != nil {
+		t.Fatalf("buildSandboxes: %v", err)
+	}
+	if want := time.Date(2026, 11, 19, 8, 0, 0, 0, time.UTC); !boxes[0].Created.Equal(want) {
+		t.Errorf("Created = %v, want %v", boxes[0].Created, want)
+	}
+}
+
+// The claim the dashboard applies must carry the same shape as
+// demo/claim.yaml: the pool ref and Delete on shutdown.
+func TestClaimManifest(t *testing.T) {
+	var c struct {
+		Kind     string `yaml:"kind"`
+		Metadata struct {
+			Name      string `yaml:"name"`
+			Namespace string `yaml:"namespace"`
+		} `yaml:"metadata"`
+		Spec struct {
+			WarmPoolRef struct {
+				Name string `yaml:"name"`
+			} `yaml:"warmPoolRef"`
+			Lifecycle struct {
+				ShutdownPolicy string `yaml:"shutdownPolicy"`
+			} `yaml:"lifecycle"`
+		} `yaml:"spec"`
+	}
+	if err := yaml.Unmarshal([]byte(claimManifest("dash-claim-42")), &c); err != nil {
+		t.Fatalf("claim manifest does not parse: %v", err)
+	}
+	if c.Kind != "SandboxClaim" || c.Metadata.Name != "dash-claim-42" || c.Metadata.Namespace != Namespace {
+		t.Errorf("claim manifest header = %+v", c)
+	}
+	if c.Spec.WarmPoolRef.Name != WarmPool {
+		t.Errorf("warmPoolRef = %q, want %q", c.Spec.WarmPoolRef.Name, WarmPool)
+	}
+	if c.Spec.Lifecycle.ShutdownPolicy != "Delete" {
+		t.Errorf("shutdownPolicy = %q, want Delete", c.Spec.Lifecycle.ShutdownPolicy)
 	}
 }
 

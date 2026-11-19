@@ -1,9 +1,10 @@
-// Data shape. The dashboard's unit is a sandbox, one box in the grid. A
-// sandbox is a Sandbox object in the demo namespace; the controller runs a
-// pod with the same name, so sandbox, pod, and metrics lines all join on
-// that name. A box carries who owns the sandbox (warm pool or claim), the
-// pod phase, the container limits from the pod spec, and live usage from
-// the metrics API. Zero usage means unknown, not idle.
+// Data shape. The dashboard's unit is a sandbox, one entry in the left
+// pane and one inspect view in the right. A sandbox is a Sandbox object
+// in the demo namespace; the controller runs a pod with the same name, so
+// sandbox, pod, and metrics lines all join on that name. An entry carries
+// who owns the sandbox (warm pool or claim), the pod phase, the container
+// limits from the pod spec, and live usage from the metrics API. Zero
+// usage means unknown, not idle.
 package cluster
 
 import (
@@ -14,12 +15,16 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
-	kubeContext = "kind-agent-sandbox"
-	// Namespace is the demo namespace every read targets.
+	// KubeContext is the kind cluster the demo runs on.
+	KubeContext = "kind-agent-sandbox"
+	// Namespace is the demo namespace every read and write targets.
 	Namespace = "sandbox-demo"
+	// WarmPool is the pool claims draw from.
+	WarmPool = "agent-pool"
 )
 
 type Sandbox struct {
@@ -27,10 +32,11 @@ type Sandbox struct {
 	OwnerKind   string // SandboxWarmPool or SandboxClaim
 	Owner       string
 	Phase       string // pod phase, "…" until the pod exists
-	CPULimitMC  int64  // container cpu limit, millicores
-	MemLimitMiB int64  // container memory limit, MiB
-	CPUUsageMC  int64  // live cpu usage, millicores
-	MemUsageMiB int64  // live memory usage, MiB
+	Created     time.Time
+	CPULimitMC  int64 // container cpu limit, millicores
+	MemLimitMiB int64 // container memory limit, MiB
+	CPUUsageMC  int64 // live cpu usage, millicores
+	MemUsageMiB int64 // live memory usage, MiB
 }
 
 type ownerReference struct {
@@ -41,6 +47,7 @@ type ownerReference struct {
 type sandboxItem struct {
 	Metadata struct {
 		Name            string           `json:"name"`
+		Created         string           `json:"creationTimestamp"`
 		OwnerReferences []ownerReference `json:"ownerReferences"`
 	} `json:"metadata"`
 }
@@ -57,7 +64,8 @@ type podContainer struct {
 
 type podItem struct {
 	Metadata struct {
-		Name string `json:"name"`
+		Name    string `json:"name"`
+		Created string `json:"creationTimestamp"`
 	} `json:"metadata"`
 	Spec struct {
 		Containers []podContainer `json:"containers"`
@@ -114,13 +122,16 @@ func buildSandboxes(sb sandboxList, pl podList, ml *podMetricsList) ([]Sandbox, 
 
 	var boxes []Sandbox
 	for _, item := range sb.Items {
-		b := Sandbox{Name: item.Metadata.Name, Phase: "…"}
+		b := Sandbox{Name: item.Metadata.Name, Phase: "…", Created: parseTime(item.Metadata.Created)}
 		if len(item.Metadata.OwnerReferences) > 0 {
 			b.OwnerKind = item.Metadata.OwnerReferences[0].Kind
 			b.Owner = item.Metadata.OwnerReferences[0].Name
 		}
 		if p := podByName[item.Metadata.Name]; p != nil {
 			b.Phase = p.Status.Phase
+			if ts := parseTime(p.Metadata.Created); !ts.IsZero() {
+				b.Created = ts
+			}
 			for _, c := range p.Spec.Containers {
 				if q, ok := c.Resources.Limits["cpu"]; ok {
 					v, err := cpuMillicores(q)
@@ -199,8 +210,16 @@ func Fetch() (boxes []Sandbox, metricsOK bool, err error) {
 }
 
 func kubectlOutput(args ...string) ([]byte, error) {
-	full := append([]string{"--context", kubeContext, "-n", Namespace}, args...)
+	return runKubectl(nil, args...)
+}
+
+// runKubectl shells out to kubectl, optionally piping stdin.
+func runKubectl(stdin []byte, args ...string) ([]byte, error) {
+	full := append([]string{"--context", KubeContext, "-n", Namespace}, args...)
 	cmd := exec.Command("kubectl", full...)
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 	var out, errOut bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errOut
 	if err := cmd.Run(); err != nil {
@@ -208,6 +227,50 @@ func kubectlOutput(args ...string) ([]byte, error) {
 			strings.Join(args, " "), err, strings.TrimSpace(errOut.String()))
 	}
 	return out.Bytes(), nil
+}
+
+func parseTime(s string) time.Time {
+	ts, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return time.Time{}
+	}
+	return ts
+}
+
+// Claim claims a warm sandbox from the pool and returns the claim name.
+// Deleting the claim destroys the sandbox and the pool restocks.
+func Claim() (string, error) {
+	name := claimName()
+	if _, err := runKubectl([]byte(claimManifest(name)), "apply", "-f", "-"); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+// DeleteClaim deletes a SandboxClaim, tearing its sandbox down.
+func DeleteClaim(name string) error {
+	_, err := kubectlOutput("delete", "sandboxclaim", name)
+	return err
+}
+
+func claimName() string {
+	return fmt.Sprintf("dash-claim-%d", time.Now().UnixNano())
+}
+
+// claimManifest renders the SandboxClaim object Claim applies. Same
+// shape as demo/claim.yaml, with a unique name.
+func claimManifest(name string) string {
+	return fmt.Sprintf(`apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxClaim
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  warmPoolRef:
+    name: %s
+  lifecycle:
+    shutdownPolicy: Delete
+`, name, Namespace, WarmPool)
 }
 
 // cpuMillicores parses the cpu quantity units this demo produces: plain
