@@ -59,7 +59,7 @@ func (m model) layout() layout {
 	}
 	l.leftW = m.leftWidth
 	if l.leftW <= 0 {
-		l.leftW = m.width / 3
+		l.leftW = m.fitLeftWidth()
 	}
 	l.leftW = clamp(l.leftW, minLeftW, max(m.width-minRightW, minLeftW))
 	l.leftH = panelsH
@@ -70,10 +70,22 @@ func (m model) layout() layout {
 	return l
 }
 
-// headerHeight sizes the compact header: five content rows plus the
-// border, and never more than half the column.
+// fitLeftWidth sizes the sidebar to its content: the longest entry and
+// the section headers, so no name truncates at the default width.
+func (m model) fitLeftWidth() int {
+	w := 18 // room for a section header row
+	for _, b := range m.boxes {
+		if n := len([]rune(b.Name)) + 8; n > w {
+			w = n
+		}
+	}
+	return clamp(w, minLeftW, max(m.width-minRightW, minLeftW))
+}
+
+// headerHeight caps the header at three content rows plus borders,
+// never more than half the column.
 func headerHeight(avail int) int {
-	return min(7, max(avail/2, 3))
+	return min(5, max(avail/2, 3))
 }
 
 // shellPaneSize is the embedded shell's inner size, what the tmux
@@ -115,15 +127,15 @@ func (m model) leftLines() ([]string, map[int]int) {
 	entry := func(i int) string {
 		b := m.boxes[i]
 		marker := " "
-		if i == m.selected {
+		if b.Name == m.selected {
 			marker = cursorStyle.Render("▶")
 		}
 		kindStyle := warmStyle
 		if b.OwnerKind != "SandboxWarmPool" {
 			kindStyle = claimStyle
 		}
-		text := truncate(b.Name, innerW-6)
-		if i == m.selected {
+		text := truncate(b.Name, innerW-4)
+		if b.Name == m.selected {
 			text = cursorStyle.Render(text)
 		} else {
 			text = kindStyle.Render(text)
@@ -153,42 +165,109 @@ func (m model) leftLines() ([]string, map[int]int) {
 	return lines, targets
 }
 
-// headerLines renders the compact inspect header: identity on one
-// row, provenance on the next, the two usage bars, and one hint row.
+// headerLines renders the three-line inspect header: the info part
+// left of a vertical divider, the usage part with its history charts
+// on the right. Never more than three rows.
 func (m model) headerLines() []string {
-	l := m.layout()
-	innerW := max(l.colW-4, 1)
+	inner := max(m.layout().colW-4, 1)
 	b := m.selectedBox()
 	if b == nil {
 		return []string{" " + dim("nothing selected")}
 	}
 
 	badge, badgeStyle := "warm", warmStyle
-	if b.OwnerKind == "SandboxClaim" {
+	switch {
+	case b.OwnerKind == "SandboxClaim":
 		badge, badgeStyle = "claimed", claimStyle
-	} else if b.OwnerKind != "SandboxWarmPool" {
+	case b.OwnerKind != "SandboxWarmPool":
 		badge, badgeStyle = b.OwnerKind, warnStyle
 	}
-	sess := dim("off")
+	sess := dim("tmux off")
 	if m.sessions[b.Name] {
-		sess = warmStyle.Render("live")
+		sess = warmStyle.Render("tmux live")
 	}
 
-	name := truncate(b.Name, max(innerW-len(badge)-len(b.Phase)-10, 4))
-	row1 := " " + nameStyle.Render(name) + dim(" · ") + badgeStyle.Render(badge) +
-		dim(" · ") + b.Phase
-	owner := truncate(b.Owner, max(innerW-26, 4))
-	row2 := " " + dim("owner ") + owner + dim(" · age ") + ageString(b.Created) +
-		dim(" · tmux ") + sess
-	row3 := resourceLine("CPU", m.metricsOK, b.CPUUsageMC, b.CPULimitMC, "m", innerW)
-	row4 := resourceLine("MEM", m.metricsOK, b.MemUsageMiB, b.MemLimitMiB, "Mi", innerW)
-
-	hint := "[enter] bash · [F] fullscreen · [c] claim"
-	if b.OwnerKind == "SandboxClaim" {
-		hint = "[enter] bash · [F] fullscreen · [x] destroy claim"
+	info := []string{
+		" " + nameStyle.Render(truncate(b.Name, 22)) + dim(" · ") + badgeStyle.Render(badge),
+		" " + dim("owner ") + truncate(b.Owner, 20) + dim(" · ") + ageString(b.Created),
+		" " + b.Phase + dim(" · ") + sess,
 	}
-	row5 := " " + dim(hint)
-	return []string{row1, row2, row3, row4, row5}
+	infoW := 0
+	for _, ln := range info {
+		if w := lipgloss.Width(ln); w > infoW {
+			infoW = w
+		}
+	}
+	infoW = clamp(infoW, 12, max(inner-24, 12))
+	usageW := max(inner-infoW-2, 8)
+
+	h := m.hist[b.Name]
+	usage := []string{
+		usageLine("CPU", m.metricsOK, b.CPUUsageMC, b.CPULimitMC, "m", h.cpu, usageW),
+		usageLine("MEM", m.metricsOK, b.MemUsageMiB, b.MemLimitMiB, "Mi", h.mem, usageW),
+	}
+
+	rows := make([]string, 3)
+	for i := range rows {
+		u := ""
+		if i < len(usage) {
+			u = usage[i]
+		}
+		// The info lines are styled, so padding and truncation go
+		// through lipgloss, which measures display width, not bytes.
+		padded := lipgloss.NewStyle().Width(infoW).MaxWidth(infoW).Render(info[i])
+		rows[i] = padded + dim("│ ") + u
+	}
+	return rows
+}
+
+// usageLine renders one compact usage row: label, usage over limit,
+// the percentage, and a btop-style history chart filling the rest.
+func usageLine(label string, known bool, usage, limit int64, unit string, hist []float64, width int) string {
+	if limit <= 0 {
+		return fmt.Sprintf(" %-6s %s", dim(label), dim("no limit"))
+	}
+	num := "--"
+	ratio := 0.0
+	if known {
+		num = fmt.Sprintf("%d%s", usage, unit)
+		ratio = float64(usage) / float64(limit)
+	}
+	text := fmt.Sprintf(" %-6s %s/%d%s %3.0f%%", dim(label), num, limit, unit, ratio*100)
+	if lipgloss.Width(text) >= width {
+		return lipgloss.NewStyle().MaxWidth(width).Render(text)
+	}
+	chartW := width - lipgloss.Width(text) - 1
+	if len(hist) == 0 {
+		return text + " " + dim(strings.Repeat("·", chartW))
+	}
+	chart := lipgloss.NewStyle().Foreground(barColor(ratio)).Render(sparkline(hist, chartW))
+	return text + " " + chart
+}
+
+// sparkline renders a one-row chart of ratios, btop-style: each column
+// is one sample and its height is a step of the block ramp.
+var ramp = []rune(" ▁▂▃▄▅▆▇█")
+
+func sparkline(vals []float64, width int) string {
+	if width < 1 || len(vals) == 0 {
+		return ""
+	}
+	if len(vals) > width {
+		vals = vals[len(vals)-width:]
+	}
+	var b strings.Builder
+	for _, v := range vals {
+		lvl := int(v*8 + 0.5)
+		if lvl < 0 {
+			lvl = 0
+		}
+		if lvl > 8 {
+			lvl = 8
+		}
+		b.WriteRune(ramp[lvl])
+	}
+	return b.String()
 }
 
 // shellLinesView renders the embedded shell: a title row, then the
@@ -205,11 +284,11 @@ func (m model) shellLinesView() []string {
 	case b == nil:
 		title = dim("shell")
 	case !m.sessions[b.Name]:
-		title = dim("no session — enter starts bash")
+		title = dim("no session — claim with c, or enter on a claimed sandbox")
 	case m.shellFocus:
-		title = cursorStyle.Render("▶ bash — keys go here, esc leaves")
+		title = cursorStyle.Render("▶ bash — C-b q leaves")
 	default:
-		title = dim("bash — click here or press enter to focus")
+		title = dim("bash — click here or enter to focus")
 	}
 	lines := []string{" " + title}
 
@@ -223,49 +302,6 @@ func (m model) shellLinesView() []string {
 		}
 	}
 	return lines
-}
-
-// pair renders a label and value row.
-func pair(label, value string) string {
-	return dimStyle.Render(fmt.Sprintf("%-6s", label)) + " " + value
-}
-
-// resourceLine renders one usage line, padded to exactly innerW
-// columns so it never wraps. Fixed columns: leading space, 6 label, 11
-// numbers, 4 percent, three separators; the bar takes the rest.
-func resourceLine(label string, usageKnown bool, usage, limit int64, unit string, innerW int) string {
-	num := "--"
-	if usageKnown {
-		num = fmt.Sprintf("%d%s", usage, unit)
-	}
-	if limit <= 0 {
-		return pair(label, num+" "+dim("no limit"))
-	}
-	num = fmt.Sprintf("%s/%d%s", num, limit, unit)
-	numCol := fmt.Sprintf("%-11s", num)
-
-	barW := innerW - 25
-	ratio := 0.0
-	if usageKnown {
-		ratio = float64(usage) / float64(limit)
-	}
-	var b string
-	if barW > 0 {
-		b = lipgloss.NewStyle().Foreground(barColor(ratio)).Render(bar(ratio, barW))
-	}
-	return fmt.Sprintf(" %s %s %s %3.0f%%", dim(fmt.Sprintf("%-6s", label)), numCol, b, ratio*100)
-}
-
-// bar draws a usage bar of the given width. The caller guards the ratio.
-func bar(ratio float64, width int) string {
-	filled := int(ratio * float64(width))
-	if filled < 0 {
-		filled = 0
-	}
-	if filled > width {
-		filled = width
-	}
-	return strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
 }
 
 func barColor(ratio float64) lipgloss.Color {
@@ -326,19 +362,25 @@ func (m model) statusLine() string {
 	} else if msg == "" && !m.metricsOK && m.loaded {
 		msg = warnStyle.Render("live usage unavailable (metrics-server)")
 	}
-	// A message replaces the key hint instead of joining it: two full
-	// strings do not fit one row.
-	var line string
-	switch {
-	case msg != "":
-		line = msg + dim("  ·  q quits")
-	case m.shellFocus:
-		line = dim("esc back · keys go to bash · C-b d works inside")
-	default:
-		line = dim("j/k move · enter bash · F fullscreen · c claim · x destroy · q quit · drag resizes")
+	if msg != "" {
+		return lipgloss.NewStyle().MaxWidth(m.width).Render(msg)
 	}
-	// MaxWidth truncates by display width, ANSI-aware.
-	return lipgloss.NewStyle().MaxWidth(m.width).Render(line)
+	// Shell mode fills the bar so the mode is unmistakable, and carries
+	// its own tips: no keybind escapes the sandbox.
+	var line string
+	var bg lipgloss.Color
+	switch {
+	case m.shellFocus && m.prefix:
+		line, bg = "C-b armed · q leaves bash, any other key cancels", warnColor
+	case m.shellFocus:
+		line, bg = "C-b q leaves bash · every key goes to the sandbox", accent
+	default:
+		return lipgloss.NewStyle().MaxWidth(m.width).Render(
+			dim("j/k move · enter bash (claimed) · F fullscreen · c claim+bash · x destroy · q quit · drag resizes"))
+	}
+	return lipgloss.NewStyle().MaxWidth(m.width).
+		Background(bg).Foreground(lipgloss.Color("16")).Bold(true).
+		Render(" " + line + " ")
 }
 
 func (m model) View() string {

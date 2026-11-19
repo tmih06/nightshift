@@ -37,17 +37,51 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.shellLines, m.shellPod = msg.lines, msg.pod
 		}
 	case loadedMsg:
+		prev := m.selectedIndex()
 		m.boxes, m.sessions = msg.boxes, msg.sessions
 		m.metricsOK, m.err, m.loaded = msg.metricsOK, msg.err, true
-		if m.selected > len(m.boxes)-1 {
-			m.selected = max(len(m.boxes)-1, 0)
+		m.appendHistory()
+		// The selected pod may be gone (destroyed) or the fleet may
+		// have arrived for the first time: snap to the nearest entry.
+		if m.selectedBox() == nil && len(m.boxes) > 0 {
+			m.selected = m.boxes[clamp(prev, 0, len(m.boxes)-1)].Name
+		}
+		// A claim whose bash was pre-created: select it and drop straight
+		// into the shell.
+		if m.pendingPod != "" {
+			for _, b := range m.boxes {
+				if b.Name != m.pendingPod {
+					continue
+				}
+				m.selected = b.Name
+				m.pendingPod = ""
+				if m.sessions[b.Name] {
+					// No status message: the filled status bar and the
+					// shell title are the mode indicators.
+					m.shellFocus = true
+					m.status = ""
+					w, h := m.shellPaneSize()
+					resize := w != m.shellW || h != m.shellH
+					m.shellW, m.shellH = w, h
+					return m, tea.Batch(fetchCmd(), captureCmd(b.Name, w, h, resize))
+				}
+				break
+			}
 		}
 	case claimMsg:
 		if msg.err != nil {
 			m.status = "claim failed: " + msg.err.Error()
 			return m, nil
 		}
-		m.status = "claimed " + msg.name + ", adopting a warm sandbox"
+		m.status = "claiming " + msg.name + ", waiting for a warm sandbox…"
+		return m, waitClaimCmd(msg.name)
+	case claimAdoptedMsg:
+		if msg.err != nil {
+			m.status = "claim failed: " + msg.err.Error()
+			return m, fetchCmd()
+		}
+		m.pendingPod = msg.pod
+		m.status = "bash ready in " + msg.pod
 		return m, fetchCmd()
 	case deletedMsg:
 		if msg.err != nil {

@@ -17,9 +17,13 @@ func (m model) updateKeyboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "down", "j":
 		m.moveSelection(1)
 	case "g":
-		m.selected = 0
+		if len(m.boxes) > 0 {
+			m.selected = m.boxes[0].Name
+		}
 	case "G":
-		m.selected = max(len(m.boxes)-1, 0)
+		if len(m.boxes) > 0 {
+			m.selected = m.boxes[len(m.boxes)-1].Name
+		}
 	case "r":
 		m.status = ""
 		return m, fetchCmd()
@@ -29,6 +33,10 @@ func (m model) updateKeyboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter", "b":
 		b := m.selectedBox()
 		if b == nil {
+			return m, nil
+		}
+		if b.OwnerKind != "SandboxClaim" {
+			m.status = "warm pool sandbox — claim it with c, bash starts with the claim"
 			return m, nil
 		}
 		if b.Phase != "Running" {
@@ -41,6 +49,10 @@ func (m model) updateKeyboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Fullscreen escape hatch for full-screen programs.
 		b := m.selectedBox()
 		if b == nil || b.Phase != "Running" {
+			return m, nil
+		}
+		if b.OwnerKind != "SandboxClaim" {
+			m.status = "warm pool sandbox — claim it with c first"
 			return m, nil
 		}
 		m.status = "opening fullscreen bash, detach with C-b d"

@@ -59,6 +59,12 @@ Session names and pod names cannot collide: pod names are unique in the
 namespace and the prefix keeps sessions out of the user's own namespace
 of sessions.
 
+Bash belongs to claimed sandboxes only. Warm pool pods are standby
+capacity and the dashboard refuses to open shells in them. Claiming
+through the dashboard waits for adoption, creates the session
+immediately, and drops straight into the embedded shell, so there is no
+attach wait.
+
 The lifecycle is self-reaping. When a pod dies its kubectl exec exits,
 the pane command finishes, and tmux destroys the session, so a session
 can never outlive its sandbox. The dashboard never garbage collects
@@ -77,10 +83,12 @@ takes over the terminal.
 - `capture-pane -p -J -t` every 200ms renders the session inside the
   dashboard's shell pane, bottom-aligned.
 - `send-keys -t` carries the keystrokes typed while the shell pane has
-  focus. Input queues and drains one batch at a time, consecutive
-  literals merged into one call, so fast typing is one spawn and never
-  reorders. A capture follows every batch, so the echo of a keystroke
-  comes back in milliseconds instead of waiting for the tick.
+  focus. While focused no keybind escapes the sandbox: only C-b followed
+  by q leaves, a prefix chord like tmux's own. Input queues and drains
+  one batch at a time, consecutive literals merged into one call, so
+  fast typing is one spawn and never reorders. A capture follows every
+  batch, so the echo of a keystroke comes back in milliseconds instead
+  of waiting for the tick.
 - `attach-session -t` remains only behind the F key, the escape hatch
   for full-screen programs like vim. Detach returns with C-b d.
 

@@ -247,6 +247,24 @@ func Claim() (string, error) {
 	return name, nil
 }
 
+// WaitForClaim polls until the claim adopts a warm sandbox and returns
+// its pod name, so the caller can start bash before the user asks for
+// it. Warm adoption is near-instant; the timeout covers a cold refill.
+func WaitForClaim(name string, timeout time.Duration) (string, error) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		out, err := kubectlOutput("get", "sandboxclaim", name,
+			"-o", "jsonpath={.status.sandbox.name}")
+		if err == nil {
+			if pod := strings.TrimSpace(string(out)); pod != "" {
+				return pod, nil
+			}
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	return "", fmt.Errorf("claim %s adopted no sandbox within %s", name, timeout)
+}
+
 // DeleteClaim deletes a SandboxClaim, tearing its sandbox down.
 func DeleteClaim(name string) error {
 	_, err := kubectlOutput("delete", "sandboxclaim", name)
