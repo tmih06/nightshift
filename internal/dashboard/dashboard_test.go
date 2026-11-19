@@ -117,51 +117,102 @@ func TestStackedClickUsesY(t *testing.T) {
 
 // The usage line is exactly innerW wide, so golden rule 2 holds: no
 // auto-wrap inside the bordered pane.
-func TestSparkline(t *testing.T) {
-	if got := sparkline([]float64{0, 0.5, 1}, 3); got != " ▄█" {
-		t.Errorf("sparkline = %q, want \" ▄█\"", got)
+func TestBrailleGraph(t *testing.T) {
+	strip := func(s string) string {
+		// drop ANSI styling to compare the raw braille pattern
+		out := ""
+		for _, r := range s {
+			if r >= 0x2800 {
+				out += string(r)
+			}
+		}
+		return out
 	}
-	// Older samples drop off the left when the chart is narrower than
-	// the history.
-	if got := sparkline([]float64{1, 1, 0, 0, 0.5}, 3); got != "  ▄" {
-		t.Errorf("sparkline tail = %q", got)
+
+	// A flat zero window draws its baseline on the bottom dot row,
+	// dots 7 and 8 in every cell it spans.
+	rows := usageGraph([]float64{0, 0, 0, 0}, 3, 2)
+	if len(rows) != 3 {
+		t.Fatalf("got %d rows, want 3", len(rows))
 	}
-	if got := sparkline(nil, 3); got != "" {
-		t.Errorf("empty sparkline = %q, want empty", got)
+	if strip(rows[2]) != "\u28c0\u28c0" { // \u28c0 = dots 7+8
+		t.Errorf("baseline row = %q, want ⣀⣀", rows[2])
 	}
-	// Ratios over 1 clamp to the top of the ramp.
-	if got := sparkline([]float64{2}, 1); got != "█" {
-		t.Errorf("clamped sparkline = %q", got)
+	if strip(rows[0]) != "\u2800\u2800" || strip(rows[1]) != "\u2800\u2800" {
+		t.Errorf("rows above the baseline should be blank: %q %q", rows[0], rows[1])
+	}
+
+	// A peak sample sits on the top dot row, dots 1 and 4.
+	rows = usageGraph([]float64{1, 1, 1, 1}, 3, 2)
+	if strip(rows[0]) != "\u2809\u2809" { // dots 1+4
+		t.Errorf("peak row = %q, want ⠉⠉", rows[0])
+	}
+
+	// Half the peak lands on the middle dot row, dots 2 and 5: a cell
+	// whose two samples both sit at half the window's peak fills both
+	// middle dots, while a higher sample defines the peak.
+	rows = usageGraph([]float64{1, 0.5, 0.5, 0.5}, 3, 2)
+	if strip(rows[1]) != "\u2810\u2812" { // ⠐ then ⠒
+		t.Errorf("half row = %q, want \u2810\u2812", rows[1])
+	}
+
+	// A young history grows from the right edge.
+	rows = usageGraph([]float64{1}, 3, 2)
+	if strip(rows[0]) != "\u2800\u2801" { // blank cell then dot 1
+		t.Errorf("young graph = %q, want the last cell only", rows[0])
+	}
+
+	// No history yet: the placeholder sits on the bottom row.
+	rows = usageGraph(nil, 3, 2)
+	if rows[2] == "" || !strings.Contains(rows[2], "·") {
+		t.Errorf("placeholder = %q, want dots on the bottom row", rows[2])
 	}
 }
 
-func TestUsageLine(t *testing.T) {
-	withHist := usageLine("CPU", true, 250, 500, "m", []float64{0, 0.5, 1}, 40)
-	for _, want := range []string{"CPU", "250m/500m", "50%", "▄", "█"} {
-		if !strings.Contains(withHist, want) {
-			t.Errorf("usage line = %q, missing %q", withHist, want)
+func TestUsageLinesTable(t *testing.T) {
+	rows := usageLines("CPU", true, 250, 500, "m", []float64{0, 0.5, 1}, 40)
+	if len(rows) != 4 {
+		t.Fatalf("got %d rows, want value plus 3 graph rows", len(rows))
+	}
+	// The value row is the table: label, value, percent, bar.
+	for _, want := range []string{"CPU", "250m / 500m", "50%", "█", "░"} {
+		if !strings.Contains(rows[0], want) {
+			t.Errorf("value row = %q, missing %q", rows[0], want)
 		}
 	}
-	if got := lipgloss.Width(withHist); got > 40 {
-		t.Errorf("usage line width = %d, want at most 40", got)
+	// The graph rows carry braille patterns, and each row is exactly
+	// the box width, so the panes stay aligned.
+	for i, r := range rows {
+		if got := lipgloss.Width(r); got != 40 {
+			t.Errorf("row %d width = %d, want 40", i, got)
+		}
 	}
 
-	// No history yet: the chart area is a dim placeholder.
-	noHist := usageLine("MEM", false, 0, 256, "Mi", nil, 40)
-	if !strings.Contains(noHist, "--/256Mi") || !strings.Contains(noHist, "·") {
-		t.Errorf("history-less usage line = %q", noHist)
+	// The table aligns across metrics: the percent sign lands at the
+	// same column whatever the numbers, and both rows are the same
+	// total width, so the bar region starts together.
+	cpu := usageLines("CPU", true, 250, 500, "m", nil, 40)[0]
+	mem := usageLines("MEM", true, 6, 256, "Mi", nil, 40)[0]
+	if strings.Index(cpu, "%") != strings.Index(mem, "%") {
+		t.Errorf("percent columns misaligned:\n%q\n%q", cpu, mem)
 	}
-	if got := lipgloss.Width(noHist); got != 40 {
-		t.Errorf("history-less usage line width = %d, want 40", got)
+	if lipgloss.Width(cpu) != lipgloss.Width(mem) {
+		t.Errorf("row widths differ:\n%q\n%q", cpu, mem)
 	}
 
-	if got := usageLine("CPU", true, 4, 0, "m", nil, 40); !strings.Contains(got, "no limit") {
-		t.Errorf("no-limit usage line = %q", got)
+	// Unknown usage keeps the table shape with a placeholder value.
+	rows = usageLines("MEM", false, 0, 256, "Mi", nil, 40)
+	if !strings.Contains(rows[0], "-- / 256Mi") || !strings.Contains(rows[0], "0%") {
+		t.Errorf("unknown value row = %q", rows[0])
+	}
+	if !strings.Contains(rows[3], "·") {
+		t.Errorf("history-less graph = %q, want the placeholder on the bottom row", rows[3])
 	}
 
-	// Narrow pane: the text truncates instead of wrapping.
-	if got := lipgloss.Width(usageLine("MEM", true, 6, 256, "Mi", nil, 10)); got != 10 {
-		t.Errorf("narrow usage line width = %d, want 10", got)
+	// No limit: honest fallback in the table.
+	rows = usageLines("CPU", true, 4, 0, "m", nil, 40)
+	if !strings.Contains(rows[0], "no limit") {
+		t.Errorf("no-limit value row = %q", rows[0])
 	}
 }
 
@@ -291,8 +342,8 @@ func TestViewFrame(t *testing.T) {
 		"owner agent-pool",
 		"Running",
 		"tmux live",
-		"2m/500m",
-		"6Mi/256Mi",
+		"2m / 500m",
+		"6Mi / 256Mi",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("view missing %q", want)
@@ -326,7 +377,7 @@ func TestViewFrame(t *testing.T) {
 	// its own owner, and the untracked warm pod shows no session.
 	m.selected = "agent-pool-bkl2p"
 	g := m.View()
-	for _, want := range []string{"· claimed", "my-agent", "tmux off", "0m/500m"} {
+	for _, want := range []string{"· claimed", "my-agent", "tmux off", "0m / 500m"} {
 		if !strings.Contains(g, want) {
 			t.Errorf("claimed inspect missing %q", want)
 		}
@@ -432,8 +483,8 @@ func release(x, y int) tea.MouseMsg {
 func TestLayoutDefaultsAndDragOverride(t *testing.T) {
 	m := baseModel() // 100x30
 	l := m.layout()
-	if l.leftW != 24 || l.headerH != 6 || l.shellH != 22 || l.stacked {
-		t.Errorf("default layout = %+v, want leftW 24, header 6, shell 22", l)
+	if l.leftW != 24 || l.headerH != 10 || l.shellH != 18 || l.stacked {
+		t.Errorf("default layout = %+v, want leftW 24, header 10, shell 18", l)
 	}
 
 	m.leftWidth = 60
@@ -816,10 +867,10 @@ func TestHeaderBentoBoxes(t *testing.T) {
 	}
 
 	usage := m.headerUsageLines()
-	if len(usage) != 2 {
-		t.Fatalf("usage box has %d lines, want 2", len(usage))
+	if len(usage) != 8 {
+		t.Fatalf("usage box has %d lines, want 8: value plus three graph rows per metric", len(usage))
 	}
-	for _, want := range []string{"2m/500m", "6Mi/256Mi"} {
+	for _, want := range []string{"2m / 500m", "6Mi / 256Mi"} {
 		if !strings.Contains(strings.Join(usage, " "), want) {
 			t.Errorf("usage box missing %q", want)
 		}
@@ -841,11 +892,15 @@ func TestHeaderBentoBoxes(t *testing.T) {
 		t.Errorf("infoW + usageW = %d, exceeds column %d", got, l.colW)
 	}
 
-	// The history chart appears once samples exist.
-	m.hist = map[string]usageHistory{"agent-pool-5ss7w": {cpu: []float64{0, 1, 0.5}, mem: []float64{0.2}}}
+	// The history charts appear once samples exist: three braille rows
+	// per metric, under each value row.
+	m.hist = map[string]usageHistory{"agent-pool-5ss7w": {cpu: []float64{1}, mem: []float64{1}}}
 	usage = m.headerUsageLines()
-	if !strings.Contains(usage[0], "█") || !strings.Contains(usage[0], "▄") {
-		t.Errorf("cpu chart row = %q, want ramp glyphs", usage[0])
+	if !strings.ContainsRune(usage[1], '⠁') {
+		t.Errorf("cpu graph top row = %q, want a braille dot", usage[1])
+	}
+	if !strings.ContainsRune(usage[5], '⠁') {
+		t.Errorf("mem graph top row = %q, want a braille dot", usage[5])
 	}
 
 	// Three boxes open on the first body row: the nav pane plus the two
