@@ -108,11 +108,11 @@ func (m model) fitLeftWidth() int {
 	return clamp(w, minLeftW, max(m.width-minRightW, minLeftW))
 }
 
-// headerHeight caps the header row at the usage box's eight content
-// rows (value plus three graph rows per metric) plus borders, and never
-// more than half the column.
+// headerHeight caps the header row at the usage box's four content
+// rows (value row plus one graph row per metric) plus borders, and
+// never more than half the column.
 func headerHeight(avail int) int {
-	return min(10, max(avail/2, 6))
+	return min(6, max(avail/2, 6))
 }
 
 // shellPaneSize is the embedded shell's inner size, what the tmux
@@ -251,18 +251,13 @@ func (m model) headerUsageLines() []string {
 	return lines
 }
 
-// graphRows is the height of each metric's braille graph, in character
-// rows. Each character covers four dot rows, so three rows give twelve
-// vertical steps.
-const graphRows = 3
-
 // usageLines renders one metric's group: the table value row, then the
 // braille history graph rows. The fixed columns are the table: label,
 // value, percent, bar.
 func usageLines(label string, known bool, usage, limit int64, unit string, hist []float64, width int) []string {
 	if limit <= 0 {
 		value := fmt.Sprintf(" %-4s %-18s", dim(label), dim("no limit"))
-		return append([]string{value}, usageGraph(nil, graphRows, width)...)
+		return []string{value, usageGraph(nil, width)}
 	}
 	num := "--"
 	ratio := 0.0
@@ -281,62 +276,88 @@ func usageLines(label string, known bool, usage, limit int64, unit string, hist 
 	} else {
 		valueRow = lipgloss.NewStyle().MaxWidth(width).Render(text)
 	}
-	return append([]string{valueRow}, usageGraph(hist, graphRows, width)...)
+	return []string{valueRow, usageGraph(hist, width)}
 }
 
-// usageGraph renders one metric's history as a braille graph, btop
-// style: each character cell holds two dot columns by four dot rows, so
-// three rows of characters give twelve vertical steps at double the
-// horizontal resolution of a one-row chart. The window autoscales to
-// its peak, a zero sample sits on the bottom dot row, and a young
-// history grows from the right edge.
-func usageGraph(hist []float64, rows, width int) []string {
-	if rows < 1 || width < 1 {
-		return nil
+// usageGraph renders one metric's history as a single-row braille
+// graph, btop style: each character cell holds two dot columns by four
+// dot rows, and a sample fills its column from the baseline up to its
+// own height — one dot at rest, four dots at the limit — so stress
+// reads as a tall stack and calm as a short one. The height is the
+// sample's ratio against the limit, not a scale of the window's own
+// peak: 45% of the limit draws two dot rows even when it is the
+// highest thing on screen, and the wave keeps its true shape. Each
+// cell is colored on the green-to-red ramp by its stronger sample, so
+// a spike reads red wherever it happened. A young history grows from
+// the right edge.
+func usageGraph(hist []float64, width int) string {
+	if width < 1 {
+		return ""
 	}
 	if len(hist) == 0 {
-		out := make([]string, rows)
-		out[rows-1] = dim(strings.Repeat("·", width))
-		return out
+		return dim(strings.Repeat("\u00b7", width))
 	}
 	dotCols := 2 * width
 	vals := hist
 	if len(vals) > dotCols {
 		vals = vals[len(vals)-dotCols:]
 	}
-	peak := 0.0
-	for _, v := range vals {
-		if v > peak {
-			peak = v
-		}
-	}
-	dotRows := 4 * rows
-	masks := make([]rune, rows*width)
+	const dotRows = 4
 	// A young history grows from the right edge, the way a scrolling
 	// chart fills, so the first cells stay blank.
 	firstCell := width - (len(vals)+1)/2
+	type graphCell struct {
+		mask rune
+		maxV float64
+	}
+	cells := make([]graphCell, width)
 	for j, v := range vals {
-		y := 0
-		if peak > 0 {
-			y = int(v/peak*float64(dotRows-1) + 0.5)
-			if y > dotRows-1 {
-				y = dotRows - 1
-			}
+		// Absolute scale: the sample's ratio against the limit is its
+		// dot height, one row minimum so the baseline stays visible.
+		h := int(v*float64(dotRows) + 0.5)
+		if h < 1 {
+			h = 1
 		}
-		top := dotRows - 1 - y // dot row counted from the top
-		r, in := top/4, top%4
-		masks[r*width+firstCell+j/2] |= dotBit(j%2, in)
-	}
-	style := lipgloss.NewStyle().Foreground(graphColor(hist))
-	out := make([]string, rows)
-	for r := 0; r < rows; r++ {
-		line := make([]rune, width)
-		for c := range line {
-			line[c] = 0x2800 + masks[r*width+c]
+		if h > dotRows {
+			h = dotRows
 		}
-		out[r] = style.Render(string(line))
+		c := firstCell + j/2
+		col := j % 2
+		// A column, not a point: every dot row from the baseline up to
+		// the sample's height lights up.
+		for top := dotRows - h; top <= dotRows-1; top++ {
+			cells[c].mask |= dotBit(col, top)
+		}
+		if v > cells[c].maxV {
+			cells[c].maxV = v
+		}
 	}
-	return out
+	var b strings.Builder
+	for c, cell := range cells {
+		if c < firstCell {
+			b.WriteByte(' ')
+			continue
+		}
+		b.WriteString(lipgloss.NewStyle().Foreground(levelColor(cell.maxV)).
+			Render(string(0x2800 + cell.mask)))
+	}
+	return b.String()
+}
+
+// levelColor maps a usage ratio to a color: green at rest, yellow as
+// it climbs, red at the top. The graph uses this per sample, so each
+// point carries its own stress color.
+func levelColor(ratio float64) lipgloss.Color {
+	switch {
+	case ratio >= 0.9:
+		return badColor
+	case ratio >= 0.6:
+		return warnColor
+	case ratio >= 0.3:
+		return lipgloss.Color("112") // light green
+	default:
+		return warmColor
+	}
 }
 
 // dotBit maps a dot position inside a braille cell to its bit in the
@@ -349,18 +370,6 @@ func dotBit(col, row int) rune {
 		return 1 << rune(col*3+row)
 	}
 	return 1 << rune(6+col)
-}
-
-// graphColor picks the chart color from the recent peak, so a spike
-// recolors the graph even when the current value is low.
-func graphColor(hist []float64) lipgloss.Color {
-	peak := 0.0
-	for _, v := range hist {
-		if v > peak {
-			peak = v
-		}
-	}
-	return barColor(peak)
 }
 
 func (m model) shellLinesView() []string {
@@ -394,7 +403,8 @@ func (m model) shellLinesView() []string {
 	return lines
 }
 
-// bar draws a usage bar of the given width. The caller guards the ratio.
+// bar draws a usage bar of the given width: the filled part colored by
+// the level, the empty part dim, so the whole bar stays visible.
 func bar(ratio float64, width int) string {
 	filled := int(ratio * float64(width))
 	if filled < 0 {
@@ -403,7 +413,10 @@ func bar(ratio float64, width int) string {
 	if filled > width {
 		filled = width
 	}
-	return strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
+	filledPart := lipgloss.NewStyle().Foreground(barColor(ratio)).
+		Render(strings.Repeat("█", filled))
+	emptyPart := dim(strings.Repeat("░", width-filled))
+	return filledPart + emptyPart
 }
 
 func barColor(ratio float64) lipgloss.Color {

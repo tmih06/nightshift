@@ -118,61 +118,67 @@ func TestStackedClickUsesY(t *testing.T) {
 // The usage line is exactly innerW wide, so golden rule 2 holds: no
 // auto-wrap inside the bordered pane.
 func TestBrailleGraph(t *testing.T) {
+	// strip ANSI to compare the raw braille pattern.
 	strip := func(s string) string {
-		// drop ANSI styling to compare the raw braille pattern
 		out := ""
 		for _, r := range s {
-			if r >= 0x2800 {
+			if r >= 0x2800 && r <= 0x28FF {
 				out += string(r)
 			}
 		}
 		return out
 	}
 
-	// A flat zero window draws its baseline on the bottom dot row,
-	// dots 7 and 8 in every cell it spans.
-	rows := usageGraph([]float64{0, 0, 0, 0}, 3, 2)
-	if len(rows) != 3 {
-		t.Fatalf("got %d rows, want 3", len(rows))
-	}
-	if strip(rows[2]) != "\u28c0\u28c0" { // \u28c0 = dots 7+8
-		t.Errorf("baseline row = %q, want ⣀⣀", rows[2])
-	}
-	if strip(rows[0]) != "\u2800\u2800" || strip(rows[1]) != "\u2800\u2800" {
-		t.Errorf("rows above the baseline should be blank: %q %q", rows[0], rows[1])
+	// One row, btop-style: a sample fills its dot column from the
+	// baseline up to its height. A flat zero window is the baseline,
+	// dots 7 and 8 in every cell.
+	if got := usageGraph([]float64{0, 0, 0, 0}, 2); strip(got) != "⣀⣀" {
+		t.Errorf("baseline = %q, want ⣀⣀", got)
 	}
 
-	// A peak sample sits on the top dot row, dots 1 and 4.
-	rows = usageGraph([]float64{1, 1, 1, 1}, 3, 2)
-	if strip(rows[0]) != "\u2809\u2809" { // dots 1+4
-		t.Errorf("peak row = %q, want ⠉⠉", rows[0])
+	// A peak sample fills its whole column: all eight dots per cell.
+	if got := usageGraph([]float64{1, 1, 1, 1}, 2); strip(got) != "⣿⣿" {
+		t.Errorf("peak = %q, want ⣿⣿", got)
 	}
 
-	// Half the peak lands on the middle dot row, dots 2 and 5: a cell
-	// whose two samples both sit at half the window's peak fills both
-	// middle dots, while a higher sample defines the peak.
-	rows = usageGraph([]float64{1, 0.5, 0.5, 0.5}, 3, 2)
-	if strip(rows[1]) != "\u2810\u2812" { // ⠐ then ⠒
-		t.Errorf("half row = %q, want \u2810\u2812", rows[1])
+	// A cell carries two consecutive samples, one per dot column: the
+	// left at the limit fills its whole column, the right at 30% fills
+	// one dot row, dot 8.
+	if got := usageGraph([]float64{1, 0.3}, 1); strip(got) != "⣇" {
+		t.Errorf("mixed cell = %q, want ⣇", got)
 	}
 
-	// A young history grows from the right edge.
-	rows = usageGraph([]float64{1}, 3, 2)
-	if strip(rows[0]) != "\u2800\u2801" { // blank cell then dot 1
-		t.Errorf("young graph = %q, want the last cell only", rows[0])
+	// Half the limit in the right column fills two of four dot rows.
+	if got := usageGraph([]float64{1, 0.5}, 1); strip(got) != "⣧" {
+		t.Errorf("half cell = %q, want ⣧", got)
 	}
 
-	// No history yet: the placeholder sits on the bottom row.
-	rows = usageGraph(nil, 3, 2)
-	if rows[2] == "" || !strings.Contains(rows[2], "·") {
-		t.Errorf("placeholder = %q, want dots on the bottom row", rows[2])
+	// No window autoscaling: a uniform half-limit window is the highest
+	// thing on screen and still draws two dot rows, not four. The wave
+	// keeps its true height.
+	if got := usageGraph([]float64{0.5, 0.5, 0.5, 0.5}, 2); strip(got) != "⣤⣤" {
+		t.Errorf("uniform half window = %q, want ⣤⣤, not full height", got)
+	}
+	if got := usageGraph([]float64{0.75, 0.75, 0.75, 0.75}, 2); strip(got) != "⣶⣶" {
+		t.Errorf("uniform three-quarter window = %q, want ⣶⣶", got)
+	}
+
+	// A young history grows from the right edge: one sample fills the
+	// last cell's left column full.
+	if got := usageGraph([]float64{1}, 2); strip(got) != "⡇" {
+		t.Errorf("young graph = %q, want ⡇", got)
+	}
+
+	// No history yet: the placeholder row.
+	if got := usageGraph(nil, 2); !strings.Contains(got, "·") {
+		t.Errorf("placeholder = %q, want dots", got)
 	}
 }
 
 func TestUsageLinesTable(t *testing.T) {
 	rows := usageLines("CPU", true, 250, 500, "m", []float64{0, 0.5, 1}, 40)
-	if len(rows) != 4 {
-		t.Fatalf("got %d rows, want value plus 3 graph rows", len(rows))
+	if len(rows) != 2 {
+		t.Fatalf("got %d rows, want value plus 1 graph row", len(rows))
 	}
 	// The value row is the table: label, value, percent, bar.
 	for _, want := range []string{"CPU", "250m / 500m", "50%", "█", "░"} {
@@ -205,8 +211,8 @@ func TestUsageLinesTable(t *testing.T) {
 	if !strings.Contains(rows[0], "-- / 256Mi") || !strings.Contains(rows[0], "0%") {
 		t.Errorf("unknown value row = %q", rows[0])
 	}
-	if !strings.Contains(rows[3], "·") {
-		t.Errorf("history-less graph = %q, want the placeholder on the bottom row", rows[3])
+	if !strings.Contains(rows[1], "·") {
+		t.Errorf("history-less graph = %q, want the placeholder", rows[1])
 	}
 
 	// No limit: honest fallback in the table.
@@ -483,8 +489,8 @@ func release(x, y int) tea.MouseMsg {
 func TestLayoutDefaultsAndDragOverride(t *testing.T) {
 	m := baseModel() // 100x30
 	l := m.layout()
-	if l.leftW != 24 || l.headerH != 10 || l.shellH != 18 || l.stacked {
-		t.Errorf("default layout = %+v, want leftW 24, header 10, shell 18", l)
+	if l.leftW != 24 || l.headerH != 6 || l.shellH != 22 || l.stacked {
+		t.Errorf("default layout = %+v, want leftW 24, header 6, shell 22", l)
 	}
 
 	m.leftWidth = 60
@@ -867,8 +873,8 @@ func TestHeaderBentoBoxes(t *testing.T) {
 	}
 
 	usage := m.headerUsageLines()
-	if len(usage) != 8 {
-		t.Fatalf("usage box has %d lines, want 8: value plus three graph rows per metric", len(usage))
+	if len(usage) != 4 {
+		t.Fatalf("usage box has %d lines, want 4: value plus one graph row per metric", len(usage))
 	}
 	for _, want := range []string{"2m / 500m", "6Mi / 256Mi"} {
 		if !strings.Contains(strings.Join(usage, " "), want) {
@@ -892,15 +898,16 @@ func TestHeaderBentoBoxes(t *testing.T) {
 		t.Errorf("infoW + usageW = %d, exceeds column %d", got, l.colW)
 	}
 
-	// The history charts appear once samples exist: three braille rows
-	// per metric, under each value row.
+	// The history charts appear once samples exist: one braille row per
+	// metric, under each value row, and the whole usage box is four
+	// rows.
 	m.hist = map[string]usageHistory{"agent-pool-5ss7w": {cpu: []float64{1}, mem: []float64{1}}}
 	usage = m.headerUsageLines()
-	if !strings.ContainsRune(usage[1], '⠁') {
-		t.Errorf("cpu graph top row = %q, want a braille dot", usage[1])
+	if !strings.ContainsRune(usage[1], '⡇') {
+		t.Errorf("cpu graph row = %q, want a filled braille column", usage[1])
 	}
-	if !strings.ContainsRune(usage[5], '⠁') {
-		t.Errorf("mem graph top row = %q, want a braille dot", usage[5])
+	if !strings.ContainsRune(usage[3], '⡇') {
+		t.Errorf("mem graph row = %q, want a filled braille column", usage[3])
 	}
 
 	// Three boxes open on the first body row: the nav pane plus the two
@@ -983,5 +990,23 @@ func TestSelectionFollowsNameAcrossResort(t *testing.T) {
 	}
 	if got := newM.(model).selectedBox().OwnerKind; got != "SandboxClaim" {
 		t.Errorf("selected box kind = %q, want the claimed sandbox", got)
+	}
+}
+
+// levelColor maps stress to the green-to-red ramp; the graph colors
+// each cell by its stronger sample, so a spike reads red wherever it
+// happened.
+func TestLevelColor(t *testing.T) {
+	if levelColor(0.95) != badColor {
+		t.Errorf("levelColor(0.95) = %v, want red", levelColor(0.95))
+	}
+	if levelColor(0.7) != warnColor {
+		t.Errorf("levelColor(0.7) = %v, want yellow", levelColor(0.7))
+	}
+	if levelColor(0.4) != lipgloss.Color("112") {
+		t.Errorf("levelColor(0.4) = %v, want light green", levelColor(0.4))
+	}
+	if levelColor(0.1) != warmColor {
+		t.Errorf("levelColor(0.1) = %v, want green", levelColor(0.1))
 	}
 }
