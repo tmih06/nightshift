@@ -1,18 +1,11 @@
 package dashboard
 
-import (
-	tea "github.com/charmbracelet/bubbletea"
-)
+import tea "github.com/charmbracelet/bubbletea"
 
-// Row 0 is the title line and row 1 the left pane's top border, so the
-// left pane's content starts at row 2 in both layouts.
+// Row 0 is the title line and row 1 the top border, so sidebar content starts at row 2.
 const contentStartY = 2
 
 func (m model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	// While the shell has focus, wheel events and right-pane clicks
-	// stay out of navigation. Clicking the sidebar always drops shell
-	// focus and selects the entry; dragging the splitter keeps working
-	// without disturbing shell focus.
 	if m.focus == focusShell && !m.dragging {
 		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
 			if m.overDivider(msg.X, msg.Y) {
@@ -55,9 +48,6 @@ func (m model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// overDivider reports whether a press grabs the splitter between the
-// panes: the left pane's right border in the side-by-side layout, its
-// bottom border when stacked.
 func (m model) overDivider(x, y int) bool {
 	l := m.layout()
 	if l.stacked {
@@ -67,27 +57,22 @@ func (m model) overDivider(x, y int) bool {
 	return x >= l.leftW-2 && x <= l.leftW+1
 }
 
-// applyDrag stores the splitter position under the pointer. layout
-// clamps it, so the navigation pane can never swallow the right column
-// or shrink to nothing.
 func (m model) applyDrag(x, y int) model {
 	if m.width < stackedBelow {
 		m.leftHeight = y - contentStartY + 1
-		return m
+	} else {
+		m.leftWidth = x
 	}
-	m.leftWidth = x
+	m.refreshInspectCache()
 	return m
 }
 
-// applyClick routes by region: a click inside the lower-right pane
-// focuses the warm config viewer for a warm sandbox or bash for a
-// claimed sandbox with a live session (never entering bash on a warm
-// sandbox). A sidebar click always returns focus to navigation.
 func (m model) applyClick(x, y int) (tea.Model, tea.Cmd) {
 	if m.inLowerPane(x, y) {
 		if m.isWarmSelected() {
 			m.focus = focusInspect
 			m.prefix = false
+			m.refreshInspectCache()
 			return m, nil
 		}
 		if m.canFocusShell() {
@@ -104,7 +89,6 @@ func (m model) applyClick(x, y int) (tea.Model, tea.Cmd) {
 	return m.clickLeftPane(x, y), nil
 }
 
-// inLeftPane reports whether a point sits inside the sidebar pane.
 func (m model) inLeftPane(x, y int) bool {
 	l := m.layout()
 	if y < 1 || y >= m.height-1 {
@@ -116,8 +100,6 @@ func (m model) inLeftPane(x, y int) bool {
 	return x >= 0 && x < l.leftW
 }
 
-// inLowerPane reports whether a point sits inside the lower-right pane
-// (embedded bash for claimed sandboxes, configs/templates for warm).
 func (m model) inLowerPane(x, y int) bool {
 	l := m.layout()
 	if y < l.shellTop || y >= m.height-1 {
@@ -126,16 +108,10 @@ func (m model) inLowerPane(x, y int) bool {
 	return l.stacked || x >= l.leftW
 }
 
-// clickLeftPane maps a click to the entry on that line. X selects the
-// pane in the side-by-side layout, Y in the stacked one, and the
-// line-to-entry map comes from the same leftLines the view renders, so
-// clicks cannot drift from what is on screen.
 func (m model) clickLeftPane(x, y int) model {
 	if !m.inLeftPane(x, y) {
 		return m
 	}
-	// A click that lands on the sidebar always returns focus to
-	// navigation.
 	m.focus = focusNav
 	m.prefix = false
 	_, targets := m.leftLines()

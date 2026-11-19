@@ -1,10 +1,3 @@
-// Data shape. The dashboard's unit is a sandbox, one entry in the left
-// pane and one inspect view in the right. A sandbox is a Sandbox object
-// in the demo namespace; the controller runs a pod with the same name, so
-// sandbox, pod, and metrics lines all join on that name. An entry carries
-// who owns the sandbox (warm pool or claim), the pod phase, the container
-// limits from the pod spec, and live usage from the metrics API. Zero
-// usage means unknown, not idle.
 package cluster
 
 import (
@@ -15,18 +8,16 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
 const (
-	// KubeContext is the kind cluster the demo runs on.
 	KubeContext = "kind-agent-sandbox"
-	// Namespace is the demo namespace every read and write targets.
-	Namespace = "sandbox-demo"
-	// WarmPool is the pool claims draw from.
-	WarmPool = "agent-pool"
+	Namespace   = "sandbox-demo"
+	WarmPool    = "agent-pool"
 )
 
 type Sandbox struct {
@@ -35,26 +26,21 @@ type Sandbox struct {
 	Owner       string
 	Phase       string // pod phase, "…" until the pod exists
 	Created     time.Time
-	CPULimitMC  int64 // container cpu limit, millicores
-	MemLimitMiB int64 // container memory limit, MiB
-	CPUUsageMC  int64 // live cpu usage, millicores
-	MemUsageMiB int64 // live memory usage, MiB
+	CPULimitMC  int64
+	MemLimitMiB int64
+	CPUUsageMC  int64
+	MemUsageMiB int64
 
-	// Pod spec, shown for warm sandboxes where there is no live
-	// session or usage to display.
 	Image         string
-	Command       string // container command, joined
+	Command       string
 	RestartPolicy string
-	CPUReqMC      int64 // container cpu request, millicores
-	MemReqMiB     int64 // container memory request, MiB
+	CPUReqMC      int64
+	MemReqMiB     int64
 
-	// Cleaned YAML manifests for warm sandbox inspection.
 	ManifestYAML string
 	PodYAML      string
 }
 
-// Pool is the warm pool context behind the fleet: what produced the
-// warm sandboxes and how many are standing.
 type Pool struct {
 	Name           string
 	Template       string
@@ -104,6 +90,10 @@ type podItem struct {
 	} `json:"status"`
 }
 
+type podList struct {
+	Items []json.RawMessage `json:"items"`
+}
+
 type warmPool struct {
 	Metadata struct {
 		Name string `json:"name"`
@@ -122,8 +112,15 @@ type warmPool struct {
 	} `json:"status"`
 }
 
-type podList struct {
+type rawList struct {
 	Items []json.RawMessage `json:"items"`
+}
+
+type kindMeta struct {
+	Kind     string `json:"kind"`
+	Metadata struct {
+		Name string `json:"name"`
+	} `json:"metadata"`
 }
 
 type podMetricsList struct {
@@ -140,23 +137,24 @@ type podMetricsList struct {
 	} `json:"items"`
 }
 
-// buildSandboxes joins the three cluster views into the boxes the grid
-// shows. It is pure: the kubectl calls stay outside.
+// buildSandboxes joins sandboxes, pods, and optional metrics by pod name.
 func buildSandboxes(sb sandboxList, pl podList, ml *podMetricsList) ([]Sandbox, error) {
 	type parsedPod struct {
 		item podItem
-		yaml string
+		raw  json.RawMessage
 	}
-	podByName := map[string]*parsedPod{}
+	podByName := make(map[string]*parsedPod, len(pl.Items))
 	for _, raw := range pl.Items {
 		var p podItem
 		if err := json.Unmarshal(raw, &p); err != nil {
 			return nil, fmt.Errorf("parse pod item: %w", err)
 		}
-		podByName[p.Metadata.Name] = &parsedPod{item: p, yaml: cleanManifestYAML(raw)}
+		podByName[p.Metadata.Name] = &parsedPod{item: p, raw: raw}
 	}
-	usedByName := map[string][2]int64{}
+
+	var usedByName map[string][2]int64
 	if ml != nil {
+		usedByName = make(map[string][2]int64, len(ml.Items))
 		for _, item := range ml.Items {
 			var cpu, mem int64
 			for _, c := range item.Containers {
@@ -175,27 +173,32 @@ func buildSandboxes(sb sandboxList, pl podList, ml *podMetricsList) ([]Sandbox, 
 		}
 	}
 
-	var boxes []Sandbox
+	boxes := make([]Sandbox, 0, len(sb.Items))
 	for _, raw := range sb.Items {
 		var item sandboxItem
 		if err := json.Unmarshal(raw, &item); err != nil {
 			return nil, fmt.Errorf("parse sandbox item: %w", err)
 		}
 		b := Sandbox{
-			Name:         item.Metadata.Name,
-			Phase:        "…",
-			Created:      parseTime(item.Metadata.Created),
-			ManifestYAML: cleanManifestYAML(raw),
+			Name:    item.Metadata.Name,
+			Phase:   "…",
+			Created: parseTime(item.Metadata.Created),
 		}
 		if len(item.Metadata.OwnerReferences) > 0 {
 			b.OwnerKind = item.Metadata.OwnerReferences[0].Kind
 			b.Owner = item.Metadata.OwnerReferences[0].Name
 		}
+		isWarm := b.OwnerKind != "SandboxClaim"
+		if isWarm {
+			b.ManifestYAML = cleanManifestYAML(raw)
+		}
 		if pp := podByName[item.Metadata.Name]; pp != nil {
 			p := &pp.item
 			b.Phase = p.Status.Phase
 			b.RestartPolicy = p.Spec.RestartPolicy
-			b.PodYAML = pp.yaml
+			if isWarm {
+				b.PodYAML = cleanManifestYAML(pp.raw)
+			}
 			if ts := parseTime(p.Metadata.Created); !ts.IsZero() {
 				b.Created = ts
 			}
@@ -237,19 +240,9 @@ func buildSandboxes(sb sandboxList, pl podList, ml *podMetricsList) ([]Sandbox, 
 		}
 		boxes = append(boxes, b)
 	}
-	// Warm sandboxes first: they are the ones available to claim.
-	rank := func(kind string) int {
-		switch kind {
-		case "SandboxWarmPool":
-			return 0
-		case "SandboxClaim":
-			return 1
-		default:
-			return 2
-		}
-	}
+
 	sort.SliceStable(boxes, func(i, j int) bool {
-		if ri, rj := rank(boxes[i].OwnerKind), rank(boxes[j].OwnerKind); ri != rj {
+		if ri, rj := ownerRank(boxes[i].OwnerKind), ownerRank(boxes[j].OwnerKind); ri != rj {
 			return ri < rj
 		}
 		return boxes[i].Name < boxes[j].Name
@@ -257,65 +250,104 @@ func buildSandboxes(sb sandboxList, pl podList, ml *podMetricsList) ([]Sandbox, 
 	return boxes, nil
 }
 
-// Fetch reads the cluster once. A metrics failure degrades to budgets
-// without usage rather than failing the dashboard.
-func Fetch() (boxes []Sandbox, pool Pool, metricsOK bool, err error) {
-	raw, err := kubectlOutput("get", "sandboxes", "-o", "json")
-	if err != nil {
-		return nil, pool, false, err
+func ownerRank(kind string) int {
+	switch kind {
+	case "SandboxWarmPool":
+		return 0
+	case "SandboxClaim":
+		return 1
+	default:
+		return 2
 	}
-	var sb sandboxList
-	if err := json.Unmarshal(raw, &sb); err != nil {
-		return nil, pool, false, fmt.Errorf("parse sandboxes: %w", err)
-	}
+}
 
-	raw, err = kubectlOutput("get", "pods", "-o", "json")
-	if err != nil {
-		return nil, pool, false, err
+// parseClusterList splits a combined kubectl List into sandboxes, pods,
+// and the warm pool plus its referenced template.
+func parseClusterList(raw []byte) (sandboxList, podList, Pool, error) {
+	var list rawList
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return sandboxList{}, podList{}, Pool{}, fmt.Errorf("parse cluster list: %w", err)
 	}
-	var pl podList
-	if err := json.Unmarshal(raw, &pl); err != nil {
-		return nil, pool, false, fmt.Errorf("parse pods: %w", err)
-	}
-
-	// The pool context degrades to zero values when the object is
-	// missing, the same way metrics degrade.
-	var wp warmPool
-	var poolYAML, tplYAML string
-	if raw, err := kubectlOutput("get", "sandboxwarmpool", WarmPool, "-o", "json"); err == nil {
-		if json.Unmarshal(raw, &wp) == nil {
-			poolYAML = cleanManifestYAML(raw)
+	var (
+		sb        sandboxList
+		pl        podList
+		pool      Pool
+		templates = map[string]json.RawMessage{}
+	)
+	for _, item := range list.Items {
+		var meta kindMeta
+		if err := json.Unmarshal(item, &meta); err != nil {
+			continue
+		}
+		switch meta.Kind {
+		case "Sandbox":
+			sb.Items = append(sb.Items, item)
+		case "Pod":
+			pl.Items = append(pl.Items, item)
+		case "SandboxWarmPool":
+			if meta.Metadata.Name != WarmPool {
+				continue
+			}
+			var wp warmPool
+			if json.Unmarshal(item, &wp) == nil {
+				pool = Pool{
+					Name:           wp.Metadata.Name,
+					Template:       wp.Spec.Template.Name,
+					Ready:          wp.Status.ReadyReplicas,
+					Desired:        wp.Spec.Replicas,
+					UpdateStrategy: wp.Spec.UpdateStrategy.Type,
+					ManifestYAML:   cleanManifestYAML(item),
+				}
+			}
+		case "SandboxTemplate":
+			templates[meta.Metadata.Name] = item
 		}
 	}
-	if wp.Spec.Template.Name != "" {
-		if raw, err := kubectlOutput("get", "sandboxtemplate", wp.Spec.Template.Name, "-o", "json"); err == nil {
-			tplYAML = cleanManifestYAML(raw)
-		}
+	if rawTpl, ok := templates[pool.Template]; ok {
+		pool.TemplateYAML = cleanManifestYAML(rawTpl)
 	}
-	pool = Pool{Name: wp.Metadata.Name, Template: wp.Spec.Template.Name,
-		Ready: wp.Status.ReadyReplicas, Desired: wp.Spec.Replicas,
-		UpdateStrategy: wp.Spec.UpdateStrategy.Type,
-		ManifestYAML:   poolYAML, TemplateYAML: tplYAML}
+	return sb, pl, pool, nil
+}
+
+// Fetch reads cluster objects and pod metrics concurrently in two
+// kubectl calls. Metrics degrade gracefully when unavailable.
+func Fetch() ([]Sandbox, Pool, bool, error) {
+	var (
+		resRaw, metRaw []byte
+		resErr, metErr error
+		wg             sync.WaitGroup
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		resRaw, resErr = runKubectl(nil, "get", "sandboxes,pods,sandboxwarmpools,sandboxtemplates", "-o", "json")
+	}()
+	go func() {
+		defer wg.Done()
+		metRaw, metErr = runKubectl(nil, "get", "--raw",
+			"/apis/metrics.k8s.io/v1beta1/namespaces/"+Namespace+"/pods")
+	}()
+	wg.Wait()
+
+	if resErr != nil {
+		return nil, Pool{}, false, resErr
+	}
+	sb, pl, pool, err := parseClusterList(resRaw)
+	if err != nil {
+		return nil, Pool{}, false, err
+	}
 
 	var ml *podMetricsList
-	raw, merr := kubectlOutput("get", "--raw",
-		"/apis/metrics.k8s.io/v1beta1/namespaces/"+Namespace+"/pods")
-	if merr == nil {
+	if metErr == nil {
 		var list podMetricsList
-		if jerr := json.Unmarshal(raw, &list); jerr == nil {
+		if json.Unmarshal(metRaw, &list) == nil {
 			ml = &list
 		}
 	}
-
-	boxes, err = buildSandboxes(sb, pl, ml)
+	boxes, err := buildSandboxes(sb, pl, ml)
 	return boxes, pool, ml != nil, err
 }
 
-func kubectlOutput(args ...string) ([]byte, error) {
-	return runKubectl(nil, args...)
-}
-
-// runKubectl shells out to kubectl, optionally piping stdin.
 func runKubectl(stdin []byte, args ...string) ([]byte, error) {
 	full := append([]string{"--context", KubeContext, "-n", Namespace}, args...)
 	cmd := exec.Command("kubectl", full...)
@@ -339,8 +371,8 @@ func parseTime(s string) time.Time {
 	return ts
 }
 
-// cleanManifestYAML converts a Kubernetes JSON object into readable
-// YAML with noisy server-side fields stripped.
+// cleanManifestYAML formats a Kubernetes JSON object as readable YAML
+// with server-side boilerplate removed.
 func cleanManifestYAML(raw []byte) string {
 	var obj map[string]any
 	if err := json.Unmarshal(raw, &obj); err != nil {
@@ -367,23 +399,18 @@ func cleanManifestYAML(raw []byte) string {
 	return strings.TrimRight(buf.String(), "\n")
 }
 
-// Claim claims a warm sandbox from the pool and returns the claim name.
-// Deleting the claim destroys the sandbox and the pool restocks.
 func Claim() (string, error) {
-	name := claimName()
+	name := fmt.Sprintf("dash-claim-%d", time.Now().UnixNano())
 	if _, err := runKubectl([]byte(claimManifest(name)), "apply", "-f", "-"); err != nil {
 		return "", err
 	}
 	return name, nil
 }
 
-// WaitForClaim polls until the claim adopts a warm sandbox and returns
-// its pod name, so the caller can start bash before the user asks for
-// it. Warm adoption is near-instant; the timeout covers a cold refill.
 func WaitForClaim(name string, timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		out, err := kubectlOutput("get", "sandboxclaim", name,
+		out, err := runKubectl(nil, "get", "sandboxclaim", name,
 			"-o", "jsonpath={.status.sandbox.name}")
 		if err == nil {
 			if pod := strings.TrimSpace(string(out)); pod != "" {
@@ -395,18 +422,11 @@ func WaitForClaim(name string, timeout time.Duration) (string, error) {
 	return "", fmt.Errorf("claim %s adopted no sandbox within %s", name, timeout)
 }
 
-// DeleteClaim deletes a SandboxClaim, tearing its sandbox down.
 func DeleteClaim(name string) error {
-	_, err := kubectlOutput("delete", "sandboxclaim", name)
+	_, err := runKubectl(nil, "delete", "sandboxclaim", name)
 	return err
 }
 
-func claimName() string {
-	return fmt.Sprintf("dash-claim-%d", time.Now().UnixNano())
-}
-
-// claimManifest renders the SandboxClaim object Claim applies. Same
-// shape as demo/claim.yaml, with a unique name.
 func claimManifest(name string) string {
 	return fmt.Sprintf(`apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxClaim
@@ -421,9 +441,6 @@ spec:
 `, name, Namespace, WarmPool)
 }
 
-// cpuMillicores parses the cpu quantity units this demo produces: plain
-// cores, "m" millicores from the manifests, and "n" nanocores from the
-// metrics API.
 func cpuMillicores(q string) (int64, error) {
 	s := strings.TrimSpace(q)
 	if s == "" {
@@ -443,8 +460,6 @@ func cpuMillicores(q string) (int64, error) {
 	return v * mult / div, nil
 }
 
-// memMiB parses the memory quantity units this demo produces: plain bytes,
-// "Ki", "Mi", and "Gi".
 func memMiB(q string) (int64, error) {
 	s := strings.TrimSpace(q)
 	if s == "" {

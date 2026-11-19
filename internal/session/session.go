@@ -1,11 +1,5 @@
-// Package session owns the terminal sessions that outlive navigation.
-//
-// One tmux session per sandbox pod, named after the pod. The session's
-// single pane runs the kubectl exec tunnel into the sandbox, so detaching
-// the dashboard leaves bash running: the tmux server holds the kubectl
-// process, and the kubectl process holds the pod's exec channel open.
-// When the pod dies the pane command exits and tmux reaps the session,
-// so sessions never outlive their sandbox.
+// Package session manages one detached tmux session per sandbox pod
+// running kubectl exec into bash, so sessions outlive dashboard exit.
 package session
 
 import (
@@ -18,14 +12,12 @@ import (
 	"github.com/tmih06/nightshift/internal/cluster"
 )
 
-// Name returns the tmux session name for a sandbox pod.
+const prefix = "sbx-"
+
 func Name(pod string) string {
-	return "sbx-" + pod
+	return prefix + pod
 }
 
-// paneCommand is the shell command a session's pane runs. It is a single
-// argument to tmux, and pod names cannot contain spaces, so no quoting
-// is needed.
 func paneCommand(pod string) string {
 	return strings.Join([]string{
 		"kubectl", "--context", cluster.KubeContext,
@@ -33,8 +25,6 @@ func paneCommand(pod string) string {
 	}, " ")
 }
 
-// Ensure creates the session for a pod if it does not exist, at a size
-// large enough for the shell pane. Resize adapts it to the pane.
 func Ensure(pod string) error {
 	if Has(pod) {
 		return nil
@@ -50,26 +40,19 @@ func Ensure(pod string) error {
 	return nil
 }
 
-// Has reports whether the pod has a live session.
 func Has(pod string) bool {
 	return exec.Command("tmux", "has-session", "-t", Name(pod)).Run() == nil
 }
 
-// Attach returns the command that attaches to the pod's session, the
-// fullscreen escape hatch. Detach with the tmux prefix, C-b d.
 func Attach(pod string) *exec.Cmd {
 	return exec.Command("tmux", "attach-session", "-t", Name(pod))
 }
 
-// Resize matches the session's window to the shell pane, so the pane
-// output wraps where the dashboard shows it.
 func Resize(pod string, w, h int) error {
 	return exec.Command("tmux", "resize-window", "-t", Name(pod),
 		"-x", strconv.Itoa(w), "-y", strconv.Itoa(h)).Run()
 }
 
-// Capture returns the session's visible pane content, wrapped lines
-// joined, trailing blank rows trimmed so the view can bottom-align.
 func Capture(pod string) ([]string, error) {
 	out, err := exec.Command("tmux", "capture-pane", "-p", "-J", "-t", Name(pod)).Output()
 	if err != nil {
@@ -82,20 +65,15 @@ func Capture(pod string) ([]string, error) {
 	return lines, nil
 }
 
-// Key is one input event for a session pane: literal text or a named
-// key such as Enter.
 type Key struct {
 	Text string // literal, sent with -l
 	Name string // tmux key name
 }
 
-// SendBatch delivers keys in order, merging consecutive literals into
-// one send-keys call, so fast typing costs one spawn instead of one per
-// keystroke.
+// SendBatch merges consecutive literal keys into one tmux send-keys call.
 func SendBatch(pod string, keys []Key) error {
 	for _, group := range sendGroups(keys) {
-		args := []string{"send-keys", "-t", Name(pod)}
-		args = append(args, group...)
+		args := append([]string{"send-keys", "-t", Name(pod)}, group...)
 		if err := exec.Command("tmux", args...).Run(); err != nil {
 			return fmt.Errorf("tmux send-keys: %w", err)
 		}
@@ -103,8 +81,6 @@ func SendBatch(pod string, keys []Key) error {
 	return nil
 }
 
-// sendGroups turns keys into send-keys argument groups. Consecutive
-// literals merge into one -l group; a named key is its own group.
 func sendGroups(keys []Key) [][]string {
 	var groups [][]string
 	var lit strings.Builder
@@ -126,22 +102,15 @@ func sendGroups(keys []Key) [][]string {
 	return groups
 }
 
-// Existing returns the set of the given pods that have a live session,
-// using one tmux call.
-func Existing(pods []string) map[string]bool {
+// Live returns the set of pod names that currently have a live tmux session.
+func Live() map[string]bool {
 	live := map[string]bool{}
 	out, err := exec.Command("tmux", "list-sessions", "-F", "#{session_name}").Output()
 	if err != nil {
 		return live
 	}
-	names := map[string]bool{}
 	for _, line := range strings.Split(string(out), "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			names[line] = true
-		}
-	}
-	for _, pod := range pods {
-		if names[Name(pod)] {
+		if pod, ok := strings.CutPrefix(strings.TrimSpace(line), prefix); ok && pod != "" {
 			live[pod] = true
 		}
 	}

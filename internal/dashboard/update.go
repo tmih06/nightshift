@@ -8,12 +8,13 @@ import (
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if _, transient := msg.(tickMsg); transient {
-		m.expireStatus() // each fleet refresh ages transient messages
+		m.expireStatus()
 	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		if m.isWarmSelected() {
+			m.refreshInspectCache()
 			m.scrollInspect(0)
 		}
 	case tea.KeyMsg:
@@ -32,10 +33,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case shellTickMsg:
 		cmds := []tea.Cmd{shellTickCmd()}
 		if b := m.selectedBox(); b != nil && m.sessions[b.Name] && b.Phase == "Running" {
-			w, h := m.shellPaneSize()
-			resize := w != m.shellW || h != m.shellH
-			m.shellW, m.shellH = w, h
-			cmds = append(cmds, captureCmd(b.Name, w, h, resize))
+			cmds = append(cmds, m.captureSelected(b.Name))
 		}
 		return m, tea.Batch(cmds...)
 	case shellMsg:
@@ -50,16 +48,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		prev := m.selectedIndex()
 		m.boxes, m.pool, m.sessions = msg.boxes, msg.pool, msg.sessions
 		m.metricsOK, m.err, m.loaded = msg.metricsOK, msg.err, true
+		m.dataRev++
 		m.appendHistory()
-		// The selected pod may be gone (destroyed) or the fleet may
-		// have arrived for the first time: snap to the nearest entry.
 		if m.selectedBox() == nil && len(m.boxes) > 0 {
 			m.selectPod(m.boxes[clamp(prev, 0, len(m.boxes)-1)].Name)
 		} else {
 			m.selectPod(m.selected)
 		}
-		// A claim whose bash was pre-created: select it while staying in
-		// navigation so enter attaches with no wait.
 		if m.pendingPod != "" {
 			for _, b := range m.boxes {
 				if b.Name != m.pendingPod {
@@ -68,9 +63,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.selectPod(b.Name)
 				m.pendingPod = ""
 				if m.sessions[b.Name] {
-					// The session is pre-created so enter attaches with no
-					// wait, but the dashboard stays in navigation: only
-					// enter drops into the shell.
 					m.flash("bash ready in " + b.Name + " — enter attaches")
 					return m, fetchCmd()
 				}
@@ -113,10 +105,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.focus = focusShell
 			m.prefix = false
 			m.flash("bash ready — C-b q or click sidebar to leave")
-			w, h := m.shellPaneSize()
-			resize := w != m.shellW || h != m.shellH
-			m.shellW, m.shellH = w, h
-			return m, captureCmd(b.Name, w, h, resize)
+			return m, m.captureSelected(b.Name)
 		}
 		return m, nil
 	case fullReadyMsg:
@@ -141,17 +130,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pending = nil
 			return m, nil
 		}
-		cmds := []tea.Cmd{}
+		var cmds []tea.Cmd
 		if cmd := m.startDrain(); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
-		// Capture right after the input landed, so the echo comes back
-		// in milliseconds instead of waiting for the next shell tick.
 		if b := m.selectedBox(); b != nil && m.sessions[b.Name] && b.Phase == "Running" {
-			w, h := m.shellPaneSize()
-			resize := w != m.shellW || h != m.shellH
-			m.shellW, m.shellH = w, h
-			cmds = append(cmds, captureCmd(b.Name, w, h, resize))
+			cmds = append(cmds, m.captureSelected(b.Name))
 		}
 		if len(cmds) == 0 {
 			return m, nil
