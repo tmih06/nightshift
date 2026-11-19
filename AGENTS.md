@@ -4,15 +4,15 @@ This directory holds the demo for kubernetes-sigs/agent-sandbox. The demo runs o
 
 ## What lives here
 
-- `demo-warmpool.yaml` creates the namespace `sandbox-demo` and the standing pool: one `SandboxTemplate` and one `SandboxWarmPool` that keeps two warm sandboxes, each pod capped at 500m CPU and 256Mi memory.
-- `demo-claim.yaml` claims one sandbox from the pool. Apply it, work, then delete it.
-- `sbx.sh` wraps that loop in one command. It is installed as `sbx` through a symlink in `~/.local/bin`.
+- `demo/warmpool.yaml` creates the namespace `sandbox-demo` and the standing pool: one `SandboxTemplate` and one `SandboxWarmPool` that keeps two warm sandboxes, each pod capped at 500m CPU and 256Mi memory.
+- `demo/claim.yaml` claims one sandbox from the pool. Apply it, work, then delete it.
+- `demo/sbx.sh` wraps that loop in one command. It is installed as `sbx` through a symlink in `~/.local/bin`.
 - `ARCHITECTURE.md` explains how the parts connect, with diagrams.
 - The Go module holds a Bubble Tea dashboard for the sandboxes. Run `go run .` to open it, `go run . -once` to print one frame. It is pinned to `go 1.27.4`, the `go` command downloads that toolchain on demand, and the repo needs no other Go config.
 
 ## Verify
 
-- Run `bash -n sbx.sh` to check that the script parses.
+- Run `bash -n demo/sbx.sh` to check that the script parses.
 - With the cluster up, run `SBX_NO_EXEC=1 sbx` to check the claim and destroy loop end to end. The script removes the claim it creates.
 - Run `go test ./...` and `go vet ./...` to check the Go module, and `go run . -once` to print one dashboard frame against the live cluster. Build with `go build -o <path> .` to keep the binary out of the repo.
 

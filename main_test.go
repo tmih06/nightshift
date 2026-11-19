@@ -8,7 +8,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// The data shape of demo-warmpool.yaml, the subset the tests pin. The file
+// The data shape of demo/warmpool.yaml, the subset the tests pin. The file
 // holds three documents; the SandboxTemplate is the only one that defines
 // sandbox pods, through spec.podTemplate.spec.containers. Each container
 // carries a name and a resource budget of cpu and memory quantity strings,
@@ -48,9 +48,9 @@ type quantities struct {
 
 func loadSandboxTemplate(t *testing.T) sandboxTemplate {
 	t.Helper()
-	f, err := os.Open("demo-warmpool.yaml")
+	f, err := os.Open("demo/warmpool.yaml")
 	if err != nil {
-		t.Fatalf("open demo-warmpool.yaml: %v", err)
+		t.Fatalf("open demo/warmpool.yaml: %v", err)
 	}
 	defer f.Close()
 
@@ -76,7 +76,7 @@ func loadSandboxTemplate(t *testing.T) sandboxTemplate {
 		}
 		return tpl
 	}
-	t.Fatal("no SandboxTemplate document in demo-warmpool.yaml")
+	t.Fatal("no SandboxTemplate document in demo/warmpool.yaml")
 	return sandboxTemplate{}
 }
 

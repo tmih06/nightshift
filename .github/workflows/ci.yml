@@ -18,9 +18,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Shellcheck
-        run: shellcheck sbx.sh
+        run: shellcheck demo/sbx.sh
       - name: Yamllint
-        run: pipx run yamllint demo-warmpool.yaml demo-claim.yaml
+        run: pipx run yamllint demo/
       - name: Markdownlint
         run: npx --yes markdownlint-cli2 "*.md"
       - name: Actionlint
@@ -76,7 +76,7 @@ jobs:
           kubectl -n agent-sandbox-system wait --for=condition=Available deploy/agent-sandbox-controller --timeout=180s
       - name: Warm the pool
         run: |
-          kubectl apply -f demo-warmpool.yaml
+          kubectl apply -f demo/warmpool.yaml
           for _ in $(seq 1 60); do
             ready=$(kubectl -n sandbox-demo get sandboxwarmpool agent-pool -o jsonpath='{.status.readyReplicas}')
             [ "$ready" = "2" ] && exit 0
@@ -86,11 +86,11 @@ jobs:
           exit 1
       - name: Run the claim loop twice
         run: |
-          SBX_NO_EXEC=1 ./sbx.sh
-          SBX_NO_EXEC=1 ./sbx.sh
+          SBX_NO_EXEC=1 ./demo/sbx.sh
+          SBX_NO_EXEC=1 ./demo/sbx.sh
       - name: Prove bash runs inside a claimed sandbox
         run: |
-          kubectl -n sandbox-demo apply -f demo-claim.yaml
+          kubectl -n sandbox-demo apply -f demo/claim.yaml
           SBX=""
           for _ in $(seq 1 30); do
             SBX=$(kubectl -n sandbox-demo get sandboxclaim my-agent -o jsonpath='{.status.sandbox.name}')

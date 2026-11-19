@@ -12,11 +12,11 @@ real object you can look at with k9s (`:sbt` `:swp` `:sbc` `:sbx`).
 │   The controller is the ONLY thing that ever creates/deletes anything.      │
 │   You never touch Pods or PVCs directly — you just declare intent in YAML.  │
 ├────────────────────────────────────────────────────────────────────────────┤
-│ LAYER 2 — THE FACTORY (standing, applied once: demo-warmpool.yaml)          │
+│ LAYER 2 — THE FACTORY (standing, applied once: demo/warmpool.yaml)          │
 │   SandboxTemplate = the blueprint (what a sandbox looks like)               │
 │   SandboxWarmPool = the inventory manager (always keep 2 warm on the shelf) │
 ├────────────────────────────────────────────────────────────────────────────┤
-│ LAYER 3 — THE WORK UNIT (ephemeral, every cycle: demo-claim.yaml)           │
+│ LAYER 3 — THE WORK UNIT (ephemeral, every cycle: demo/claim.yaml)           │
 │   SandboxClaim → adopts one warm Sandbox → its Pod is where you work.       │
 │   Delete the claim → sandbox+pod destroyed → factory restocks itself.      │
 └────────────────────────────────────────────────────────────────────────────┘
@@ -32,7 +32,7 @@ real object you can look at with k9s (`:sbt` `:swp` `:sbc` `:sbx`).
                  ╚═══════════════════╦═════════════════════════════════╝
                                      ▲  reconciles everything, forever
                                      │
-  YOU ── apply demo-warmpool.yaml (ONCE)
+  YOU ── apply demo/warmpool.yaml (ONCE)
     │
     ├─►  SandboxTemplate "agent-bash-template"      ← the BLUEPRINT
     │      image: debian:12-slim, runs `sleep infinity`, has bash, capped at 500m CPU and 256Mi
@@ -50,7 +50,7 @@ real object you can look at with k9s (`:sbt` `:swp` `:sbc` `:sbx`).
 ## The claim cycle (your repeat loop)
 
 ```text
-  YOU ── apply demo-claim.yaml (EVERY CYCLE)
+  YOU ── apply demo/claim.yaml (EVERY CYCLE)
     │
     └─►  SandboxClaim "my-agent"    (lifecycle.shutdownPolicy: Delete)
            │
@@ -64,12 +64,12 @@ real object you can look at with k9s (`:sbt` `:swp` `:sbc` `:sbx`).
          Pod ──►   kubectl exec -it agent-pool-wklxl -- bash
                    ^^^^^^^^^^^^^^^^^ your work happens in here ^^^^^^^^^
 
-  YOU ── kubectl delete -f demo-claim.yaml
+  YOU ── kubectl delete -f demo/claim.yaml
     │
     └─►  sandbox + pod destroyed instantly (shutdownPolicy: Delete)
          factory restocks: builds a NEW warm standby → back to 2 on the shelf
     │
-    └────────────── repeat from "apply demo-claim.yaml" ──────────────┘
+    └────────────── repeat from "apply demo/claim.yaml" ──────────────┘
 ```
 
 ## Who creates what
@@ -89,20 +89,20 @@ real object you can look at with k9s (`:sbt` `:swp` `:sbc` `:sbx`).
 | File                             | Creates                          | Applied   |
 |----------------------------------|---------------------------------------------|
 | `sandbox-with-extensions.yaml` (upstream release, v1.0.11) | 4 CRDs + controller | once, forever |
-| `demo-warmpool.yaml`             | Namespace + SandboxTemplate + SandboxWarmPool| once      |
-| `demo-claim.yaml`                | SandboxClaim                     | per cycle |
+| `demo/warmpool.yaml`             | Namespace + SandboxTemplate + SandboxWarmPool| once      |
+| `demo/claim.yaml`                | SandboxClaim                     | per cycle |
 
 ## Same thing, mermaid version
 
 ```mermaid
 flowchart TB
-  subgraph standing["STANDING — demo-warmpool.yaml (apply once)"]
+  subgraph standing["STANDING — demo/warmpool.yaml (apply once)"]
     T["SandboxTemplate<br/>agent-bash-template<br/>(blueprint)"]
     P["SandboxWarmPool agent-pool<br/>replicas: 2"]
     W1["warm sandbox<br/>agent-pool-b4tf2"]
     W2["warm sandbox<br/>agent-pool-c9sqc"]
   end
-  subgraph cycle["PER CYCLE — demo-claim.yaml (apply/delete)"]
+  subgraph cycle["PER CYCLE — demo/claim.yaml (apply/delete)"]
     C["SandboxClaim my-agent<br/>shutdownPolicy: Delete"]
     S["claimed sandbox<br/>owner: my-agent"]
     POD["Pod<br/>kubectl exec -- bash"]
