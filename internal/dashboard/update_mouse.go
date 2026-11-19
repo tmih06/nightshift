@@ -71,10 +71,11 @@ func (m model) applyDrag(x, y int) model {
 	return m
 }
 
-// applyClick routes focus by region: clicking the shell pane focuses
-// it, clicking a left-pane entry selects it. It runs only while the
-// dashboard already has focus, so nothing here can steal the shell
-// from bash.
+// applyClick routes by region: a click inside the shell pane focuses
+// it, a click on a sidebar entry selects that entry. Focus only moves
+// into the shell on an explicit click inside its pane, never on the
+// way to somewhere else, and a sidebar click never drags focus into
+// the shell.
 func (m model) applyClick(x, y int) model {
 	if m.inShellPane(x, y) {
 		m.shellFocus = true
@@ -109,6 +110,11 @@ func (m model) clickLeftPane(x, y int) model {
 			return m
 		}
 	}
+	// A click that lands on the sidebar leaves shell focus off: the
+	// user chose the sidebar, and shell focus only returns through the
+	// shell pane itself or enter.
+	m.shellFocus = false
+	m.prefix = false
 	_, targets := m.leftLines()
 	if idx, ok := targets[y-contentStartY]; ok && idx < len(m.boxes) {
 		m.selected = m.boxes[idx].Name

@@ -232,6 +232,11 @@ func (m model) headerUsageLines() []string {
 	if b == nil {
 		return []string{dim("—")}
 	}
+	// A warm sandbox has no live session or usage story to tell: show
+	// what it is made of instead, its image, command, and budget.
+	if b.OwnerKind != "SandboxClaim" {
+		return m.specLines(b)
+	}
 	h := m.hist[b.Name]
 	inner := max(m.layout().usageW-4, 1)
 	var lines []string
@@ -249,6 +254,37 @@ func (m model) headerUsageLines() []string {
 		lines = append(lines, usageLines(row.label, row.known, row.usage, row.limit, row.unit, row.hist, inner)...)
 	}
 	return lines
+}
+
+// specLines renders the warm sandbox's configuration as the table the
+// usage box uses for claimed sandboxes: image, command, restart
+// policy, and the request/limit budget, aligned columns.
+func (m model) specLines(b *cluster.Sandbox) []string {
+	cpu := fmt.Sprintf("%d/%dm", b.CPUReqMC, b.CPULimitMC)
+	mem := fmt.Sprintf("%dMi/%dMi", b.MemReqMiB, b.MemLimitMiB)
+	return []string{
+		fmt.Sprintf(" %-4s %s %s %s", dim("image"), truncate(b.Image, 26), dim("rc"), b.RestartPolicy),
+		fmt.Sprintf(" %-4s %s", dim("cmd"), truncate(b.Command, 32)),
+		fmt.Sprintf(" %-4s %-18s %s", dim("CPU"), cpu, dim("req/lim")),
+		fmt.Sprintf(" %-4s %-18s %s", dim("MEM"), mem, dim("req/lim")),
+	}
+}
+
+// poolLines renders the warm pool box that replaces the shell pane for
+// warm sandboxes: which pool and template produced them, how many are
+// standing, and what claiming one does.
+func (m model) poolLines() []string {
+	p := m.pool
+	rows := []string{
+		" " + nameStyle.Render(p.Name) + dim(" · warm pool"),
+		fmt.Sprintf(" %-8s %s", dim("template"), truncate(p.Template, 30)),
+		fmt.Sprintf(" %-8s %d/%d", dim("ready"), p.Ready, p.Desired),
+		fmt.Sprintf(" %-8s %s", dim("update"), p.UpdateStrategy),
+	}
+	if p.Name == "" {
+		rows = []string{" " + dim("pool unavailable")}
+	}
+	return append(rows, "", " "+dim("[c] claims a warm sandbox and starts its bash"))
 }
 
 // usageLines renders one metric's group: the table value row, then the
@@ -519,11 +555,17 @@ func (m model) View() string {
 	infoBox := pane(rightPanelStyle, m.headerInfoLines(), l.infoW, l.headerH)
 	usageBox := pane(rightPanelStyle, m.headerUsageLines(), l.usageW, l.headerH)
 	headerRow := lipgloss.JoinHorizontal(lipgloss.Top, infoBox, usageBox)
-	shellStyle := rightPanelStyle
-	if m.shellFocus {
-		shellStyle = shellFocusStyle
+	var lowerPane string
+	if b := m.selectedBox(); b != nil && b.OwnerKind != "SandboxClaim" {
+		lowerPane = pane(rightPanelStyle, m.poolLines(), l.colW, l.shellH)
+	} else {
+		shellStyle := rightPanelStyle
+		if m.shellFocus {
+			shellStyle = shellFocusStyle
+		}
+		lowerPane = pane(shellStyle, m.shellLinesView(), l.colW, l.shellH)
 	}
-	shell := pane(shellStyle, m.shellLinesView(), l.colW, l.shellH)
+	shell := lowerPane
 	rightCol := lipgloss.JoinVertical(lipgloss.Left, headerRow, shell)
 
 	var body string

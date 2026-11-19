@@ -37,6 +37,23 @@ type Sandbox struct {
 	MemLimitMiB int64 // container memory limit, MiB
 	CPUUsageMC  int64 // live cpu usage, millicores
 	MemUsageMiB int64 // live memory usage, MiB
+
+	// Pod spec, shown for warm sandboxes where there is no live
+	// session or usage to display.
+	Image         string
+	Command       string // container command, joined
+	RestartPolicy string
+	CPUReqMC      int64 // container cpu request, millicores
+	MemReqMiB     int64 // container memory request, MiB
+}
+
+// Pool is the warm pool context behind the fleet: what produced the
+// warm sandboxes and how many are standing.
+type Pool struct {
+	Name           string
+	Template       string
+	Ready, Desired int
+	UpdateStrategy string
 }
 
 type ownerReference struct {
@@ -57,8 +74,11 @@ type sandboxList struct {
 }
 
 type podContainer struct {
+	Image     string   `json:"image"`
+	Command   []string `json:"command"`
 	Resources struct {
-		Limits map[string]string `json:"limits"`
+		Requests map[string]string `json:"requests"`
+		Limits   map[string]string `json:"limits"`
 	} `json:"resources"`
 }
 
@@ -68,10 +88,29 @@ type podItem struct {
 		Created string `json:"creationTimestamp"`
 	} `json:"metadata"`
 	Spec struct {
-		Containers []podContainer `json:"containers"`
+		RestartPolicy string         `json:"restartPolicy"`
+		Containers    []podContainer `json:"containers"`
 	} `json:"spec"`
 	Status struct {
 		Phase string `json:"phase"`
+	} `json:"status"`
+}
+
+type warmPool struct {
+	Metadata struct {
+		Name string `json:"name"`
+	} `json:"metadata"`
+	Spec struct {
+		Replicas int `json:"replicas"`
+		Template struct {
+			Name string `json:"name"`
+		} `json:"sandboxTemplateRef"`
+		UpdateStrategy struct {
+			Type string `json:"type"`
+		} `json:"updateStrategy"`
+	} `json:"spec"`
+	Status struct {
+		ReadyReplicas int `json:"readyReplicas"`
 	} `json:"status"`
 }
 
@@ -129,10 +168,13 @@ func buildSandboxes(sb sandboxList, pl podList, ml *podMetricsList) ([]Sandbox, 
 		}
 		if p := podByName[item.Metadata.Name]; p != nil {
 			b.Phase = p.Status.Phase
+			b.RestartPolicy = p.Spec.RestartPolicy
 			if ts := parseTime(p.Metadata.Created); !ts.IsZero() {
 				b.Created = ts
 			}
 			for _, c := range p.Spec.Containers {
+				b.Image = c.Image
+				b.Command = strings.Join(c.Command, " ")
 				if q, ok := c.Resources.Limits["cpu"]; ok {
 					v, err := cpuMillicores(q)
 					if err != nil {
@@ -146,6 +188,20 @@ func buildSandboxes(sb sandboxList, pl podList, ml *podMetricsList) ([]Sandbox, 
 						return nil, err
 					}
 					b.MemLimitMiB += v
+				}
+				if q, ok := c.Resources.Requests["cpu"]; ok {
+					v, err := cpuMillicores(q)
+					if err != nil {
+						return nil, err
+					}
+					b.CPUReqMC += v
+				}
+				if q, ok := c.Resources.Requests["memory"]; ok {
+					v, err := memMiB(q)
+					if err != nil {
+						return nil, err
+					}
+					b.MemReqMiB += v
 				}
 			}
 		}
@@ -176,24 +232,34 @@ func buildSandboxes(sb sandboxList, pl podList, ml *podMetricsList) ([]Sandbox, 
 
 // Fetch reads the cluster once. A metrics failure degrades to budgets
 // without usage rather than failing the dashboard.
-func Fetch() (boxes []Sandbox, metricsOK bool, err error) {
+func Fetch() (boxes []Sandbox, pool Pool, metricsOK bool, err error) {
 	raw, err := kubectlOutput("get", "sandboxes", "-o", "json")
 	if err != nil {
-		return nil, false, err
+		return nil, pool, false, err
 	}
 	var sb sandboxList
 	if err := json.Unmarshal(raw, &sb); err != nil {
-		return nil, false, fmt.Errorf("parse sandboxes: %w", err)
+		return nil, pool, false, fmt.Errorf("parse sandboxes: %w", err)
 	}
 
 	raw, err = kubectlOutput("get", "pods", "-o", "json")
 	if err != nil {
-		return nil, false, err
+		return nil, pool, false, err
 	}
 	var pl podList
 	if err := json.Unmarshal(raw, &pl); err != nil {
-		return nil, false, fmt.Errorf("parse pods: %w", err)
+		return nil, pool, false, fmt.Errorf("parse pods: %w", err)
 	}
+
+	// The pool context degrades to zero values when the object is
+	// missing, the same way metrics degrade.
+	var wp warmPool
+	if raw, err := kubectlOutput("get", "sandboxwarmpool", WarmPool, "-o", "json"); err == nil {
+		_ = json.Unmarshal(raw, &wp)
+	}
+	pool = Pool{Name: wp.Metadata.Name, Template: wp.Spec.Template.Name,
+		Ready: wp.Status.ReadyReplicas, Desired: wp.Spec.Replicas,
+		UpdateStrategy: wp.Spec.UpdateStrategy.Type}
 
 	var ml *podMetricsList
 	raw, merr := kubectlOutput("get", "--raw",
@@ -206,7 +272,7 @@ func Fetch() (boxes []Sandbox, metricsOK bool, err error) {
 	}
 
 	boxes, err = buildSandboxes(sb, pl, ml)
-	return boxes, ml != nil, err
+	return boxes, pool, ml != nil, err
 }
 
 func kubectlOutput(args ...string) ([]byte, error) {
