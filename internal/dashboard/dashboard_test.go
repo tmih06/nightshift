@@ -18,16 +18,22 @@ func testBoxes() []cluster.Sandbox {
 	created := time.Date(2026, 11, 19, 8, 0, 0, 0, time.UTC)
 	return []cluster.Sandbox{
 		{Name: "agent-pool-5ss7w", OwnerKind: "SandboxWarmPool", Owner: "agent-pool",
-			Phase: "Running", Created: created, CPULimitMC: 500, MemLimitMiB: 256, CPUUsageMC: 2, MemUsageMiB: 6},
+			Phase: "Running", Created: created, CPULimitMC: 500, MemLimitMiB: 256, CPUUsageMC: 2, MemUsageMiB: 6,
+			Image: "debian:12-slim", Command: "/bin/bash -c sleep infinity", RestartPolicy: "OnFailure",
+			CPUReqMC: 100, MemReqMiB: 128},
 		{Name: "agent-pool-lqbmx", OwnerKind: "SandboxWarmPool", Owner: "agent-pool",
-			Phase: "Running", Created: created, CPULimitMC: 500, MemLimitMiB: 256},
+			Phase: "Running", Created: created, CPULimitMC: 500, MemLimitMiB: 256,
+			Image: "debian:12-slim", Command: "/bin/bash -c sleep infinity", RestartPolicy: "OnFailure",
+			CPUReqMC: 100, MemReqMiB: 128},
 		{Name: "agent-pool-bkl2p", OwnerKind: "SandboxClaim", Owner: "my-agent",
-			Phase: "Running", Created: created, CPULimitMC: 500, MemLimitMiB: 256},
+			Phase: "Running", Created: created, CPULimitMC: 500, MemLimitMiB: 256, CPUUsageMC: 2, MemUsageMiB: 6},
 	}
 }
 
 func baseModel() model {
 	return model{boxes: testBoxes(), selected: "agent-pool-5ss7w",
+		pool: cluster.Pool{Name: "agent-pool", Template: "agent-bash-template",
+			Ready: 2, Desired: 2, UpdateStrategy: "Recreate"},
 		sessions: map[string]bool{}, metricsOK: true,
 		loaded: true, width: 100, height: 30}
 }
@@ -349,8 +355,11 @@ func TestViewFrame(t *testing.T) {
 		"owner agent-pool",
 		"Running",
 		"tmux live",
-		"2m / 500m",
-		"6Mi / 256Mi",
+		"debian:12-slim",
+		"sleep infinity",
+		"100/500m",
+		"128Mi/256Mi",
+		"OnFailure",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("view missing %q", want)
@@ -381,13 +390,27 @@ func TestViewFrame(t *testing.T) {
 	_ = closing
 
 	// The inspect pane follows the selection: the claimed sandbox shows
-	// its own owner, and the untracked warm pod shows no session.
+	// its usage and shell pane, the warm pod shows its spec and the
+	// pool box instead.
 	m.selected = "agent-pool-bkl2p"
 	g := m.View()
-	for _, want := range []string{"· claimed", "my-agent", "tmux off", "0m / 500m"} {
+	for _, want := range []string{"· claimed", "my-agent", "tmux off", "2m / 500m"} {
 		if !strings.Contains(g, want) {
 			t.Errorf("claimed inspect missing %q", want)
 		}
+	}
+	if !strings.Contains(g, "no session — claim with c, or enter on a claimed sandbox") {
+		t.Error("claimed sandbox must show the shell pane")
+	}
+	m.selected = "agent-pool-5ss7w"
+	g = m.View()
+	for _, want := range []string{"agent-pool · warm pool", "agent-bash-template", "2/2", "Recreate"} {
+		if !strings.Contains(g, want) {
+			t.Errorf("warm pool box missing %q", want)
+		}
+	}
+	if strings.Contains(g, "no session — claim with") || strings.Contains(g, "bash — click here") {
+		t.Error("a warm sandbox must not show the shell pane")
 	}
 	m.selected = "agent-pool-lqbmx"
 	if g := m.View(); !strings.Contains(g, "tmux off") {
@@ -577,6 +600,26 @@ func TestClickFocusesShellPane(t *testing.T) {
 	if newM.(model).shellFocus {
 		t.Error("click on a left-pane entry must return to navigation")
 	}
+
+	// From inside the shell, a C-b q escape followed by sidebar clicks
+	// navigates; and a direct sidebar click while focused never leaves
+	// focus on the shell.
+	focused := baseModel()
+	focused.selected = "agent-pool-bkl2p"
+	focused.sessions["agent-pool-bkl2p"] = true
+	focused.shellFocus = true
+	newM, _ = focused.updateMouse(tea.MouseMsg{X: 5, Y: 5,
+		Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft})
+	// release does nothing; arm the drag on the divider then click a
+	// sidebar entry through applyClick directly, as updateMouse would
+	// from navigation
+	clicked := focused.applyClick(5, 4)
+	if clicked.shellFocus {
+		t.Error("a sidebar click must drop the shell focus")
+	}
+	if clicked.selected != "agent-pool-lqbmx" {
+		t.Errorf("sidebar click selected %q, want agent-pool-lqbmx", clicked.selected)
+	}
 }
 
 func TestShellKeyRouting(t *testing.T) {
@@ -657,10 +700,10 @@ func TestTmuxKeyName(t *testing.T) {
 
 func TestShellCaptureDisplay(t *testing.T) {
 	m := baseModel()
-	m.selected = "agent-pool-5ss7w"
-	m.sessions["agent-pool-5ss7w"] = true
+	m.selected = "agent-pool-bkl2p"
+	m.sessions["agent-pool-bkl2p"] = true
 
-	newM, _ := m.Update(shellMsg{pod: "agent-pool-5ss7w", lines: []string{"$ echo hi", "hi"}})
+	newM, _ := m.Update(shellMsg{pod: "agent-pool-bkl2p", lines: []string{"$ echo hi", "hi"}})
 	if got := newM.(model).shellLines; len(got) != 2 {
 		t.Fatalf("shellLines = %v, want the captured two lines", got)
 	}
@@ -669,13 +712,13 @@ func TestShellCaptureDisplay(t *testing.T) {
 	}
 
 	// A capture for another pod is not shown.
-	newM, _ = newM.(model).Update(shellMsg{pod: "agent-pool-lqbmx", lines: []string{"other"}})
+	newM, _ = newM.(model).Update(shellMsg{pod: "agent-pool-5ss7w", lines: []string{"other"}})
 	if got := newM.(model).View(); strings.Contains(got, "other") {
 		t.Errorf("view showed a capture from a pod that is not selected")
 	}
 
 	// A failed capture clears the stale content.
-	newM, _ = newM.(model).Update(shellMsg{pod: "agent-pool-5ss7w", err: errFixture})
+	newM, _ = newM.(model).Update(shellMsg{pod: "agent-pool-bkl2p", err: errFixture})
 	if got := newM.(model).shellLines; got != nil {
 		t.Errorf("failed capture left stale lines: %v", got)
 	}
@@ -875,7 +918,17 @@ func TestHeaderBentoBoxes(t *testing.T) {
 
 	usage := m.headerUsageLines()
 	if len(usage) != 4 {
-		t.Fatalf("usage box has %d lines, want 4: value plus one graph row per metric", len(usage))
+		t.Fatalf("usage box has %d lines, want 4 spec rows for a warm sandbox", len(usage))
+	}
+	if !strings.Contains(strings.Join(usage, " "), "debian:12-slim") {
+		t.Errorf("spec box = %v, want the image", usage)
+	}
+	// A claimed sandbox keeps the usage table.
+	claimed := baseModel()
+	claimed.selected = "agent-pool-bkl2p"
+	usage = claimed.headerUsageLines()
+	if len(usage) != 4 {
+		t.Fatalf("claimed usage box has %d lines, want 4", len(usage))
 	}
 	for _, want := range []string{"2m / 500m", "6Mi / 256Mi"} {
 		if !strings.Contains(strings.Join(usage, " "), want) {
@@ -899,16 +952,17 @@ func TestHeaderBentoBoxes(t *testing.T) {
 		t.Errorf("infoW + usageW = %d, exceeds column %d", got, l.colW)
 	}
 
-	// The history charts appear once samples exist: one braille row per
-	// metric, under each value row, and the whole usage box is four
-	// rows.
+	// Warm sandboxes show the spec table, not the graphs; the claimed
+	// sandbox below carries the history charts.
 	m.hist = map[string]usageHistory{"agent-pool-5ss7w": {cpu: []float64{1}, mem: []float64{1}}}
 	usage = m.headerUsageLines()
-	if !strings.ContainsRune(usage[1], '⡇') {
-		t.Errorf("cpu graph row = %q, want a filled braille column", usage[1])
+	if strings.ContainsRune(strings.Join(usage, ""), '⡇') {
+		t.Errorf("warm spec box = %v, must not carry graph glyphs", usage)
 	}
-	if !strings.ContainsRune(usage[3], '⡇') {
-		t.Errorf("mem graph row = %q, want a filled braille column", usage[3])
+	claimed.hist = map[string]usageHistory{"agent-pool-bkl2p": {cpu: []float64{1}, mem: []float64{1}}}
+	claimedUsage := claimed.headerUsageLines()
+	if !strings.ContainsRune(claimedUsage[1], '⡇') {
+		t.Errorf("cpu graph row = %q, want a filled braille column", claimedUsage[1])
 	}
 
 	// Three boxes open on the first body row: the nav pane plus the two
@@ -1029,8 +1083,9 @@ func TestOneAccentPane(t *testing.T) {
 	}
 
 	m := baseModel()
+	m.selected = "agent-pool-bkl2p"
 	m.shellFocus = true
-	m.sessions["agent-pool-5ss7w"] = true
+	m.sessions["agent-pool-bkl2p"] = true
 	frame = m.View()
 	if got := strings.Count(frame, accent); got < 4 {
 		t.Errorf("shell mode: %d accent cells, want the shell pane accented", got)

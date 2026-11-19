@@ -21,6 +21,7 @@ const (
 
 type model struct {
 	boxes     []cluster.Sandbox
+	pool      cluster.Pool    // the warm pool context behind the fleet
 	selected  string          // pod name under the cursor, stable across refreshes
 	sessions  map[string]bool // pod name → live tmux session
 	metricsOK bool
@@ -131,6 +132,7 @@ type shellTickMsg struct{}
 
 type loadedMsg struct {
 	boxes     []cluster.Sandbox
+	pool      cluster.Pool
 	sessions  map[string]bool
 	metricsOK bool
 	err       error
@@ -191,12 +193,12 @@ func shellTickCmd() tea.Cmd {
 
 func fetchCmd() tea.Cmd {
 	return func() tea.Msg {
-		boxes, metricsOK, err := cluster.Fetch()
+		boxes, pool, metricsOK, err := cluster.Fetch()
 		pods := make([]string, len(boxes))
 		for i, b := range boxes {
 			pods[i] = b.Name
 		}
-		return loadedMsg{boxes: boxes, sessions: session.Existing(pods),
+		return loadedMsg{boxes: boxes, pool: pool, sessions: session.Existing(pods),
 			metricsOK: metricsOK, err: err}
 	}
 }

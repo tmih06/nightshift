@@ -41,7 +41,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case loadedMsg:
 		prev := m.selectedIndex()
-		m.boxes, m.sessions = msg.boxes, msg.sessions
+		m.boxes, m.pool, m.sessions = msg.boxes, msg.pool, msg.sessions
 		m.metricsOK, m.err, m.loaded = msg.metricsOK, msg.err, true
 		m.appendHistory()
 		// The selected pod may be gone (destroyed) or the fleet may
