@@ -1,0 +1,99 @@
+---
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Shellcheck
+        run: shellcheck sbx.sh
+      - name: Yamllint
+        run: pipx run yamllint demo-warmpool.yaml demo-claim.yaml
+      - name: Markdownlint
+        run: npx --yes markdownlint-cli2 "*.md"
+      - name: Actionlint
+        run: bash <(curl -s https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+
+  commit-convention:
+    name: Commit subjects
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Check subjects against the AGENTS.md ruling
+        run: |
+          bad=$(git log --format='%s' | grep -v '^Merge ' | grep -vE '^(feat|fix|docs|chore|refactor|ci)(\((sbx|warmpool|claim|docs)\))?!?: [a-z].{0,49}$' || true)
+          if [ -n "$bad" ]; then
+            echo "These subjects do not follow AGENTS.md:"
+            echo "$bad"
+            exit 1
+          fi
+
+  e2e:
+    name: End to end on kind
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install kind
+        run: |
+          curl -Lo kind https://kind.sigs.k8s.io/dl/v0.30.0/kind-linux-amd64
+          chmod +x kind
+          sudo mv kind /usr/local/bin/
+      - name: Create cluster
+        run: kind create cluster --name agent-sandbox
+      - name: Install agent-sandbox v1.0.11
+        run: |
+          kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v1.0.11/sandbox-with-extensions.yaml
+          kubectl -n agent-sandbox-system wait --for=condition=Available deploy/agent-sandbox-controller --timeout=180s
+      - name: Warm the pool
+        run: |
+          kubectl apply -f demo-warmpool.yaml
+          for _ in $(seq 1 60); do
+            ready=$(kubectl -n sandbox-demo get sandboxwarmpool agent-pool -o jsonpath='{.status.readyReplicas}')
+            [ "$ready" = "2" ] && exit 0
+            sleep 5
+          done
+          kubectl -n sandbox-demo get sandboxes
+          exit 1
+      - name: Run the claim loop twice
+        run: |
+          SBX_NO_EXEC=1 ./sbx.sh
+          SBX_NO_EXEC=1 ./sbx.sh
+      - name: Prove bash runs inside a claimed sandbox
+        run: |
+          kubectl -n sandbox-demo apply -f demo-claim.yaml
+          SBX=""
+          for _ in $(seq 1 30); do
+            SBX=$(kubectl -n sandbox-demo get sandboxclaim my-agent -o jsonpath='{.status.sandbox.name}')
+            [ -n "$SBX" ] && break
+            sleep 2
+          done
+          if [ -z "$SBX" ]; then
+            kubectl -n sandbox-demo describe sandboxclaim my-agent
+            exit 1
+          fi
+          kubectl -n sandbox-demo exec "$SBX" -- bash -c 'echo bash-ok'
+          kubectl -n sandbox-demo delete sandboxclaim my-agent
+      - name: Prove the pool restocks
+        run: |
+          for _ in $(seq 1 60); do
+            ready=$(kubectl -n sandbox-demo get sandboxwarmpool agent-pool -o jsonpath='{.status.readyReplicas}')
+            [ "$ready" = "2" ] && exit 0
+            sleep 5
+          done
+          kubectl -n sandbox-demo get sandboxwarmpool agent-pool
+          exit 1

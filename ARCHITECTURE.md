@@ -5,7 +5,7 @@ real object you can look at with k9s (`:sbt` `:swp` `:sbc` `:sbx`).
 
 ## The mental model (3 layers)
 
-```
+```text
 ┌────────────────────────────────────────────────────────────────────────────┐
 │ LAYER 1 — MACHINERY (installed once, lives forever)                          │
 │   4 CRDs + agent-sandbox-controller.                                        │
@@ -24,7 +24,7 @@ real object you can look at with k9s (`:sbt` `:swp` `:sbc` `:sbx`).
 
 ## Big picture diagram
 
-```
+```text
                  ╔═══════════════════════════════════════════════════════╗
                  ║   agent-sandbox-controller  (the only worker)         ║
                  ║   namespace: agent-sandbox-system                    ║
@@ -49,7 +49,7 @@ real object you can look at with k9s (`:sbt` `:swp` `:sbc` `:sbx`).
 
 ## The claim cycle (your repeat loop)
 
-```
+```text
   YOU ── apply demo-claim.yaml (EVERY CYCLE)
     │
     └─►  SandboxClaim "my-agent"    (lifecycle.shutdownPolicy: Delete)
@@ -134,3 +134,30 @@ flowchart TB
 Everything follows Kubernetes' declarative model: you never say "create a pod
 for me" — you say "this is the state I want" (template/pool/claim YAML), and the
 controller continuously makes reality match it.
+
+## Multi-node and remote clusters
+
+The controller does not change when nodes multiply. It runs once, watches all
+nodes, and kube-scheduler places each sandbox Pod. The knobs below matter only
+when nodes or claim volume grow.
+
+- Placement: the template's `podTemplate.spec` is a full PodSpec. Use
+  `nodeSelector`, `affinity`, or `topologySpreadConstraints` to keep warm
+  sandboxes off one node. Use `runtimeClassName` to pin them to gVisor or Kata
+  nodes.
+- Claims stay node-agnostic. A claim takes any ready warm sandbox, on whatever
+  node it was warmed.
+- Slow nodes: a warm pod that reports its Pod IP late sends the claim to cold
+  creation after `--sandbox-claim-warm-candidate-grace-period` (2s default). A
+  warm sandbox that never goes Ready is replaced after the readiness grace
+  period.
+- Refill pacing: set `--sandbox-warm-pool-max-refill-rate` so a claim burst does
+  not stampede the API server.
+- Scale ceiling: one pool sustains 70 to 85 sandboxes per second. Above about
+  30 claims per second or 500 replicas, split the capacity across several
+  `SandboxWarmPool` resources and raise `--sandbox-warm-pool-concurrent-workers`
+  to the pool count.
+- Storage: a `ReadWriteOnce` PVC pins a sandbox to its node. Use network
+  storage for stateful sandboxes, or no volume for throwaway ones.
+- Node autoscaling: `--enable-warm-pool-eviction` (default true) marks warm pods
+  evictable, so an autoscaler can reclaim nodes.

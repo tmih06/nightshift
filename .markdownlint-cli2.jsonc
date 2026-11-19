@@ -1,0 +1,9 @@
+{
+  "config": {
+    "default": true,
+    // Diagrams and table cells run long.
+    "MD013": false,
+    // Table pipes need not align.
+    "MD060": false
+  }
+}
