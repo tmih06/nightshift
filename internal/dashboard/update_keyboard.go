@@ -28,7 +28,7 @@ func (m model) updateKeyboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		m.status, m.statusTTL = "", 0
 		return m, fetchCmd()
-	case "c":
+	case "c", "C":
 		m.flash("claiming from the warm pool…")
 		return m, claimCmd()
 	case "enter":
@@ -102,7 +102,7 @@ func (m model) updateInspectKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.inspectScroll = 0
 	case "G", "end":
 		m.scrollInspect(1 << 20)
-	case "c":
+	case "c", "C":
 		m.focus = focusNav
 		m.flash("claiming from the warm pool…")
 		return m, claimCmd()

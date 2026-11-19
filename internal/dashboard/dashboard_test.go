@@ -280,6 +280,37 @@ func TestKeyboardNavigationAndActions(t *testing.T) {
 	}
 }
 
+func TestClaimShortcuts(t *testing.T) {
+	for _, key := range []rune{'c', 'C'} {
+		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}}
+
+		nav := baseModel()
+		newM, cmd := nav.Update(msg)
+		if cmd == nil || !strings.Contains(newM.(model).status, "claiming from the warm pool") {
+			t.Errorf("%q in navigation did not start a claim", key)
+		}
+
+		inspect := baseModel()
+		inspect.focus = focusInspect
+		newM, cmd = inspect.Update(msg)
+		if cmd == nil || newM.(model).focus != focusNav || !strings.Contains(newM.(model).status, "claiming from the warm pool") {
+			t.Errorf("%q in config view did not start a claim", key)
+		}
+	}
+
+	// Uppercase C remains text input while bash has focus.
+	shell := baseModel()
+	shell.selected = "agent-pool-bkl2p"
+	shell.sessions["agent-pool-bkl2p"] = true
+	shell.focus = focusShell
+	shell.sending = true
+	newM, cmd := shell.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'C'}})
+	got := newM.(model)
+	if cmd != nil || got.focus != focusShell || len(got.pending) != 1 || got.pending[0].Text != "C" {
+		t.Errorf("uppercase C in bash = focus %v pending %v cmd=%v, want queued text", got.focus, got.pending, cmd != nil)
+	}
+}
+
 // Destroy needs two presses on a claimed sandbox, and any other key
 // disarms it.
 func TestDestroyConfirmation(t *testing.T) {
