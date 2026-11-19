@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/tmih06/nightshift/internal/cluster"
@@ -32,13 +33,14 @@ func paneCommand(pod string) string {
 	}, " ")
 }
 
-// Ensure creates the session for a pod if it does not exist. Attaching
-// afterwards is guaranteed to find a session.
+// Ensure creates the session for a pod if it does not exist, at a size
+// large enough for the shell pane. Resize adapts it to the pane.
 func Ensure(pod string) error {
 	if Has(pod) {
 		return nil
 	}
-	cmd := exec.Command("tmux", "new-session", "-d", "-s", Name(pod), paneCommand(pod))
+	cmd := exec.Command("tmux", "new-session", "-d", "-s", Name(pod),
+		"-x", "160", "-y", "40", paneCommand(pod))
 	var errOut bytes.Buffer
 	cmd.Stderr = &errOut
 	if err := cmd.Run(); err != nil {
@@ -53,10 +55,41 @@ func Has(pod string) bool {
 	return exec.Command("tmux", "has-session", "-t", Name(pod)).Run() == nil
 }
 
-// Attach returns the command that attaches to the pod's session. Detach
-// with the tmux prefix, C-b d.
+// Attach returns the command that attaches to the pod's session, the
+// fullscreen escape hatch. Detach with the tmux prefix, C-b d.
 func Attach(pod string) *exec.Cmd {
 	return exec.Command("tmux", "attach-session", "-t", Name(pod))
+}
+
+// Resize matches the session's window to the shell pane, so the pane
+// output wraps where the dashboard shows it.
+func Resize(pod string, w, h int) error {
+	return exec.Command("tmux", "resize-window", "-t", Name(pod),
+		"-x", strconv.Itoa(w), "-y", strconv.Itoa(h)).Run()
+}
+
+// Capture returns the session's visible pane content, wrapped lines
+// joined, trailing blank rows trimmed so the view can bottom-align.
+func Capture(pod string) ([]string, error) {
+	out, err := exec.Command("tmux", "capture-pane", "-p", "-J", "-t", Name(pod)).Output()
+	if err != nil {
+		return nil, fmt.Errorf("tmux capture-pane %s: %w", Name(pod), err)
+	}
+	lines := strings.Split(string(out), "\n")
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines, nil
+}
+
+// SendText types literal text into the session's pane.
+func SendText(pod, text string) error {
+	return exec.Command("tmux", "send-keys", "-t", Name(pod), "-l", text).Run()
+}
+
+// SendKey presses a tmux key name, Enter or C-c, in the session's pane.
+func SendKey(pod, key string) error {
+	return exec.Command("tmux", "send-keys", "-t", Name(pod), key).Run()
 }
 
 // Existing returns the set of the given pods that have a live session,
