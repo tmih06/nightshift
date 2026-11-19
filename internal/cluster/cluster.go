@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -45,6 +47,10 @@ type Sandbox struct {
 	RestartPolicy string
 	CPUReqMC      int64 // container cpu request, millicores
 	MemReqMiB     int64 // container memory request, MiB
+
+	// Cleaned YAML manifests for warm sandbox inspection.
+	ManifestYAML string
+	PodYAML      string
 }
 
 // Pool is the warm pool context behind the fleet: what produced the
@@ -54,6 +60,8 @@ type Pool struct {
 	Template       string
 	Ready, Desired int
 	UpdateStrategy string
+	ManifestYAML   string
+	TemplateYAML   string
 }
 
 type ownerReference struct {
@@ -70,7 +78,7 @@ type sandboxItem struct {
 }
 
 type sandboxList struct {
-	Items []sandboxItem `json:"items"`
+	Items []json.RawMessage `json:"items"`
 }
 
 type podContainer struct {
@@ -115,7 +123,7 @@ type warmPool struct {
 }
 
 type podList struct {
-	Items []podItem `json:"items"`
+	Items []json.RawMessage `json:"items"`
 }
 
 type podMetricsList struct {
@@ -135,9 +143,17 @@ type podMetricsList struct {
 // buildSandboxes joins the three cluster views into the boxes the grid
 // shows. It is pure: the kubectl calls stay outside.
 func buildSandboxes(sb sandboxList, pl podList, ml *podMetricsList) ([]Sandbox, error) {
-	podByName := map[string]*podItem{}
-	for i := range pl.Items {
-		podByName[pl.Items[i].Metadata.Name] = &pl.Items[i]
+	type parsedPod struct {
+		item podItem
+		yaml string
+	}
+	podByName := map[string]*parsedPod{}
+	for _, raw := range pl.Items {
+		var p podItem
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return nil, fmt.Errorf("parse pod item: %w", err)
+		}
+		podByName[p.Metadata.Name] = &parsedPod{item: p, yaml: cleanManifestYAML(raw)}
 	}
 	usedByName := map[string][2]int64{}
 	if ml != nil {
@@ -160,15 +176,26 @@ func buildSandboxes(sb sandboxList, pl podList, ml *podMetricsList) ([]Sandbox, 
 	}
 
 	var boxes []Sandbox
-	for _, item := range sb.Items {
-		b := Sandbox{Name: item.Metadata.Name, Phase: "…", Created: parseTime(item.Metadata.Created)}
+	for _, raw := range sb.Items {
+		var item sandboxItem
+		if err := json.Unmarshal(raw, &item); err != nil {
+			return nil, fmt.Errorf("parse sandbox item: %w", err)
+		}
+		b := Sandbox{
+			Name:         item.Metadata.Name,
+			Phase:        "…",
+			Created:      parseTime(item.Metadata.Created),
+			ManifestYAML: cleanManifestYAML(raw),
+		}
 		if len(item.Metadata.OwnerReferences) > 0 {
 			b.OwnerKind = item.Metadata.OwnerReferences[0].Kind
 			b.Owner = item.Metadata.OwnerReferences[0].Name
 		}
-		if p := podByName[item.Metadata.Name]; p != nil {
+		if pp := podByName[item.Metadata.Name]; pp != nil {
+			p := &pp.item
 			b.Phase = p.Status.Phase
 			b.RestartPolicy = p.Spec.RestartPolicy
+			b.PodYAML = pp.yaml
 			if ts := parseTime(p.Metadata.Created); !ts.IsZero() {
 				b.Created = ts
 			}
@@ -254,12 +281,21 @@ func Fetch() (boxes []Sandbox, pool Pool, metricsOK bool, err error) {
 	// The pool context degrades to zero values when the object is
 	// missing, the same way metrics degrade.
 	var wp warmPool
+	var poolYAML, tplYAML string
 	if raw, err := kubectlOutput("get", "sandboxwarmpool", WarmPool, "-o", "json"); err == nil {
-		_ = json.Unmarshal(raw, &wp)
+		if json.Unmarshal(raw, &wp) == nil {
+			poolYAML = cleanManifestYAML(raw)
+		}
+	}
+	if wp.Spec.Template.Name != "" {
+		if raw, err := kubectlOutput("get", "sandboxtemplate", wp.Spec.Template.Name, "-o", "json"); err == nil {
+			tplYAML = cleanManifestYAML(raw)
+		}
 	}
 	pool = Pool{Name: wp.Metadata.Name, Template: wp.Spec.Template.Name,
 		Ready: wp.Status.ReadyReplicas, Desired: wp.Spec.Replicas,
-		UpdateStrategy: wp.Spec.UpdateStrategy.Type}
+		UpdateStrategy: wp.Spec.UpdateStrategy.Type,
+		ManifestYAML:   poolYAML, TemplateYAML: tplYAML}
 
 	var ml *podMetricsList
 	raw, merr := kubectlOutput("get", "--raw",
@@ -301,6 +337,34 @@ func parseTime(s string) time.Time {
 		return time.Time{}
 	}
 	return ts
+}
+
+// cleanManifestYAML converts a Kubernetes JSON object into readable
+// YAML with noisy server-side fields stripped.
+func cleanManifestYAML(raw []byte) string {
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return ""
+	}
+	if meta, ok := obj["metadata"].(map[string]any); ok {
+		delete(meta, "managedFields")
+		delete(meta, "resourceVersion")
+		delete(meta, "uid")
+		if ann, ok := meta["annotations"].(map[string]any); ok {
+			delete(ann, "kubectl.kubernetes.io/last-applied-configuration")
+			if len(ann) == 0 {
+				delete(meta, "annotations")
+			}
+		}
+	}
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(obj); err != nil {
+		return ""
+	}
+	_ = enc.Close()
+	return strings.TrimRight(buf.String(), "\n")
 }
 
 // Claim claims a warm sandbox from the pool and returns the claim name.

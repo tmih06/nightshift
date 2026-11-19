@@ -589,55 +589,57 @@ func TestStackedDragResizesLeftHeight(t *testing.T) {
 }
 
 func TestClickFocusesShellPane(t *testing.T) {
-	m := baseModel() // shellTop = 2 + headerH(14) = 16
+	// Clicking the lower-right pane on a claimed sandbox with a live
+	// session focuses bash; clicking the sidebar returns to navigation.
+	m := baseModel()
+	m.selected = "agent-pool-bkl2p"
+	m.sessions["agent-pool-bkl2p"] = true
 
 	newM, _ := m.updateMouse(press(70, 20))
-	if !newM.(model).shellFocus {
-		t.Error("click in the shell pane did not focus it")
+	if newM.(model).focus != focusShell {
+		t.Error("click in the shell pane of a claimed sandbox did not focus bash")
 	}
 
-	newM, _ = m.updateMouse(press(5, 4))
-	if newM.(model).shellFocus {
+	newM, _ = newM.(model).updateMouse(press(5, 4))
+	if newM.(model).focus != focusNav {
 		t.Error("click on a left-pane entry must return to navigation")
 	}
-
-	// From inside the shell, a C-b q escape followed by sidebar clicks
-	// navigates; and a direct sidebar click while focused never leaves
-	// focus on the shell.
-	focused := baseModel()
-	focused.selected = "agent-pool-bkl2p"
-	focused.sessions["agent-pool-bkl2p"] = true
-	focused.shellFocus = true
-	newM, _ = focused.updateMouse(tea.MouseMsg{X: 5, Y: 5,
-		Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft})
-	// release does nothing; arm the drag on the divider then click a
-	// sidebar entry through applyClick directly, as updateMouse would
-	// from navigation
-	clicked := focused.applyClick(5, 4)
-	if clicked.shellFocus {
-		t.Error("a sidebar click must drop the shell focus")
+	if newM.(model).selected != "agent-pool-lqbmx" {
+		t.Errorf("sidebar click selected %q, want agent-pool-lqbmx", newM.(model).selected)
 	}
-	if clicked.selected != "agent-pool-lqbmx" {
-		t.Errorf("sidebar click selected %q, want agent-pool-lqbmx", clicked.selected)
+
+	// Clicking the lower-right pane on a warm sandbox must NOT focus
+	// bash or show a "leaves bash" prompt; it focuses the config viewer.
+	warm := baseModel()
+	newM, _ = warm.updateMouse(press(70, 20))
+	got := newM.(model)
+	if got.focus != focusInspect {
+		t.Errorf("click on warm lower pane focus = %v, want focusInspect", got.focus)
+	}
+	if strings.Contains(got.statusLine(), "bash") && strings.Contains(got.statusLine(), "leaves") {
+		t.Errorf("warm inspect status line must not mention leaving bash: %q", got.statusLine())
+	}
+	if strings.Contains(got.View(), "leaves bash") {
+		t.Errorf("warm inspect view must not show 'leaves bash'")
 	}
 }
 
 func TestShellKeyRouting(t *testing.T) {
 	m := baseModel()
-	m.selected = "agent-pool-5ss7w"
-	m.sessions["agent-pool-5ss7w"] = true
-	m.shellFocus = true
+	m.selected = "agent-pool-bkl2p"
+	m.sessions["agent-pool-bkl2p"] = true
+	m.focus = focusShell
 
 	// No keybind escapes: esc is delivered to the session and the
 	// focus stays.
 	newM, cmd := m.updateShellKeys(tea.KeyMsg{Type: tea.KeyEsc})
-	if cmd == nil || newM.(model).shellFocus != true {
+	if cmd == nil || newM.(model).focus != focusShell {
 		t.Error("esc must go to the session, not leave the shell")
 	}
 
 	// q alone is typed into bash, it does not quit anything.
 	newM, cmd = m.updateShellKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
-	if cmd == nil || !newM.(model).shellFocus {
+	if cmd == nil || newM.(model).focus != focusShell {
 		t.Error("q must go to the session, not quit")
 	}
 
@@ -647,9 +649,9 @@ func TestShellKeyRouting(t *testing.T) {
 		t.Error("C-b did not arm the prefix chord")
 	}
 
-	// C-b then q is the only way out.
+	// C-b then q leaves the shell.
 	newM, _ = newM.(model).updateShellKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
-	if newM.(model).shellFocus || newM.(model).prefix {
+	if newM.(model).focus != focusNav || newM.(model).prefix {
 		t.Error("C-b q did not leave the shell")
 	}
 
@@ -663,7 +665,7 @@ func TestShellKeyRouting(t *testing.T) {
 
 	// Ctrl+c interrupts the bash process instead of quitting the app.
 	newM, cmd = m.updateShellKeys(tea.KeyMsg{Type: tea.KeyCtrlC})
-	if cmd == nil || !newM.(model).shellFocus {
+	if cmd == nil || newM.(model).focus != focusShell {
 		t.Error("ctrl+c must go to the session")
 	}
 
@@ -675,10 +677,39 @@ func TestShellKeyRouting(t *testing.T) {
 
 	// Without a live session the focus falls back to navigation.
 	bare := baseModel()
-	bare.shellFocus = true
+	bare.focus = focusShell
 	newM, _ = bare.updateShellKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
-	if newM.(model).shellFocus {
+	if newM.(model).focus != focusNav {
 		t.Error("keys with no session must not stay in the shell")
+	}
+}
+
+func TestMouseEscapeFragmentsDroppedFromShell(t *testing.T) {
+	m := baseModel()
+	m.selected = "agent-pool-bkl2p"
+	m.sessions["agent-pool-bkl2p"] = true
+	m.focus = focusShell
+
+	leaked := []tea.KeyMsg{
+		{Type: tea.KeyRunes, Runes: []rune{'['}, Alt: true},
+		{Type: tea.KeyRunes, Runes: []rune("[<35;111;7M")},
+		{Type: tea.KeyRunes, Runes: []rune("<35;132;7M")},
+		{Type: tea.KeyRunes, Runes: []rune("[<35;111;7M[<35;132;7M")},
+		{Type: tea.KeyRunes, Runes: []rune("[<32;40;10m")},
+	}
+	for _, msg := range leaked {
+		newM, cmd := m.updateShellKeys(msg)
+		if cmd != nil || len(newM.(model).pending) != 0 {
+			t.Errorf("leaked mouse fragment %+v was sent to shell", msg)
+		}
+	}
+
+	// Normal typing of brackets or angle brackets still works.
+	for _, r := range []rune{'[', '<', 'a'} {
+		_, cmd := m.updateShellKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		if cmd == nil {
+			t.Errorf("normal rune %q was dropped", r)
+		}
 	}
 }
 
@@ -750,9 +781,9 @@ func TestShellTick(t *testing.T) {
 // sends the rest and captures so the echo comes back fast.
 func TestShellInputQueue(t *testing.T) {
 	m := baseModel()
-	m.selected = "agent-pool-5ss7w"
-	m.sessions["agent-pool-5ss7w"] = true
-	m.shellFocus = true
+	m.selected = "agent-pool-bkl2p"
+	m.sessions["agent-pool-bkl2p"] = true
+	m.focus = focusShell
 
 	// A drain in flight: the key queues instead of racing it.
 	m.sending = true
@@ -765,7 +796,7 @@ func TestShellInputQueue(t *testing.T) {
 	}
 
 	// The drain finishing sends the queue and captures right after.
-	newM, cmd = newM.(model).Update(sentMsg{pod: "agent-pool-5ss7w", count: 3})
+	newM, cmd = newM.(model).Update(sentMsg{pod: "agent-pool-bkl2p", count: 3})
 	if cmd == nil {
 		t.Fatal("finished drain did not send the queued input")
 	}
@@ -780,7 +811,7 @@ func TestShellInputQueue(t *testing.T) {
 	failed := newM.(model)
 	failed.sending = true
 	failed.pending = []session.Key{{Text: "z"}}
-	newM, cmd = failed.Update(sentMsg{pod: "agent-pool-5ss7w", count: 1, err: errFixture})
+	newM, cmd = failed.Update(sentMsg{pod: "agent-pool-bkl2p", count: 1, err: errFixture})
 	if cmd != nil {
 		t.Error("failed drain started another drain")
 	}
@@ -793,15 +824,15 @@ func TestShellInputQueue(t *testing.T) {
 // the pane, so the embedded output wraps where it is shown.
 func TestShellResizeFollowsPaneSize(t *testing.T) {
 	m := baseModel()
-	m.selected = "agent-pool-5ss7w"
-	m.sessions["agent-pool-5ss7w"] = true
-	m.shellFocus = true
+	m.selected = "agent-pool-bkl2p"
+	m.sessions["agent-pool-bkl2p"] = true
+	m.focus = focusShell
 
 	_, cmd := m.updateShellKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
 	if cmd == nil {
 		t.Fatal("first key produced no drain command")
 	}
-	newM, _ := m.Update(sentMsg{pod: "agent-pool-5ss7w", count: 1})
+	newM, _ := m.Update(sentMsg{pod: "agent-pool-bkl2p", count: 1})
 	w, h := newM.(model).shellW, newM.(model).shellH
 	wantW, wantH := m.shellPaneSize()
 	if w != wantW || h != wantH {
@@ -821,7 +852,7 @@ func TestAttachFocusesShellInsteadOfFullscreen(t *testing.T) {
 	}
 
 	newM, _ := m.Update(attachReadyMsg{pod: "agent-pool-bkl2p"})
-	if !newM.(model).shellFocus {
+	if newM.(model).focus != focusShell {
 		t.Error("a ready session did not focus the embedded shell")
 	}
 
@@ -867,7 +898,7 @@ func TestClaimCreatesBashImmediately(t *testing.T) {
 	if newM.(model).selected != "agent-pool-new1" {
 		t.Errorf("selected = %q, want the new pod", newM.(model).selected)
 	}
-	if newM.(model).shellFocus {
+	if newM.(model).focus != focusNav {
 		t.Error("the claim must pre-create the session, not jump into the shell")
 	}
 	if !strings.Contains(newM.(model).status, "enter attaches") {
@@ -948,8 +979,8 @@ func TestHeaderBentoBoxes(t *testing.T) {
 	if l.infoW < longest+2 {
 		t.Errorf("infoW = %d, longest line %d does not fit uncut", l.infoW, longest)
 	}
-	if got := l.infoW + l.usageW; got > l.colW {
-		t.Errorf("infoW + usageW = %d, exceeds column %d", got, l.colW)
+	if got := l.infoW + l.usageW; got != l.colW {
+		t.Errorf("infoW(%d) + usageW(%d) = %d, want exact colW %d", l.infoW, l.usageW, got, l.colW)
 	}
 
 	// Warm sandboxes show the spec table, not the graphs; the claimed
@@ -998,7 +1029,7 @@ func TestStatusLineModes(t *testing.T) {
 		t.Errorf("nav status = %q", got)
 	}
 
-	m.shellFocus = true
+	m.focus = focusShell
 	got := m.statusLine()
 	if !strings.Contains(got, "C-b q leaves bash") {
 		t.Errorf("shell status = %q, want the C-b q tip", got)
@@ -1007,6 +1038,12 @@ func TestStatusLineModes(t *testing.T) {
 	m.prefix = true
 	if got := m.statusLine(); !strings.Contains(got, "C-b armed") {
 		t.Errorf("prefix status = %q", got)
+	}
+
+	m.focus = focusInspect
+	m.prefix = false
+	if got := m.statusLine(); !strings.Contains(got, "scroll") || strings.Contains(got, "leaves bash") {
+		t.Errorf("inspect status = %q, want scroll tips without leaves bash", got)
 	}
 
 	m = baseModel()
@@ -1084,7 +1121,7 @@ func TestOneAccentPane(t *testing.T) {
 
 	m := baseModel()
 	m.selected = "agent-pool-bkl2p"
-	m.shellFocus = true
+	m.focus = focusShell
 	m.sessions["agent-pool-bkl2p"] = true
 	frame = m.View()
 	if got := strings.Count(frame, accent); got < 4 {
@@ -1112,14 +1149,14 @@ func TestOneAccentPane(t *testing.T) {
 	}
 }
 
-// While the shell has focus, no input escapes: the wheel does not move
-// the selection, clicks do not steal focus, and only the divider drag
-// still works.
+// While the shell has focus, wheel events do not leak into navigation
+// and the splitter drag keeps working, while clicking the sidebar
+// always drops shell focus and returns to navigation.
 func TestNoInputLeaksFromShell(t *testing.T) {
 	m := baseModel()
 	m.selected = "agent-pool-bkl2p"
 	m.sessions["agent-pool-bkl2p"] = true
-	m.shellFocus = true
+	m.focus = focusShell
 
 	// Wheel events die before reaching the selection.
 	newM, _ := m.updateMouse(tea.MouseMsg{X: 5, Y: 5,
@@ -1128,13 +1165,10 @@ func TestNoInputLeaksFromShell(t *testing.T) {
 		t.Errorf("wheel leaked into navigation: %q", newM.(model).selected)
 	}
 
-	// A click on a left-pane entry does not steal focus.
-	newM, _ = m.updateMouse(press(5, 4))
-	if !newM.(model).shellFocus {
-		t.Error("a click stole the shell focus")
-	}
-	if newM.(model).selected != "agent-pool-bkl2p" {
-		t.Errorf("a click leaked into the selection: %q", newM.(model).selected)
+	// Clicking the header boxes while in shell mode keeps focus in shell.
+	newM, _ = m.updateMouse(press(50, 3))
+	if newM.(model).focus != focusShell {
+		t.Error("a header click stole shell focus")
 	}
 
 	// The divider drag still works while the shell has focus.
@@ -1149,8 +1183,131 @@ func TestNoInputLeaksFromShell(t *testing.T) {
 	if got := newM.(model).layout().leftW; got != 50 {
 		t.Errorf("drag in shell mode = %d, want 50", got)
 	}
-	if !newM.(model).shellFocus {
+	if newM.(model).focus != focusShell {
 		t.Error("dragging the splitter must not disturb the shell focus")
+	}
+
+	// Clicking the sidebar always exits shell focus and selects the entry.
+	newM, _ = m.updateMouse(press(5, 4))
+	if newM.(model).focus != focusNav {
+		t.Error("a sidebar click must stop focusing the shell")
+	}
+	if newM.(model).selected != "agent-pool-lqbmx" {
+		t.Errorf("sidebar click selected %q, want agent-pool-lqbmx", newM.(model).selected)
+	}
+}
+
+// Header bento boxes align flush with the lower pane's right edge and
+// never wrap to create vertical gaps, even at narrow widths with long
+// claim owner names.
+func TestBentoAlignmentAndNoHeaderGap(t *testing.T) {
+	for _, width := range []int{60, 80, 90, 100, 120} {
+		for _, sel := range []string{"agent-pool-5ss7w", "agent-pool-bkl2p"} {
+			m := baseModel()
+			m.width = width
+			m.height = 24
+			m.boxes[2].Owner = "dash-claim-1795090340263037564"
+			m.selected = sel
+			m.sessions["agent-pool-bkl2p"] = true
+
+			l := m.layout()
+			if l.infoW+l.usageW != l.colW {
+				t.Errorf("w=%d sel=%s: infoW(%d)+usageW(%d) != colW(%d)", width, sel, l.infoW, l.usageW, l.colW)
+			}
+			if l.leftW+l.colW != width {
+				t.Errorf("w=%d sel=%s: leftW(%d)+colW(%d) != width(%d)", width, sel, l.leftW, l.colW, width)
+			}
+
+			rows := strings.Split(m.View(), "\n")
+			if len(rows) != m.height {
+				t.Errorf("w=%d sel=%s: rendered %d rows, want %d (wrapping caused overflow)", width, sel, len(rows), m.height)
+			}
+			// Row 1 is the top border (left + info + usage); row 1+headerH is
+			// the top border of the lower pane (left + lower). Both must have
+			// exact full width so right edges align flush with zero gap.
+			headerTopW := lipgloss.Width(rows[1])
+			headerBotW := lipgloss.Width(rows[l.headerH])
+			lowerTopW := lipgloss.Width(rows[1+l.headerH])
+			if headerTopW != width || headerBotW != width || lowerTopW != width {
+				t.Errorf("w=%d sel=%s: widths top=%d bot=%d lower=%d, want all %d",
+					width, sel, headerTopW, headerBotW, lowerTopW, width)
+			}
+			// The two header boxes must close on the exact same row (row headerH)
+			// directly above the lower pane's top border (row headerH+1).
+			if strings.Count(rows[l.headerH], "╰") != 2 {
+				t.Errorf("w=%d sel=%s: row %d = %q, want both header boxes closing together", width, sel, l.headerH, rows[l.headerH])
+			}
+			if strings.Count(rows[1+l.headerH], "╭") != 1 {
+				t.Errorf("w=%d sel=%s: row %d = %q, want lower pane opening immediately below header", width, sel, 1+l.headerH, rows[1+l.headerH])
+			}
+		}
+	}
+}
+
+// Warm sandboxes render configs, templates, and manifests separated by
+// divider lines with ANSI color, and support both wheel and keyboard
+// scrolling without ever entering bash mode.
+func TestWarmInspectScrollableMarkdownAndYAML(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.ANSI256)
+
+	m := baseModel()
+	m.height = 16 // compact viewport so scrolling has room
+	m.pool.TemplateYAML = "apiVersion: extensions.agents.x-k8s.io/v1beta1\nkind: SandboxTemplate\nspec:\n  replicas: 2\n  enabled: true\n  image: debian:12-slim"
+	m.pool.ManifestYAML = "apiVersion: extensions.agents.x-k8s.io/v1beta1\nkind: SandboxWarmPool\nmetadata:\n  name: agent-pool"
+	m.boxes[0].ManifestYAML = "apiVersion: agents.x-k8s.io/v1beta1\nkind: Sandbox\nmetadata:\n  name: agent-pool-5ss7w"
+	m.boxes[0].PodYAML = "apiVersion: v1\nkind: Pod\nspec:\n  restartPolicy: OnFailure\n  containers:\n  - name: agent\n    resources:\n      limits:\n        cpu: 500m\n        memory: 256Mi"
+
+	lines := m.warmInspectLines(60)
+	joined := strings.Join(lines, "\n")
+	for _, want := range []string{
+		"agent-pool · warm pool",
+		"SandboxTemplate · agent-bash-template",
+		"SandboxWarmPool · agent-pool",
+		"Sandbox · agent-pool-5ss7w",
+		"Pod · agent-pool-5ss7w",
+		"500m",
+		"256Mi",
+		strings.Repeat("─", 60),
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("warm inspect missing %q", want)
+		}
+	}
+	if !strings.Contains(joined, "\x1b[") {
+		t.Error("warm inspect rendered without ANSI color sequences")
+	}
+
+	// Wheel down over the lower pane scrolls without changing selection.
+	newM, _ := m.updateMouse(tea.MouseMsg{X: 60, Y: 10,
+		Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
+	scrolled := newM.(model)
+	if scrolled.selected != "agent-pool-5ss7w" {
+		t.Errorf("wheel over warm viewer changed selection to %q", scrolled.selected)
+	}
+	if scrolled.inspectScroll <= 0 {
+		t.Errorf("wheel down did not scroll warm viewer: offset=%d", scrolled.inspectScroll)
+	}
+
+	// Clicking the warm lower pane focuses inspect (not bash) and j/k scroll.
+	newM, _ = scrolled.updateMouse(press(60, 10))
+	focused := newM.(model)
+	if focused.focus != focusInspect {
+		t.Fatalf("click on warm viewer focus = %v, want focusInspect", focused.focus)
+	}
+	before := focused.inspectScroll
+	newM, _ = focused.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if newM.(model).inspectScroll != before+1 {
+		t.Errorf("j in focusInspect offset = %d, want %d", newM.(model).inspectScroll, before+1)
+	}
+	newM, _ = newM.(model).Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if newM.(model).focus != focusNav {
+		t.Error("esc in focusInspect did not return to focusNav")
+	}
+
+	// Moving to another sandbox resets scroll back to top.
+	newM, _ = newM.(model).Update(tea.KeyMsg{Type: tea.KeyDown})
+	if newM.(model).inspectScroll != 0 {
+		t.Errorf("changing selection left inspectScroll = %d, want 0", newM.(model).inspectScroll)
 	}
 }
 

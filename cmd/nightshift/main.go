@@ -17,7 +17,7 @@ func main() {
 		dashboard.RunOnce()
 		return
 	}
-	p := tea.NewProgram(dashboard.New(), tea.WithAltScreen(), tea.WithMouseAllMotion())
+	p := tea.NewProgram(dashboard.New(), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

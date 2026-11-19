@@ -25,6 +25,16 @@ var (
 	nameStyle    = lipgloss.NewStyle().Bold(true)
 	sectionStyle = lipgloss.NewStyle().Bold(true)
 
+	// Markdown and YAML styles for warm sandbox inspection.
+	mdH1Style     = lipgloss.NewStyle().Bold(true).Foreground(accent)
+	mdH2Style     = lipgloss.NewStyle().Bold(true).Foreground(claimColor)
+	mdH3Style     = lipgloss.NewStyle().Bold(true).Foreground(warmColor)
+	mdCodeStyle   = lipgloss.NewStyle().Foreground(warnColor)
+	yamlKeyStyle  = lipgloss.NewStyle().Foreground(claimColor)
+	yamlStrStyle  = lipgloss.NewStyle().Foreground(warmColor)
+	yamlNumStyle  = lipgloss.NewStyle().Foreground(warnColor)
+	yamlBoolStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("176"))
+
 	// Exactly one pane carries the accent border: the nav pane while
 	// the dashboard has focus, the shell pane while bash has it. The
 	// header boxes stay dim in both modes.

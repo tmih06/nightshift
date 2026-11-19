@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -175,6 +176,38 @@ func TestClaimManifest(t *testing.T) {
 	}
 	if c.Spec.Lifecycle.ShutdownPolicy != "Delete" {
 		t.Errorf("shutdownPolicy = %q, want Delete", c.Spec.Lifecycle.ShutdownPolicy)
+	}
+}
+
+func TestCleanManifestYAML(t *testing.T) {
+	raw := []byte(`{
+		"apiVersion": "extensions.agents.x-k8s.io/v1beta1",
+		"kind": "SandboxTemplate",
+		"metadata": {
+			"name": "agent-bash-template",
+			"namespace": "sandbox-demo",
+			"resourceVersion": "12281",
+			"uid": "02d23c69",
+			"managedFields": [{"manager": "kubectl"}],
+			"annotations": {
+				"kubectl.kubernetes.io/last-applied-configuration": "{\"huge\":\"blob\"}",
+				"custom/note": "keep-me"
+			}
+		},
+		"spec": {
+			"failedPodPolicy": "Retain"
+		}
+	}`)
+	got := cleanManifestYAML(raw)
+	for _, want := range []string{"kind: SandboxTemplate", "name: agent-bash-template", "custom/note: keep-me", "failedPodPolicy: Retain"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("cleanManifestYAML missing %q:\n%s", want, got)
+		}
+	}
+	for _, drop := range []string{"managedFields", "resourceVersion", "uid:", "last-applied-configuration"} {
+		if strings.Contains(got, drop) {
+			t.Errorf("cleanManifestYAML kept noisy field %q:\n%s", drop, got)
+		}
 	}
 }
 
