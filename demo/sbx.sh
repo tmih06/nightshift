@@ -39,9 +39,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# The factory must exist (apply demo-warmpool.yaml first, once).
+# The factory must exist (apply demo/warmpool.yaml first, once).
 if ! $K get sandboxwarmpool "$POOL" >/dev/null 2>&1; then
-  echo "✗ no SandboxWarmPool '$POOL' in ns '$NS' — run: kubectl apply -f demo-warmpool.yaml" >&2
+  echo "✗ no SandboxWarmPool '$POOL' in ns '$NS' — run: kubectl apply -f demo/warmpool.yaml" >&2
   exit 1
 fi
 
