@@ -43,6 +43,13 @@
       "skillPath": "skills/bro/SKILL.md",
       "computedHash": "f20a76d629ff552e85205507bcab051cc33667943f2c5bb5879b0475f26c7429"
     },
+    "bubbletea": {
+      "source": "GGPrompts/my-plugins",
+      "commit": "feb1fc8f7623a58af726f8c760fc2621b329ce84",
+      "sourceType": "github",
+      "skillPath": "plugins/specialized/bubbletea/skills/bubbletea/SKILL.md",
+      "computedHash": "17f4b4f4c8030467433c2827b4d9a7a9704041cef4c55a01b91068a73451e49f"
+    },
     "correct": {
       "source": "backnotprop/pstack",
       "commit": "0d2dc00df47d7686c94324cfe9c3444710d9f16d",
