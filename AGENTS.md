@@ -6,6 +6,7 @@ This directory holds the demo for kubernetes-sigs/agent-sandbox. The demo runs o
 
 - `demo/` holds the Kubernetes side: `warmpool.yaml` creates the namespace `sandbox-demo` and the standing pool, one `SandboxTemplate` and one `SandboxWarmPool` that keeps two warm sandboxes, each pod capped at 500m CPU and 256Mi memory. `claim.yaml` claims one sandbox from the pool. `sbx.sh` wraps that loop in one command and is installed as `sbx` through a symlink in `~/.local/bin`.
 - `cmd/nightshift` is the entrypoint of the Go program, a Bubble Tea dashboard for the sandboxes. `internal/cluster` reads the fleet from the cluster, `internal/dashboard` renders the TUI, and `internal/manifest` pins the demo manifests' resource budget in its tests.
+- `docs/` holds research notes. `docs/software-factory.md` traces the term "software factory" through its definitions from 1968 to 2026.
 - `ARCHITECTURE.md` explains how the parts connect, with diagrams.
 - Run the program with `go run ./cmd/nightshift`, print one frame with `go run ./cmd/nightshift -once`. The module is pinned to `go 1.27.4`, the `go` command downloads that toolchain on demand, and the repo needs no other Go config.
 
