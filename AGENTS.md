@@ -16,9 +16,9 @@ This directory holds the demo for kubernetes-sigs/agent-sandbox. The demo runs o
 
 ## Commit messages
 
-Every commit message follows Conventional Commits 1.0.0. The spec lives at https://www.conventionalcommits.org/. The format is `type(scope): subject`.
+Every commit message follows [Conventional Commits 1.0.0](https://www.conventionalcommits.org/). The format is `type(scope): subject`.
 
-- Pick the type from this list: feat, fix, docs, chore, refactor.
+- Pick the type from this list: feat, fix, docs, chore, refactor, ci.
 - Set the scope to the area you changed: sbx, warmpool, claim, or docs. Omit the scope when the commit spans areas.
 - Write the subject in the imperative mood and lowercase. Keep it to 50 characters or fewer, with no trailing period.
 - Mark a breaking change with `!` after the type. Add a `BREAKING CHANGE:` footer that names what breaks.
