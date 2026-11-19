@@ -1,0 +1,14 @@
+# The repeatable unit: claim a pre-warmed sandbox from the pool.
+# Apply this -> instant adoption (no cold start).
+# Delete this -> shutdownPolicy: Delete tears the sandbox down,
+# and the pool refills a fresh warm standby automatically.
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxClaim
+metadata:
+  name: my-agent
+  namespace: sandbox-demo
+spec:
+  warmPoolRef:
+    name: agent-pool
+  lifecycle:
+    shutdownPolicy: Delete

@@ -1,0 +1,28 @@
+# Standing infra: everything connected via the extensions chain.
+# SandboxTemplate -> SandboxWarmPool (keeps 2 pre-warmed sandboxes ready).
+# You never touch Sandboxes directly: claim one with demo-claim.yaml.
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxTemplate
+metadata:
+  name: agent-bash-template
+  namespace: sandbox-demo
+spec:
+  podTemplate:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: agent
+        image: debian:12-slim   # ships a real bash
+        command: ["/bin/bash", "-c", "sleep infinity"]
+---
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxWarmPool
+metadata:
+  name: agent-pool
+  namespace: sandbox-demo
+spec:
+  updateStrategy:
+    type: Recreate
+  replicas: 2
+  sandboxTemplateRef:
+    name: agent-bash-template
