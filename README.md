@@ -25,6 +25,45 @@ second tab in the same dashboard follows your GitHub work: the pull requests
 themselves, from the first comment to the merge, along with issues and
 notifications.
 
+## Architecture
+
+Today, Nightshift brings the sandbox fleet and GitHub work together in one
+terminal dashboard. The automated ticket-to-merge workflow is still on the
+roadmap below.
+
+```mermaid
+flowchart LR
+  User --> Dashboard["Nightshift dashboard<br/>Bubble Tea"]
+  Dashboard --> Sandboxes["Sandboxes tab"]
+  Dashboard --> GitHubTab["GitHub tab<br/>gh-dash + zen-octo"]
+  GitHubTab <--> GitHub
+  Sandboxes -->|manage claims| Pool
+  Sandboxes <-->|terminal| Session
+
+  subgraph Kubernetes["Kubernetes cluster"]
+    Pool["agent-sandbox warm pool"] -->|claim a workspace| Workspace["Claimed sandbox"]
+    Workspace --> Session["Herdr terminal session"]
+    Pool -->|restock| Warm["Warm sandboxes"]
+  end
+```
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the sandbox lifecycle in more detail.
+
+## Built with
+
+Nightshift builds on these projects:
+
+- [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) manages
+  the sandbox pool and claims.
+- [Kubernetes](https://kubernetes.io/) runs the sandboxes.
+- [Bubble Tea](https://github.com/charmbracelet/bubbletea) powers the terminal
+  dashboard.
+- [gh-dash](https://github.com/dlvhdr/gh-dash) provides the GitHub dashboard.
+- [zen-octo](https://github.com/praxis-labs-io/zen-octo) provides the pull
+  request view.
+- [herdr-core](https://github.com/herdrdev/herdr-core) keeps sandbox terminal
+  sessions alive.
+
 ## Roadmap
 
 ### Workspaces
