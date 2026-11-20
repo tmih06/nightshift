@@ -61,7 +61,7 @@ func (m model) updateKeyboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.flash("warm pool sandbox — claim it with c first")
 			return m, nil
 		}
-		m.flash("opening fullscreen bash, detach with C-b d")
+		m.flash("opening fullscreen bash, detach with Ctrl-\\")
 		return m, fullCmd(b.Name)
 	case "x":
 		b := m.selectedBox()

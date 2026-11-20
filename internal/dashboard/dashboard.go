@@ -13,7 +13,7 @@ func RunOnce() {
 	m := model{
 		boxes:     boxes,
 		pool:      pool,
-		sessions:  session.Live(),
+		sessions:  session.Live(boxes),
 		metricsOK: metricsOK,
 		err:       err,
 		loaded:    true,

@@ -33,8 +33,10 @@ type sandboxTemplate struct {
 }
 
 type container struct {
-	Name      string    `yaml:"name"`
-	Resources resources `yaml:"resources"`
+	Name            string    `yaml:"name"`
+	Image           string    `yaml:"image"`
+	ImagePullPolicy string    `yaml:"imagePullPolicy"`
+	Resources       resources `yaml:"resources"`
 }
 
 type resources struct {
@@ -114,6 +116,9 @@ func TestAgentSandboxBudget(t *testing.T) {
 	}
 	if agent == nil {
 		t.Fatal("no container named agent in the SandboxTemplate")
+	}
+	if agent.Image != "nightshift-agent:0.1.0" || agent.ImagePullPolicy != "IfNotPresent" {
+		t.Errorf("agent image = %q, pull policy = %q; want local coding-agent image", agent.Image, agent.ImagePullPolicy)
 	}
 	cases := []struct {
 		what string

@@ -118,6 +118,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return resumeMsg{err: err}
 		})
 	case resumeMsg:
+		// Fullscreen attach changes the terminal size; restore the embedded size.
+		m.shellW, m.shellH = 0, 0
 		if msg.err != nil {
 			m.sticky("bash ended: " + msg.err.Error())
 		} else {

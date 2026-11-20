@@ -1,7 +1,6 @@
 package dashboard
 
 import (
-	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -137,24 +136,8 @@ func shellTickCmd() tea.Cmd {
 
 func fetchCmd() tea.Cmd {
 	return func() tea.Msg {
-		var (
-			boxes     []cluster.Sandbox
-			pool      cluster.Pool
-			metricsOK bool
-			err       error
-			sessions  map[string]bool
-			wg        sync.WaitGroup
-		)
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			boxes, pool, metricsOK, err = cluster.Fetch()
-		}()
-		go func() {
-			defer wg.Done()
-			sessions = session.Live()
-		}()
-		wg.Wait()
+		boxes, pool, metricsOK, err := cluster.Fetch()
+		sessions := session.Live(boxes)
 		return loadedMsg{boxes: boxes, pool: pool, sessions: sessions, metricsOK: metricsOK, err: err}
 	}
 }
@@ -309,6 +292,7 @@ func (m *model) selectPod(name string) {
 	if m.selected != name {
 		m.selected = name
 		m.inspectScroll = 0
+		m.shellW, m.shellH = 0, 0
 	}
 	if m.focus == focusShell && !m.canFocusShell() {
 		m.focus = focusNav
