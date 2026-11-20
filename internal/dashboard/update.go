@@ -125,6 +125,8 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 			return m, nil
 		}
 		return m, tea.ExecProcess(session.Attach(msg.pod), func(err error) tea.Msg {
+			// Fullscreen may have resized the shell behind the embedded viewer.
+			session.DisconnectViewer(msg.pod)
 			return resumeMsg{err: err}
 		})
 	case resumeMsg:

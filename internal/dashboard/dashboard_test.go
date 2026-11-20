@@ -902,6 +902,28 @@ func TestShellCaptureDisplay(t *testing.T) {
 	}
 }
 
+func TestPadToMatchesTruncation(t *testing.T) {
+	for _, s := range []string{"", "plain text", "\x1b[31mred\x1b[0m", "界a", "e\u0301", "first\nsecond", "\x1b[1m\x1b[0m"} {
+		for width := -1; width <= 12; width++ {
+			truncated := truncateANSI(s, width)
+			want := truncated + strings.Repeat(" ", max(0, width-ansi.StringWidth(truncated)))
+			if got := padTo(s, width); got != want {
+				t.Errorf("padTo(%q, %d) = %q, want %q", s, width, got, want)
+			}
+		}
+	}
+}
+
+func TestShellColorDisplay(t *testing.T) {
+	m := baseModel()
+	m.selected = "agent-pool-bkl2p"
+	m.sessions[m.selected] = true
+	m, _ = m.Update(shellMsg{pod: m.selected, lines: []string{"\x1b[31mcolored\x1b[0m text"}})
+	if got := m.View(); !strings.Contains(got, "\x1b[31mcolored\x1b[0m text") {
+		t.Fatalf("shell color lost in dashboard: %q", got)
+	}
+}
+
 func TestShellTick(t *testing.T) {
 	m := baseModel()
 	m.selected = "agent-pool-5ss7w"
