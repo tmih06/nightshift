@@ -18,7 +18,8 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: agent
-        image: nightshift-agent:0.1.0   # build and load images/agent into kind first
+        # Build and load images/agent into kind first.
+        image: nightshift-agent:0.1.0
         imagePullPolicy: IfNotPresent
         command: ["sleep", "infinity"]
         resources:   # cap each sandbox so bursts can't starve the node
