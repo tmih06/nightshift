@@ -47,6 +47,15 @@ real object you can look at with k9s (`:sbt` `:swp` `:sbc` `:sbx`).
                                         └────────────────────────────────┘
 ```
 
+## Sandbox images
+
+The demo uses a locally built Pi image. A shared tools and Herdr base also
+supports separate Pi, Codex, Claude Code, and OpenCode images. The image
+workflow checks each agent's stable npm release daily and publishes versioned
+amd64 and arm64 images to GHCR. Image build and registry details are in
+`images/agent/README.md`; published images do not automatically change the
+demo's warm pool.
+
 ## The claim cycle (your repeat loop)
 
 ```text

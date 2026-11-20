@@ -73,6 +73,7 @@ Nightshift builds on these projects:
 - [x] Restock the warm workspaces automatically
 - [x] Cap how much each workspace can use
 - [x] Ship each workspace with a coding agent and everyday developer tools
+- [x] Offer workspaces with a choice of coding agent, kept up to date
 
 ### Dashboard
 

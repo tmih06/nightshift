@@ -28,8 +28,10 @@ The demo runs on the kind cluster `kind-agent-sandbox` in the namespace
   CPU and 256Mi memory. `claim.yaml` claims one sandbox from the pool.
   `sbx.sh` wraps that loop in one command and is installed as `sbx` through
   a symlink in `~/.local/bin`.
-- `images/agent/` defines the coding-agent sandbox image. Build and load it
-  into kind before applying `demo/warmpool.yaml`; see
+- `images/base/` defines the common sandbox tools and Herdr; `images/agent/`
+  adds one versioned Pi, Codex, Claude Code, or OpenCode agent. The image
+  workflow watches stable npm releases and publishes to GHCR. Build and load
+  the default Pi image into kind before applying `demo/warmpool.yaml`; see
   `images/agent/README.md`.
 - `cmd/nightshift` is the entrypoint of the Go program, a Bubble Tea v2
   TUI. `internal/app` is the root model: it draws the tab bar and routes
