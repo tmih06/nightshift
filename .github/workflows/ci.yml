@@ -41,6 +41,39 @@ jobs:
       - name: Format
         run: test -z "$(gofmt -l .)"
 
+  images:
+    name: Image (${{ matrix.agent }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - agent: pi
+            package: '@earendil-works/pi-coding-agent'
+            command: pi
+          - agent: codex
+            package: '@openai/codex'
+            command: codex
+          - agent: claude-code
+            package: '@anthropic-ai/claude-code'
+            command: claude
+          - agent: opencode
+            package: opencode-ai
+            command: opencode
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build and smoke test
+        env:
+          AGENT: ${{ matrix.agent }}
+          PACKAGE: ${{ matrix.package }}
+          COMMAND: ${{ matrix.command }}
+        run: |
+          version=$(npm view "$PACKAGE" version)
+          docker build -t nightshift-base:local images/base
+          docker build --build-arg AGENT="$AGENT" --build-arg AGENT_VERSION="$version" -t nightshift-test images/agent
+          docker run --rm nightshift-test "$COMMAND" --version
+          docker run --rm nightshift-test bash -c 'test "$(id -un)" = node && fd --version && rg --version && python3 --version && node --version && git --version && hc --version'
+
   commit-convention:
     name: Commit subjects
     runs-on: ubuntu-latest
@@ -72,6 +105,7 @@ jobs:
         run: kind create cluster --name agent-sandbox
       - name: Build and load the sandbox image
         run: |
+          docker build -t nightshift-base:local images/base
           docker build -t nightshift-agent:0.1.0 images/agent
           kind load docker-image nightshift-agent:0.1.0 --name agent-sandbox
       - name: Install agent-sandbox v1.0.11
