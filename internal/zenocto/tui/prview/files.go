@@ -478,11 +478,13 @@ func (m *Model) lineTokens(f gh.ChangedFile) [][]syntax.Token {
 
 	var oldSrc, newSrc []string
 	var index []at
+	var hasRemoved bool
 
 	for _, h := range f.Hunks {
 		for _, l := range h.Lines {
 			switch l.Kind {
 			case gh.DiffRemoved:
+				hasRemoved = true
 				index = append(index, at{left: true, i: len(oldSrc)})
 				oldSrc = append(oldSrc, l.Content)
 			case gh.DiffAdded:
@@ -496,8 +498,14 @@ func (m *Model) lineTokens(f gh.ChangedFile) [][]syntax.Token {
 		}
 	}
 
-	oldTok := m.syntax.Lines(f.Path, strings.Join(oldSrc, "\n"))
-	newTok := m.syntax.Lines(f.Path, strings.Join(newSrc, "\n"))
+	// Only removed lines use old-side tokens; context lines use the new side.
+	var oldTok, newTok [][]syntax.Token
+	if hasRemoved {
+		oldTok = m.syntax.Lines(f.Path, strings.Join(oldSrc, "\n"))
+	}
+	if len(newSrc) > 0 {
+		newTok = m.syntax.Lines(f.Path, strings.Join(newSrc, "\n"))
+	}
 
 	out := make([][]syntax.Token, len(index))
 	for i, a := range index {

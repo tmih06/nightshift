@@ -41,6 +41,8 @@ Local changes:
   nightshift's tabs. Forms still use `tab` between fields.
 - `store`: `SectionSpec` replaces `config.Section`, so the cache does not
   pull in zen-octo's config package.
+- `tui/prview` and `tui/syntax`: diff highlighting skips unused sides and
+  shares tokens for identical source resolved to the same language lexer.
 
 To sync, copy the packages above from upstream `internal/`, rerun the import
 rewrite and `gofmt -w`, and reapply the changes.

@@ -1337,6 +1337,39 @@ func BenchmarkMoveTheCursorOnALargeDiff(b *testing.B) {
 	}
 }
 
+// Unlike bigDiff alone, every file contains different code. Include additions
+// and removals to measure cold syntax highlighting on both kinds of patch.
+func BenchmarkOpenDistinctDiffFiles(b *testing.B) {
+	for _, change := range []struct {
+		name string
+		kind gh.DiffKind
+	}{{"additions", gh.DiffAdded}, {"removals", gh.DiffRemoved}} {
+		b.Run(change.name, func(b *testing.B) {
+			files := bigDiff(32, 200)
+			for i, f := range files {
+				for j := range f.Hunks[0].Lines {
+					line := &f.Hunks[0].Lines[j]
+					line.Content += fmt.Sprintf(" // file %d", i)
+					if line.Kind == gh.DiffAdded {
+						line.Kind = change.kind
+					}
+				}
+			}
+			var m prview.Model
+			for i := 0; b.Loop(); i++ {
+				if i%(len(files)-1) == 0 {
+					b.StopTimer()
+					m = detailed(held(sampleDetail()), 200, 50)
+					m.SetFiles(loadedFiles(files, 0))
+					m = press(m, "]", "]", "]", "1")
+					b.StartTimer()
+				}
+				m = press(m, "j")
+			}
+		})
+	}
+}
+
 func TestTheBraceWalksTheRingOnTheConversationWhateverTheDiffRecorded(t *testing.T) {
 	loaded := func() prview.Model {
 		m := detailed(held(sampleDetail()), 200, 30)

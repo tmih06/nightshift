@@ -35,8 +35,14 @@ func Names() []string { return styles.Names() }
 // Lines splits code into lines of colored tokens, choosing the lexer from path.
 // Pass a whole file: lexers carry state across lines.
 func (s *Syntax) Lines(path, code string) [][]Token {
+	lexer := lexers.Match(path)
+	if lexer == nil {
+		lexer = lexers.Fallback
+	}
+	// The resolved lexer, not the path, determines the tokens. Identical
+	// source in a moved, copied, or generated file can share its colors.
 	h := fnv.New64a()
-	_, _ = h.Write([]byte(path))
+	_, _ = h.Write([]byte(lexer.Config().Name))
 	_, _ = h.Write([]byte{0})
 	_, _ = h.Write([]byte(code))
 	key := h.Sum64()
@@ -45,17 +51,12 @@ func (s *Syntax) Lines(path, code string) [][]Token {
 		return out
 	}
 
-	out := s.tokenise(path, code)
+	out := s.tokenise(lexer, code)
 	s.cache[key] = out
 	return out
 }
 
-func (s *Syntax) tokenise(path, code string) [][]Token {
-	lexer := lexers.Match(path)
-	if lexer == nil {
-		lexer = lexers.Fallback
-	}
-
+func (s *Syntax) tokenise(lexer chroma.Lexer, code string) [][]Token {
 	iter, err := chroma.Coalesce(lexer).Tokenise(nil, code)
 	if err != nil {
 		return plain(code)
