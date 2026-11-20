@@ -1,25 +1,98 @@
+// Command nightshift is the software factory's terminal: a sandbox tab to
+// watch and drive the agent-sandbox fleet, and a GitHub tab that is
+// gh-dash.
+//
+// go run ./cmd/nightshift opens the TUI; -once prints one sandbox frame.
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
+	"sync"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/log/v2"
+	gitm "github.com/aymanbagabas/git-module"
+	"github.com/cli/go-gh/v2/pkg/repository"
+	zone "github.com/lrstanley/bubblezone/v2"
 
-	"github.com/tmih06/nightshift/internal/dashboard"
+	"github.com/tmih06/nightshift/internal/app"
+	"github.com/tmih06/nightshift/internal/ghdash/config"
+	"github.com/tmih06/nightshift/internal/ghdash/git"
+	ghtui "github.com/tmih06/nightshift/internal/ghdash/tui"
+	ghtheme "github.com/tmih06/nightshift/internal/ghdash/tui/theme"
 )
 
-// nightshift: a Bubble Tea dashboard for the agent-sandbox warm pool.
-// go run ./cmd/nightshift opens the TUI (two panes, mouse enabled),
-// go run ./cmd/nightshift -once prints one frame to stdout.
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "-once" {
-		dashboard.RunOnce()
+		fmt.Println(app.Once(120, 32))
 		return
 	}
-	p := tea.NewProgram(dashboard.New(), tea.WithAltScreen(), tea.WithMouseCellMotion())
-	if _, err := p.Run(); err != nil {
+	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func run() error {
+	// gh-dash logs to stderr, which would draw over the TUI. NIGHTSHIFT_DEBUG
+	// sends it to a file instead.
+	log.SetOutput(io.Discard)
+	if path := os.Getenv("NIGHTSHIFT_DEBUG"); path != "" {
+		f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0o600)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		log.SetOutput(f)
+		log.SetLevel(log.DebugLevel)
+	}
+
+	gitRepo, ghRepo := currentRepos()
+	var repoPath string
+	if gitRepo != nil {
+		repoPath = gitRepo.Path()
+	}
+	location := config.Location{RepoPath: repoPath}
+
+	// gh-dash exits the process on a bad config once it is running, so the
+	// config is checked first, while the terminal is still ours.
+	cfg, err := config.ParseConfig(location)
+	if err != nil {
+		return fmt.Errorf("gh-dash config: %w", err)
+	}
+	theme := ghtheme.ParseTheme(&cfg)
+
+	zone.NewGlobal()
+	dash := ghtui.NewModel(location, ghtui.Repositories{GitRepo: gitRepo, GHRepo: &ghRepo})
+
+	_, err = tea.NewProgram(app.New(theme, app.NewGhDash(&dash), nil)).Run()
+	return err
+}
+
+// currentRepos finds the git and GitHub repositories of the working
+// directory, as gh-dash does, so its repo-scoped sections and branch view work.
+func currentRepos() (*gitm.Repository, repository.Repository) {
+	var (
+		gitRepo *gitm.Repository
+		ghRepo  repository.Repository
+		wg      sync.WaitGroup
+	)
+	wg.Go(func() {
+		r, err := git.GetRepoInPwd()
+		if err == nil {
+			gitRepo = r
+		}
+	})
+	wg.Go(func() {
+		r, err := repository.Current()
+		if err == nil || !errors.Is(err, context.Canceled) {
+			ghRepo = r
+		}
+	})
+	wg.Wait()
+	return gitRepo, ghRepo
 }

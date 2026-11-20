@@ -1,23 +1,27 @@
 # AGENTS.md
 
-This directory holds the demo for kubernetes-sigs/agent-sandbox. The demo runs on the kind cluster `kind-agent-sandbox` in the namespace `sandbox-demo`.
+Rules for working in this repository. Read `CONTEXT.md` first: it holds the
+project context, the layout, and the verify commands.
 
-## What lives here
+## Working principles
 
-- `demo/` holds the Kubernetes side: `warmpool.yaml` creates the namespace `sandbox-demo` and the standing pool, one `SandboxTemplate` and one `SandboxWarmPool` that keeps two warm sandboxes, each pod capped at 500m CPU and 256Mi memory. `claim.yaml` claims one sandbox from the pool. `sbx.sh` wraps that loop in one command and is installed as `sbx` through a symlink in `~/.local/bin`.
-- `images/agent/` defines the coding-agent sandbox image. Build and load it into kind before applying `demo/warmpool.yaml`; see `images/agent/README.md`.
-- `cmd/nightshift` is the entrypoint of the Go program, a Bubble Tea dashboard for the sandboxes. `internal/cluster` reads the fleet from the cluster, `internal/dashboard` renders the TUI, `internal/session` owns the Herdr terminal sessions, and `internal/manifest` pins the demo manifests' resource budget in its tests.
-- The TUI is a lazygit-style layout: the left pane fits its content by default and resizes by dragging its splitter. The right column is a bento row: two separate boxes for info (sized to its text, never cut) and, for a claimed sandbox, usage with btop-style history charts, then the shell pane below, embedding the sandbox's bash through Herdr screen reads so Herdr never takes over the terminal. A warm sandbox instead shows its spec (image, command, restart policy, request/limit budget) and the warm pool box (pool, template, ready replicas, update strategy, and the c hint), because a standby sandbox has no session or usage story. Exactly one pane carries the accent border, the nav pane in navigation and the shell pane while bash has focus, and while the shell holds focus no input escapes: scrolling and clicks stay in the shell, only the splitter drag still works, and C-b then q is the only way out; a sidebar click always returns to navigation. `c` claims a sandbox and pre-creates its bash, staying in navigation until `enter` attaches, warm pool sandboxes refuse bash, `x` twice destroys a claim, `F` fullscreens. Status notifications expire after 5 seconds; errors and armed confirmations stay. See `docs/session-manager.md` for session behavior. Herdr (`hc`) runs inside each claimed sandbox, not on the host.
-- `docs/` holds research notes. `docs/software-factory.md` traces the term "software factory" through its definitions from 1968 to 2026.
-- `ARCHITECTURE.md` explains how the parts connect, with diagrams.
-- Run the program with `go run ./cmd/nightshift`, print one frame with `go run ./cmd/nightshift -once`. The module is pinned to `go 1.27.4`, the `go` command downloads that toolchain on demand, and the repo needs no other Go config.
-
-## Verify
-
-- Run `bash -n demo/sbx.sh` to check that the script parses.
-- Build and load the sandbox image as documented in `images/agent/README.md` before testing against the cluster.
-- With the cluster up, run `SBX_NO_EXEC=1 sbx` to check the claim and destroy loop end to end. The script removes the claim it creates.
-- Run `go test ./...` and `go vet ./...` to check the Go module, and `go run ./cmd/nightshift -once` to print one dashboard frame against the live cluster. Build with `go build -o <path> ./cmd/nightshift` to keep the binary out of the repo.
+- Read before you write. Check `CONTEXT.md`, `ARCHITECTURE.md`, and the code
+  you are about to touch before changing it.
+- Keep each change small and focused on one concern. Do not refactor or
+  reformat code the task does not need.
+- Verify before you call work done. Run the checks under "Verify" in
+  `CONTEXT.md` that cover your change, and report failures as they are.
+- Keep the docs true. When a change alters behavior, layout, or commands,
+  update `CONTEXT.md`, `ARCHITECTURE.md`, or `docs/` in the same change. When
+  it ships a roadmap item, tick it in `README.md`.
+- Keep `README.md` free of technical detail. It speaks to people who want to
+  know what Nightshift does, not how.
+- Stay inside the demo. Touch only the `kind-agent-sandbox` cluster and the
+  `sandbox-demo` namespace, and clean up any claim you create.
+- Ask before anything hard to undo: deleting cluster resources you did not
+  create, force-pushing, or rewriting history.
+- Keep build output, binaries, and credentials out of the repo. Never bake
+  secrets into the sandbox image.
 
 ## Commit messages
 

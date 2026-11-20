@@ -1,0 +1,241 @@
+// Package app is the root Bubble Tea model. It draws a view switcher across
+// the top and gives the rest of the frame to the active tab: the sandbox
+// board or gh-dash.
+package app
+
+import (
+	"fmt"
+
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+
+	"github.com/tmih06/nightshift/internal/dashboard"
+	ghtui "github.com/tmih06/nightshift/internal/ghdash/tui"
+	"github.com/tmih06/nightshift/internal/ghdash/tui/context"
+	ghtheme "github.com/tmih06/nightshift/internal/ghdash/tui/theme"
+)
+
+// Tab names one page behind the tab bar.
+type Tab int
+
+const (
+	TabSandboxes Tab = iota
+	TabGitHub
+)
+
+var tabLabels = [...]string{
+	TabSandboxes: "Sandboxes",
+	TabGitHub:    "GitHub",
+}
+
+// GitHub is the model behind the GitHub tab: gh-dash's root.
+type GitHub interface {
+	Init() tea.Cmd
+	Update(tea.Msg) (tea.Model, tea.Cmd)
+	View() tea.View
+	Capturing() bool
+}
+
+// Model routes input to the active tab and every other message to both, so a
+// tab keeps refreshing while it is out of sight.
+type Model struct {
+	theme  ghtheme.Theme
+	styles context.Styles
+	active Tab
+
+	sandboxes dashboard.Model
+
+	// gh is nil when gh-dash could not start; ghErr then says why.
+	gh    GitHub
+	ghErr error
+
+	width  int
+	height int
+}
+
+// New builds the root model over gh-dash's theme. gh is nil when ghErr says
+// why the GitHub tab cannot run.
+func New(theme ghtheme.Theme, gh GitHub, ghErr error) Model {
+	return Model{
+		theme:     theme,
+		styles:    context.InitStyles(theme),
+		sandboxes: dashboard.New(theme),
+		gh:        gh,
+		ghErr:     ghErr,
+	}
+}
+
+// NewGhDash wraps gh-dash's root model for the GitHub tab.
+func NewGhDash(m *ghtui.Model) GitHub { return m }
+
+func (m Model) Init() tea.Cmd {
+	cmds := []tea.Cmd{m.sandboxes.Init()}
+	if m.gh != nil {
+		cmds = append(cmds, m.gh.Init())
+	}
+	return tea.Batch(cmds...)
+}
+
+func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width, m.height = msg.Width, msg.Height
+		return m.broadcast(tea.WindowSizeMsg{Width: msg.Width, Height: max(0, msg.Height-barHeight)})
+
+	case tea.KeyPressMsg:
+		if !m.capturing() {
+			switch msg.String() {
+			case "tab":
+				return m.switchTo((m.active + 1) % Tab(len(tabLabels)))
+			case "shift+tab":
+				return m.switchTo((m.active + Tab(len(tabLabels)) - 1) % Tab(len(tabLabels)))
+			}
+		}
+		return m.toActive(msg)
+
+	case tea.PasteMsg:
+		return m.toActive(msg)
+
+	case tea.MouseMsg:
+		mouse := msg.Mouse()
+		if mouse.Y < barHeight {
+			if click, ok := msg.(tea.MouseClickMsg); ok && click.Button == tea.MouseLeft {
+				if tab, hit := m.tabAt(mouse.X); hit {
+					return m.switchTo(tab)
+				}
+			}
+			return m, nil
+		}
+		return m.toActive(shiftMouse(msg, -barHeight))
+	}
+	return m.broadcast(msg)
+}
+
+// capturing is whether the active tab holds the keyboard for text, a prompt,
+// or the embedded shell, so tab belongs to it rather than to the tab bar.
+func (m Model) capturing() bool {
+	switch m.active {
+	case TabSandboxes:
+		return m.sandboxes.Capturing()
+	case TabGitHub:
+		return m.gh != nil && m.gh.Capturing()
+	}
+	return false
+}
+
+func (m Model) switchTo(tab Tab) (tea.Model, tea.Cmd) {
+	m.active = tab
+	m.sandboxes = m.sandboxes.SetHidden(tab != TabSandboxes)
+	return m, nil
+}
+
+func (m Model) toActive(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	switch m.active {
+	case TabSandboxes:
+		m.sandboxes, cmd = m.sandboxes.Update(msg)
+	case TabGitHub:
+		if m.gh == nil {
+			if key, ok := msg.(tea.KeyPressMsg); ok && (key.String() == "q" || key.String() == "ctrl+c") {
+				return m, tea.Quit
+			}
+			return m, nil
+		}
+		cmd = m.updateGitHub(msg)
+	}
+	return m, cmd
+}
+
+func (m Model) broadcast(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var sandboxCmd, prCmd tea.Cmd
+	m.sandboxes, sandboxCmd = m.sandboxes.Update(msg)
+	if dashboard.Owns(msg) || m.gh == nil {
+		return m, sandboxCmd
+	}
+	prCmd = m.updateGitHub(msg)
+	return m, tea.Batch(sandboxCmd, prCmd)
+}
+
+// updateGitHub keeps gh-dash's pointer model; it updates in place, as it does
+// under its own program.
+func (m *Model) updateGitHub(msg tea.Msg) tea.Cmd {
+	next, cmd := m.gh.Update(msg)
+	if gh, ok := next.(GitHub); ok {
+		m.gh = gh
+	}
+	return cmd
+}
+
+func (m Model) View() tea.View {
+	v := tea.NewView(m.render())
+	v.AltScreen = true
+	v.ReportFocus = true
+	v.MouseMode = tea.MouseModeCellMotion
+	v.WindowTitle = "nightshift"
+	if m.active == TabGitHub && m.gh != nil {
+		if c := m.gh.View().Cursor; c != nil {
+			moved := *c
+			moved.Y += barHeight
+			v.Cursor = &moved
+		}
+	}
+	return v
+}
+
+func (m Model) render() string {
+	if m.width <= 0 || m.height <= 0 {
+		return ""
+	}
+	return m.renderBar() + "\n" + m.body()
+}
+
+func (m Model) body() string {
+	h := max(0, m.height-barHeight)
+	switch {
+	case m.active == TabSandboxes:
+		return m.sandboxes.View()
+	case m.gh != nil:
+		return m.gh.View().Content
+	default:
+		return unavailable(m.theme, m.ghErr, m.width, h)
+	}
+}
+
+// unavailable fills the GitHub tab when gh-dash cannot run.
+func unavailable(th ghtheme.Theme, err error, width, height int) string {
+	text := "gh-dash could not start."
+	if err != nil {
+		text = fmt.Sprintf("gh-dash could not start: %v", err)
+	}
+	body := lipgloss.NewStyle().Foreground(th.PrimaryText).Bold(true).Render(text) + "\n\n" +
+		lipgloss.NewStyle().Foreground(th.FaintText).
+			Render("Authenticate with gh auth login, then restart nightshift.")
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
+		lipgloss.NewStyle().MaxWidth(max(1, width-4)).Render(body))
+}
+
+// Once renders one frame of the sandbox tab under the tab bar, for -once.
+func Once(width, height int) string {
+	th := *ghtheme.DefaultTheme
+	m := Model{theme: th, styles: context.InitStyles(th), sandboxes: dashboard.Fetched(th)}
+	next, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: height})
+	return next.(Model).render()
+}
+
+func shiftMouse(msg tea.MouseMsg, dy int) tea.MouseMsg {
+	switch msg := msg.(type) {
+	case tea.MouseClickMsg:
+		msg.Y += dy
+		return msg
+	case tea.MouseReleaseMsg:
+		msg.Y += dy
+		return msg
+	case tea.MouseWheelMsg:
+		msg.Y += dy
+		return msg
+	case tea.MouseMotionMsg:
+		msg.Y += dy
+		return msg
+	}
+	return msg
+}

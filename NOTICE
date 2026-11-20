@@ -8,3 +8,7 @@ In accordance with Section 4 of the Apache License, Version 2.0, any
 redistribution or derivative work must include a copy of LICENSE, retain
 this attribution notice for tmih06, and carry prominent notices on any
 modified files stating that you changed the files.
+
+Third-party vendored components:
+- internal/ghdash: gh-dash (https://github.com/dlvhdr/gh-dash),
+  MIT License, Copyright (c) 2025 Dolev Hadar (internal/ghdash/LICENSE.txt).
