@@ -18,11 +18,14 @@ its shell, and enter focuses it.
 
 Herdr's holder owns the bash process independently of kubectl and the
 dashboard. The embedded pane uses one framed `kubectl exec -i ... -- hc connect`
-viewer for keystrokes, resize events, and screen snapshots. Shell output triggers
-a snapshot over that same connection; an idle shell does not need screen reads.
-Closing the dashboard closes the viewer, not the terminal. Press C-b then q or
-click the sidebar to leave the embedded shell; `F` opens `hc attach` fullscreen
-through kubectl, where Ctrl-\ detaches back to Nightshift.
+viewer for keystrokes, resize events, and terminal output. A local terminal
+emulator interprets the initial paint and subsequent output, preserving colors
+and other text styles. It continues processing output while the tab is hidden,
+without rendering the screen until the tab is visible again. Closing the dashboard
+closes the viewer, not the terminal. Press C-b then q or click the sidebar to
+leave the embedded shell; `F` opens `hc attach` fullscreen through kubectl,
+where Ctrl-\ detaches back to Nightshift. The embedded viewer reconnects for a
+fresh paint afterward, since the fullscreen terminal may have changed size.
 
 Restarting Nightshift reuses live in-pod sessions. Deleting or restarting a
 pod destroys its processes, including Herdr and bash; Herdr does not persist

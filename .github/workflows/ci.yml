@@ -112,8 +112,8 @@ jobs:
         run: |
           kubectl apply -f demo/warmpool.yaml
           for _ in $(seq 1 60); do
-            ready=$(kubectl -n sandbox-demo get sandboxwarmpool agent-pool -o jsonpath='{.status.readyReplicas}')
-            [ "$ready" = "2" ] && exit 0
+            ready=$(kubectl -n sandbox-demo get sandboxwarmpool pi-pool -o jsonpath='{.status.readyReplicas}')
+            [ "$ready" = "1" ] && exit 0
             sleep 5
           done
           kubectl -n sandbox-demo get sandboxes
@@ -140,9 +140,9 @@ jobs:
       - name: Prove the pool restocks
         run: |
           for _ in $(seq 1 60); do
-            ready=$(kubectl -n sandbox-demo get sandboxwarmpool agent-pool -o jsonpath='{.status.readyReplicas}')
-            [ "$ready" = "2" ] && exit 0
+            ready=$(kubectl -n sandbox-demo get sandboxwarmpool pi-pool -o jsonpath='{.status.readyReplicas}')
+            [ "$ready" = "1" ] && exit 0
             sleep 5
           done
-          kubectl -n sandbox-demo get sandboxwarmpool agent-pool
+          kubectl -n sandbox-demo get sandboxwarmpool pi-pool
           exit 1

@@ -80,8 +80,7 @@ type model struct {
 	hist           map[string]usageHistory
 	live           map[string]liveUsage
 
-	// hidden is set while another tab is on screen, so the shell stops
-	// polling Herdr for a pane nobody sees.
+	// hidden stops shell screen renders while another tab is on screen.
 	hidden bool
 
 	width  int

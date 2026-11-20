@@ -105,12 +105,13 @@ The demo runs on the kind cluster `kind-agent-sandbox` in the namespace
   the first read, CPU as the rate between two. Warm sandboxes use
   metrics-server, which the demo cluster samples every 15 seconds and
   averages over 15 to 30.
-- A tab out of sight keeps refreshing, but the sandbox tab stops reading the
-  shell's screen until it is shown again. Table rows and warm-sandbox
-  documents are rendered once per change, not per frame.
-- The shell embeds the sandbox's bash through Herdr screen reads triggered by
-  shell output on the same connection that sends keystrokes. Herdr never takes
-  over the terminal.
+- A tab out of sight keeps refreshing, but the sandbox tab stops rendering the
+  shell's screen until it is shown again. Its viewer still processes output so
+  the screen stays current. Table rows and warm-sandbox documents are rendered
+  once per change, not per frame.
+- The shell embeds the sandbox's bash through a Herdr attach stream and a local
+  terminal emulator, preserving colors and styles. The same connection sends
+  keystrokes; Herdr never takes over the terminal.
 - Focus is in the table during navigation and in the sidebar while bash or
   the configs have it; the sidebar's heading turns green and says how to
   leave, and its rule brightens.

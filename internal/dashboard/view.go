@@ -798,6 +798,11 @@ func spread(left, right string, width int) string {
 }
 
 func padTo(s string, width int) string {
+	if width > 0 && !strings.Contains(s, "\n") {
+		if w := ansi.StringWidth(s); w <= width {
+			return s + strings.Repeat(" ", width-w)
+		}
+	}
 	s = truncateANSI(s, width)
 	return s + strings.Repeat(" ", max(0, width-ansi.StringWidth(s)))
 }

@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/charmbracelet/x/vt"
+
 	"github.com/tmih06/nightshift/internal/cluster"
 )
 
@@ -75,14 +77,28 @@ func Attach(pod string) *exec.Cmd {
 	return kubectl(pod, true, true, "attach", Name(pod))
 }
 
+// DisconnectViewer makes the next embedded view attach for a fresh paint.
+// It does not stop the shell, which is owned by Herdr's holder.
+func DisconnectViewer(pod string) {
+	viewers.Lock()
+	defer viewers.Unlock()
+	if v := viewers.byPod[pod]; v != nil {
+		v.mu.Lock()
+		v.closed = true
+		_ = v.in.Close()
+		v.mu.Unlock()
+		delete(viewers.byPod, pod)
+	}
+}
+
 type Key struct {
 	Text string
 	Name string
 }
 
-// A viewer provides raw input and resize. hc keys/send are intended for agent
-// messages and may wait for a quiet period or append Enter, so they cannot
-// carry interactive keystrokes. The holder, not this viewer, owns the shell.
+// A viewer provides raw input, resize and a local screen. hc keys/send are
+// intended for agent messages and may wait for a quiet period or append Enter,
+// so they cannot carry interactive keystrokes. The holder owns the shell.
 type viewer struct {
 	mu      sync.Mutex
 	in      io.WriteCloser
@@ -91,10 +107,11 @@ type viewer struct {
 	channel uint32
 	closed  bool
 
-	dirty       chan struct{}
-	done        chan struct{}
-	screenMu    sync.Mutex
-	screenReply chan screenResponse
+	dirty      chan struct{}
+	done       chan struct{}
+	screenMu   sync.Mutex
+	screen     *vt.Emulator
+	screenDone chan struct{}
 }
 
 var viewers = struct {
@@ -191,9 +208,11 @@ func openViewer(pod string, w, h int) (*viewer, error) {
 		}
 		v := &viewer{
 			in: in, cmd: cmd, reader: r, channel: response.Result.Channel,
-			dirty: make(chan struct{}, 1), done: make(chan struct{}), screenReply: make(chan screenResponse, 1),
+			dirty: make(chan struct{}, 1), done: make(chan struct{}), screen: vt.NewEmulator(w, h),
 		}
-		v.markDirty()
+		// Herdr owns scrollback; the embedded pane only renders the live screen.
+		v.screen.SetScrollbackSize(1)
+		v.drainScreenReplies()
 		return v, nil
 	}
 }
@@ -226,16 +245,12 @@ func readFrame(r io.Reader) (uint32, byte, []byte, error) {
 }
 
 func (v *viewer) send(kind byte, payload []byte) error {
-	return v.sendFrame(v.channel, kind, payload)
-}
-
-func (v *viewer) sendFrame(channel uint32, kind byte, payload []byte) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.closed {
 		return fmt.Errorf("hc viewer closed")
 	}
-	return writeFrame(v.in, channel, kind, payload)
+	return writeFrame(v.in, v.channel, kind, payload)
 }
 
 func (v *viewer) read(pod string) {
@@ -246,6 +261,7 @@ func (v *viewer) read(pod string) {
 		_ = v.in.Close()
 		v.mu.Unlock()
 		_ = v.cmd.Wait()
+		v.closeScreen()
 		viewers.Lock()
 		if viewers.byPod[pod] == v {
 			delete(viewers.byPod, pod)
@@ -257,11 +273,8 @@ func (v *viewer) read(pod string) {
 		if err != nil || (channel == v.channel && kind == 2) {
 			return
 		}
-		if channel == 0 && kind == 0 {
-			v.receiveScreen(payload)
-		}
 		if channel == v.channel && kind == 0 && len(payload) > 0 {
-			v.markDirty()
+			v.applyOutput(payload)
 			var credit [4]byte
 			binary.LittleEndian.PutUint32(credit[:], uint32(len(payload)))
 			if v.send(1, credit[:]) != nil {
@@ -271,7 +284,45 @@ func (v *viewer) read(pod string) {
 	}
 }
 
+// Herdr answers terminal queries itself. Drain local emulator replies so its
+// unbuffered input pipe cannot block, then stop the reader before Close.
+func (v *viewer) drainScreenReplies() {
+	v.screenDone = make(chan struct{})
+	go func() {
+		_, _ = io.Copy(io.Discard, v.screen)
+		close(v.screenDone)
+	}()
+}
+
+func (v *viewer) closeScreen() {
+	v.screenMu.Lock()
+	defer v.screenMu.Unlock()
+	_ = v.screen.InputPipe().(io.Closer).Close()
+	<-v.screenDone
+	_ = v.screen.Close()
+}
+
+func (v *viewer) applyOutput(payload []byte) {
+	v.screenMu.Lock()
+	_, _ = v.screen.Write(payload)
+	v.screenMu.Unlock()
+	v.markDirty()
+}
+
+func (v *viewer) markDirty() {
+	select {
+	case v.dirty <- struct{}{}:
+	default:
+	}
+}
+
 func (v *viewer) resize(w, h int) error {
+	v.screenMu.Lock()
+	// A redundant emulator resize resets scroll margins and tab stops.
+	if v.screen.Width() != w || v.screen.Height() != h {
+		v.screen.Resize(w, h)
+	}
+	v.screenMu.Unlock()
 	var size [4]byte
 	binary.LittleEndian.PutUint16(size[:], uint16(w))
 	binary.LittleEndian.PutUint16(size[2:], uint16(h))
