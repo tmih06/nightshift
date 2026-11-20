@@ -420,10 +420,11 @@ func TestADiffLandingOnTheOpenTabSizesThePane(t *testing.T) {
 
 	late := press(detailed(held(sampleDetail()), 100, 24), "]", "]", "]")
 	late.SetFiles(loadedFiles(files, 0))
+	late = finishDiff(late)
 
 	early := detailed(held(sampleDetail()), 100, 24)
 	early.SetFiles(loadedFiles(files, 0))
-	early = press(early, "]", "]", "]")
+	early = finishDiff(press(early, "]", "]", "]"))
 
 	if got, want := scrollReadout(late.View()), scrollReadout(early.View()); got != want {
 		t.Errorf("the diff landing on the open tab reads %q, want %q", got, want)
@@ -1330,10 +1331,43 @@ func bigDiff(files, lines int) []gh.ChangedFile {
 func BenchmarkMoveTheCursorOnALargeDiff(b *testing.B) {
 	m := detailed(held(sampleDetail()), 200, 50)
 	m.SetFiles(loadedFiles(bigDiff(60, 200), 0))
-	m = press(m, "]", "]", "]", "1")
+	m = finishDiff(press(m, "]", "]", "]", "1"))
 
 	for b.Loop() {
-		m = press(m, "j")
+		m = finishDiff(press(m, "j"))
+	}
+}
+
+// Unlike bigDiff alone, every file contains different code. Include additions
+// and removals to measure cold syntax highlighting on both kinds of patch.
+func BenchmarkOpenDistinctDiffFiles(b *testing.B) {
+	for _, change := range []struct {
+		name string
+		kind gh.DiffKind
+	}{{"additions", gh.DiffAdded}, {"removals", gh.DiffRemoved}} {
+		b.Run(change.name, func(b *testing.B) {
+			files := bigDiff(32, 200)
+			for i, f := range files {
+				for j := range f.Hunks[0].Lines {
+					line := &f.Hunks[0].Lines[j]
+					line.Content += fmt.Sprintf(" // file %d", i)
+					if line.Kind == gh.DiffAdded {
+						line.Kind = change.kind
+					}
+				}
+			}
+			var m prview.Model
+			for i := 0; b.Loop(); i++ {
+				if i%(len(files)-1) == 0 {
+					b.StopTimer()
+					m = detailed(held(sampleDetail()), 200, 50)
+					m.SetFiles(loadedFiles(files, 0))
+					m = finishDiff(press(m, "]", "]", "]", "1"))
+					b.StartTimer()
+				}
+				m = finishDiff(press(m, "j"))
+			}
+		})
 	}
 }
 

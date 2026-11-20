@@ -16,25 +16,32 @@ func TestTheSameBodyIsOnlyRenderedOnce(t *testing.T) {
 	if m.Render("# One", 60) != first {
 		t.Error("the same body at the same width came back different")
 	}
-	if len(m.cache) != 1 {
-		t.Errorf("cache holds %d entries, want 1", len(m.cache))
+	if len(m.cache[0].bodies) != 1 {
+		t.Errorf("cache holds %d entries, want 1", len(m.cache[0].bodies))
 	}
 
 	m.Render("# Two", 60)
-	if len(m.cache) != 2 {
-		t.Errorf("cache holds %d entries after a second body, want 2", len(m.cache))
+	if len(m.cache[0].bodies) != 2 {
+		t.Errorf("cache holds %d entries after a second body, want 2", len(m.cache[0].bodies))
 	}
 }
 
-func TestAWidthChangeDropsWhatWasCached(t *testing.T) {
+func TestMarkdownKeepsRecentWidths(t *testing.T) {
 	m := NewMarkdown(testTheme)
-
-	m.Render("# One", 60)
+	first := m.Render("# One", 60)
 	m.Render("# Two", 60)
 	m.Render("# One", 40)
 
-	if len(m.cache) != 1 {
-		t.Errorf("cache holds %d entries after a width change, want 1", len(m.cache))
+	if got := m.Render("# One", 60); got != first || len(m.cache[0].bodies) != 2 {
+		t.Fatal("alternating widths discarded the cached bodies")
+	}
+	for _, width := range []int{50, 70, 80} {
+		m.Render("# One", width)
+	}
+	for _, entry := range m.cache {
+		if entry.width == 40 {
+			t.Fatal("least recently used width was not evicted")
+		}
 	}
 }
 

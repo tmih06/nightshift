@@ -75,24 +75,6 @@ func Attach(pod string) *exec.Cmd {
 	return kubectl(pod, true, true, "attach", Name(pod))
 }
 
-func Capture(pod string) ([]string, error) {
-	out, err := hc(pod, "read", "--json", Name(pod))
-	if err != nil {
-		return nil, err
-	}
-	var result struct {
-		Text string `json:"text"`
-	}
-	if err := json.Unmarshal(out, &result); err != nil {
-		return nil, fmt.Errorf("hc read: %w", err)
-	}
-	lines := strings.Split(result.Text, "\n")
-	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
-		lines = lines[:len(lines)-1]
-	}
-	return lines, nil
-}
-
 type Key struct {
 	Text string
 	Name string
@@ -108,6 +90,11 @@ type viewer struct {
 	reader  *bufio.Reader
 	channel uint32
 	closed  bool
+
+	dirty       chan struct{}
+	done        chan struct{}
+	screenMu    sync.Mutex
+	screenReply chan screenResponse
 }
 
 var viewers = struct {
@@ -202,7 +189,12 @@ func openViewer(pod string, w, h int) (*viewer, error) {
 		if response.Error != nil {
 			return fail(fmt.Errorf("%s", response.Error.Message))
 		}
-		return &viewer{in: in, cmd: cmd, reader: r, channel: response.Result.Channel}, nil
+		v := &viewer{
+			in: in, cmd: cmd, reader: r, channel: response.Result.Channel,
+			dirty: make(chan struct{}, 1), done: make(chan struct{}), screenReply: make(chan screenResponse, 1),
+		}
+		v.markDirty()
+		return v, nil
 	}
 }
 
@@ -234,18 +226,23 @@ func readFrame(r io.Reader) (uint32, byte, []byte, error) {
 }
 
 func (v *viewer) send(kind byte, payload []byte) error {
+	return v.sendFrame(v.channel, kind, payload)
+}
+
+func (v *viewer) sendFrame(channel uint32, kind byte, payload []byte) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.closed {
 		return fmt.Errorf("hc viewer closed")
 	}
-	return writeFrame(v.in, v.channel, kind, payload)
+	return writeFrame(v.in, channel, kind, payload)
 }
 
 func (v *viewer) read(pod string) {
 	defer func() {
 		v.mu.Lock()
 		v.closed = true
+		close(v.done)
 		_ = v.in.Close()
 		v.mu.Unlock()
 		_ = v.cmd.Wait()
@@ -260,7 +257,11 @@ func (v *viewer) read(pod string) {
 		if err != nil || (channel == v.channel && kind == 2) {
 			return
 		}
+		if channel == 0 && kind == 0 {
+			v.receiveScreen(payload)
+		}
 		if channel == v.channel && kind == 0 && len(payload) > 0 {
+			v.markDirty()
 			var credit [4]byte
 			binary.LittleEndian.PutUint32(credit[:], uint32(len(payload)))
 			if v.send(1, credit[:]) != nil {
@@ -270,14 +271,7 @@ func (v *viewer) read(pod string) {
 	}
 }
 
-func Resize(pod string, w, h int) error {
-	if w < 1 || h < 1 || w > 65535 || h > 65535 {
-		return fmt.Errorf("invalid terminal size %dx%d", w, h)
-	}
-	v, err := getViewer(pod, w, h)
-	if err != nil {
-		return err
-	}
+func (v *viewer) resize(w, h int) error {
 	var size [4]byte
 	binary.LittleEndian.PutUint16(size[:], uint16(w))
 	binary.LittleEndian.PutUint16(size[2:], uint16(h))

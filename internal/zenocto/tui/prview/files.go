@@ -126,7 +126,8 @@ type drawnFile struct {
 	boxFrom  int
 	boxLines int
 
-	cursorAt int
+	cursorAt  int
+	cursorRun cursorRun
 
 	// Read by the next key, not derived again: only the render knows which card code hangs under.
 	rows map[focusKey]int
@@ -159,6 +160,7 @@ type blockState struct {
 type diffBody struct {
 	spans  []fileSpan
 	blocks map[blockKey]block
+	rev    uint64
 
 	stops []focusItem
 
@@ -173,6 +175,7 @@ type diffBody struct {
 	lead int
 
 	cursorLine int
+	cursorRun  cursorRun
 
 	rows map[focusKey]int
 
@@ -184,6 +187,11 @@ type diffBody struct {
 	boxLines int
 }
 
+func (d *diffBody) invalidate() {
+	d.blocks = nil
+	d.rev++
+}
+
 func (m *Model) filesBody() string {
 	switch {
 	case m.files.Loaded:
@@ -192,6 +200,9 @@ func (m *Model) filesBody() string {
 			return m.withBox(m.bodyWidth())
 		}
 		body := m.renderDiff(m.shownRows(), m.files, &m.diff)
+		if m.diffWanted != nil {
+			return body
+		}
 		for _, s := range m.diff.stops {
 			m.pageRing.add(s.focusKey, s.start, s.lines)
 		}
@@ -206,7 +217,7 @@ func (m *Model) filesBody() string {
 func (m *Model) renderDiff(rows []row, res store.Files, d *diffBody) string {
 	width := m.bodyWidth()
 	d.spans, d.stops = d.spans[:0], d.stops[:0]
-	d.cursorLine, d.rows = -1, make(map[focusKey]int)
+	d.cursorLine, d.cursorRun, d.rows = -1, cursorRun{}, make(map[focusKey]int)
 	d.columns = make(map[focusKey]gh.DiffSide)
 	d.anchors = make(map[focusKey][]anchor)
 	d.boxFrom, d.boxLines = 0, 0
@@ -219,6 +230,24 @@ func (m *Model) renderDiff(rows []row, res store.Files, d *diffBody) string {
 		d.blocks = make(map[blockKey]block, len(rows))
 	}
 
+	// Detect cold work before drawing any blocks. Rebuilds caused by folds
+	// and inline editors stay synchronous so focus and the editor stay put.
+	var missing []blockWork
+	for _, r := range rows {
+		if r.file == nil {
+			continue
+		}
+		key, state := m.blockState(r, d, width)
+		b, cached := d.blocks[key]
+		if state.box.kind == focusNone && (!cached || b.at.width != width || b.at.split != d.split) {
+			missing = append(missing, blockWork{key: key, state: state, file: r.file})
+		}
+	}
+	if needsDiffWorker(missing) {
+		m.wantDiff(d, missing)
+		return m.faint().Render("Preparing the diff…")
+	}
+
 	blocks := make([]string, 0, len(rows))
 	at := d.lead
 	for _, r := range rows {
@@ -226,11 +255,7 @@ func (m *Model) renderDiff(rows []row, res store.Files, d *diffBody) string {
 			continue
 		}
 
-		bk := blockKey{key: r.key, heading: d.headings}
-		state := blockState{width: width, folds: m.hunkFoldState(*r.file), split: d.split}
-		if _, ok := m.openingIn(r.file.Path); ok && d.threads {
-			state.box = m.inline.at
-		}
+		bk, state := m.blockState(r, d, width)
 		b, ok := d.blocks[bk]
 		if !ok || b.at != state {
 			b = m.fileBlock(*r.file, width, d.threads, d.headings, d.split)
@@ -254,6 +279,10 @@ func (m *Model) renderDiff(rows []row, res store.Files, d *diffBody) string {
 		if drawn.cursorAt >= 0 {
 			d.cursorLine = at + drawn.cursorAt
 		}
+		if drawn.cursorRun.key.kind != focusNone {
+			d.cursorRun = drawn.cursorRun
+			d.cursorRun.start += at
+		}
 		for k, n := range drawn.rows {
 			d.rows[k], d.columns[k], d.anchors[k] = n, drawn.columns[k], drawn.anchors[k]
 		}
@@ -267,6 +296,15 @@ func (m *Model) renderDiff(rows []row, res store.Files, d *diffBody) string {
 		blocks = append(blocks, wrap(m.faint().Render(note), width))
 	}
 	return strings.Join(blocks, "\n\n")
+}
+
+func (m *Model) blockState(r row, d *diffBody, width int) (blockKey, blockState) {
+	key := blockKey{key: r.key, heading: d.headings}
+	state := blockState{width: width, folds: m.hunkFoldState(*r.file), split: d.split}
+	if _, ok := m.openingIn(r.file.Path); ok && d.threads {
+		state.box = m.inline.at
+	}
+	return key, state
 }
 
 func overflow(res store.Files) string {
@@ -398,19 +436,6 @@ func (m Model) fileChurn(f gh.ChangedFile) string {
 
 func (m Model) cursorOn(key focusKey) bool { return m.lit(key) && !m.walkedInto(key) }
 
-func (m Model) litRun(r run, at, from, to, gutter, width int, column gh.DiffSide) run {
-	rows := make([]diffRow, len(r.rows))
-	copy(rows, r.rows)
-
-	for i := range rows {
-		if i != at && (i < from || i > to) {
-			continue
-		}
-		rows[i].text = m.litRow(rows[i], i == at, gutter, width, column)
-	}
-	return newRun(rows)
-}
-
 // The fill runs the whole selection and the bar marks the cursor alone, so it stays clear where the
 // next key acts from inside one.
 func (m Model) litRow(r diffRow, cursor bool, gutter, width int, column gh.DiffSide) string {
@@ -478,11 +503,13 @@ func (m *Model) lineTokens(f gh.ChangedFile) [][]syntax.Token {
 
 	var oldSrc, newSrc []string
 	var index []at
+	var hasRemoved bool
 
 	for _, h := range f.Hunks {
 		for _, l := range h.Lines {
 			switch l.Kind {
 			case gh.DiffRemoved:
+				hasRemoved = true
 				index = append(index, at{left: true, i: len(oldSrc)})
 				oldSrc = append(oldSrc, l.Content)
 			case gh.DiffAdded:
@@ -496,8 +523,14 @@ func (m *Model) lineTokens(f gh.ChangedFile) [][]syntax.Token {
 		}
 	}
 
-	oldTok := m.syntax.Lines(f.Path, strings.Join(oldSrc, "\n"))
-	newTok := m.syntax.Lines(f.Path, strings.Join(newSrc, "\n"))
+	// Only removed lines use old-side tokens; context lines use the new side.
+	var oldTok, newTok [][]syntax.Token
+	if hasRemoved {
+		oldTok = m.syntax.Lines(f.Path, strings.Join(oldSrc, "\n"))
+	}
+	if len(newSrc) > 0 {
+		newTok = m.syntax.Lines(f.Path, strings.Join(newSrc, "\n"))
+	}
 
 	out := make([][]syntax.Token, len(index))
 	for i, a := range index {
@@ -582,11 +615,10 @@ func (m *Model) fileText(f gh.ChangedFile, b block, width int, split bool) drawn
 			column, rows := m.walkColumn(r, split)
 			out.rows[owner], out.columns[owner] = rows, column
 			out.anchors[owner] = r.anchors(column)
-			if m.lit(owner) && m.walkedInto(owner) {
-				if lit := r.rowAt(min(m.diffCursor, rows), column); lit >= 0 {
-					out.cursorAt = at + lit
-					from, to := m.litSpan(r, owner, rows, column)
-					r = m.litRun(r, lit, from, to, gutter, width, column)
+			if m.lit(owner) && rows > 0 {
+				out.cursorRun = cursorRun{key: owner, run: r, start: at, count: rows, column: column, gutter: gutter}
+				if m.walkedInto(owner) {
+					out.cursorAt = at + r.rowAt(min(m.diffCursor, rows), column)
 				}
 			}
 		}
@@ -726,6 +758,9 @@ func (m *Model) moveCursor(delta int) {
 		return
 	}
 	m.cursor = min(max(m.cursor+delta, 0), len(m.rows)-1)
+	if delta != 0 {
+		m.jump, m.diffCross = "", 0
+	}
 
 	m.nameShownFile()
 	m.showCursorRow()
@@ -776,6 +811,7 @@ func (m *Model) jumpFile(delta int) bool {
 			continue
 		}
 		m.cursor = at
+		m.jump, m.diffCross = "", 0
 		m.nameShownFile()
 		m.showCursorRow()
 		m.syncContent()
@@ -792,6 +828,15 @@ func (m *Model) crossFile(delta int) {
 		}
 	}
 
+	if m.diffWanted != nil {
+		m.diffCross = delta
+		return
+	}
+	m.landAcrossFile(delta)
+}
+
+func (m *Model) landAcrossFile(delta int) {
+	m.diffCross = 0
 	if m.pageRing.stops() == 0 {
 		return
 	}

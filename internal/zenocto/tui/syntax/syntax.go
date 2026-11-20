@@ -4,6 +4,7 @@ import (
 	"hash/fnv"
 	"image/color"
 	"strings"
+	"sync"
 
 	"charm.land/lipgloss/v2"
 	"github.com/alecthomas/chroma/v2"
@@ -17,17 +18,17 @@ type Token struct {
 	Color color.Color
 }
 
-// Syntax colors source code as tokens. Lines mutates its cache, so call it from Update, never View.
+// Syntax colors source code as tokens. Copies share a concurrent cache.
 type Syntax struct {
 	style *chroma.Style
-	cache map[uint64][][]Token
+	cache *sync.Map // uint64 → [][]Token
 }
 
 // New builds a colorizer over a Chroma style and reports whether Chroma knows the name; empty counts as known.
 // An unknown name still yields a working colorizer with Chroma's fallback style.
 func New(name string) (Syntax, bool) {
 	_, ok := styles.Registry[name]
-	return Syntax{style: styles.Get(name), cache: make(map[uint64][][]Token)}, ok || name == ""
+	return Syntax{style: styles.Get(name), cache: &sync.Map{}}, ok || name == ""
 }
 
 func Names() []string { return styles.Names() }
@@ -35,27 +36,28 @@ func Names() []string { return styles.Names() }
 // Lines splits code into lines of colored tokens, choosing the lexer from path.
 // Pass a whole file: lexers carry state across lines.
 func (s *Syntax) Lines(path, code string) [][]Token {
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(path))
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write([]byte(code))
-	key := h.Sum64()
-
-	if out, ok := s.cache[key]; ok {
-		return out
-	}
-
-	out := s.tokenise(path, code)
-	s.cache[key] = out
-	return out
-}
-
-func (s *Syntax) tokenise(path, code string) [][]Token {
 	lexer := lexers.Match(path)
 	if lexer == nil {
 		lexer = lexers.Fallback
 	}
+	// The resolved lexer, not the path, determines the tokens. Identical
+	// source in a moved, copied, or generated file can share its colors.
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(lexer.Config().Name))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(code))
+	key := h.Sum64()
 
+	if out, ok := s.cache.Load(key); ok {
+		return out.([][]Token)
+	}
+
+	out := s.tokenise(lexer, code)
+	stored, _ := s.cache.LoadOrStore(key, out)
+	return stored.([][]Token)
+}
+
+func (s *Syntax) tokenise(lexer chroma.Lexer, code string) [][]Token {
 	iter, err := chroma.Coalesce(lexer).Tokenise(nil, code)
 	if err != nil {
 		return plain(code)

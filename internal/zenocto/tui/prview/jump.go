@@ -98,11 +98,13 @@ func (m *Model) finishJump() tea.Cmd {
 
 	m.reveal(t.Path)
 	m.pointAt(t.Path)
-
 	m.unpoint()
-
 	m.syncContent()
 	m.showCursorRow()
+	if m.diffWanted != nil {
+		m.jump = t.ID // the worker has not produced the line positions yet
+		return nil
+	}
 
 	if line, ok := m.threadLine(t.ID); ok {
 		m.view.SetYOffset(contentLead + m.jumpTop(t.Path, line))

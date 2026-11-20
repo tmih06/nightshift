@@ -29,7 +29,6 @@ func (m Model) toggleSelection() (Model, tea.Cmd) {
 	}
 
 	m.selection = span{on: m.pageRing.on, anchor: m.diffAt()}
-	m.syncContent()
 	return m, nil
 }
 
@@ -40,10 +39,7 @@ func (m *Model) dropSelectionAcrossSplit(was bool) {
 	}
 }
 
-func (m *Model) clearSelection() {
-	m.selection = span{}
-	m.syncContent()
-}
+func (m *Model) clearSelection() { m.selection = span{} }
 
 // Measured against the row count this render found, never diffAt's, which is the render before it.
 func (m Model) litSpan(r run, key focusKey, rows int, column gh.DiffSide) (int, int) {

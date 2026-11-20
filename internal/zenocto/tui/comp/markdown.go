@@ -19,13 +19,18 @@ import (
 type Markdown struct {
 	style ansi.StyleConfig
 
-	// Dropped whenever the width changes: glamour output belongs to the width it was rendered at.
-	cache map[uint64]string
-	width int
+	// A feed interleaves normal cards, nested threads, and replies at different
+	// widths. Keep its recent widths rather than flushing between cards.
+	cache [4]markdownWidth
+}
+
+type markdownWidth struct {
+	width  int
+	bodies map[uint64]string
 }
 
 func NewMarkdown(th theme.Theme) Markdown {
-	return Markdown{style: markdownStyle(th), cache: make(map[uint64]string)}
+	return Markdown{style: markdownStyle(th)}
 }
 
 // Render returns body wrapped to width in theme colors, caching it, so it belongs on an Update path.
@@ -34,20 +39,32 @@ func (m *Markdown) Render(body string, width int) string {
 	if width <= 0 || strings.TrimSpace(body) == "" {
 		return ""
 	}
-	if width != m.width {
-		m.cache, m.width = make(map[uint64]string), width
+	last := len(m.cache) - 1
+	entry := markdownWidth{width: width}
+	for i, recent := range m.cache {
+		if recent.width == width {
+			last, entry = i, recent
+			break
+		}
 	}
+	if entry.bodies == nil {
+		entry.bodies = make(map[uint64]string)
+	}
+	copy(m.cache[1:last+1], m.cache[:last])
+	m.cache[0] = entry
 
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(body))
 	key := h.Sum64()
 
-	if out, ok := m.cache[key]; ok {
+	if out, ok := entry.bodies[key]; ok {
 		return out
 	}
 
 	out := trimBlank(render(m.style, body, width))
-	m.cache[key] = out
+	if len(entry.bodies) < 512 {
+		entry.bodies[key] = out
+	}
 	return out
 }
 

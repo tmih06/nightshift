@@ -73,6 +73,7 @@ type model struct {
 	shellLines     []string
 	shellPod       string
 	shellW, shellH int
+	watchingShell  bool
 	pending        []session.Key
 	sending        bool
 	pendingPod     string
@@ -246,12 +247,9 @@ func fullCmd(pod string) tea.Cmd {
 	}
 }
 
-func captureCmd(pod string, w, h int, resize bool) tea.Cmd {
+func watchShellCmd(pod string, w, h int, resize bool) tea.Cmd {
 	return func() tea.Msg {
-		if resize {
-			_ = session.Resize(pod, w, h)
-		}
-		lines, err := session.Capture(pod)
+		lines, err := session.WatchScreen(pod, w, h, resize, shellRefreshEvery)
 		return shellMsg{pod: pod, lines: lines, err: err}
 	}
 }
@@ -262,11 +260,16 @@ func drainCmd(pod string, keys []session.Key) tea.Cmd {
 	}
 }
 
-func (m *model) captureSelected(pod string) tea.Cmd {
+func (m *model) watchShell() tea.Cmd {
+	b := m.selectedBox()
+	if m.watchingShell || m.hidden || b == nil || !m.sessions[b.Name] || b.Phase != "Running" {
+		return nil
+	}
 	w, h := m.shellPaneSize()
 	resize := w != m.shellW || h != m.shellH
 	m.shellW, m.shellH = w, h
-	return captureCmd(pod, w, h, resize)
+	m.watchingShell = true
+	return watchShellCmd(b.Name, w, h, resize)
 }
 
 func (m *model) startDrain() tea.Cmd {
