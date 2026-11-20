@@ -1,0 +1,24 @@
+ acme/rocket · #412         Open · ✗ failing · changes requested  +42 −7 
+ Fix the auth retry backoff loop                                          
+ main ← fix-auth-retry                                                    
+  Conversation (24)  |  Commits  |  Checks (4)  |  Files (3)              
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+╭─[1]─Files────────────╮╭─[2]─Diff───────────────────────────────────────╮
+│▾ docs/               ││ internal/gh/client.go                     +2 −1│
+│    screenshot.png    │├────────────────────────────────────────────────┤
+│▾ internal/           ││                                                │
+│  ▾ gh/               ││        @@ -40,4 +40,5 @@ func New() (*Client,…│
+│      client.go       ││ 40 40       for {                              │
+│  ▾ store/            ││ 41    −         time.Sleep(delay)              │
+│      store.go        ││    41 +         delay = min(delay*2, fetchTime…│
+│  ▾ tui/prview/       ││    42 +         time.Sleep(delay)              │
+│      files.go        ││   ╭───────────────────────────────────────────╮│
+│                      ││   │ internal/gh/client.go:42                  ││
+│                      ││   ├───────────────────────────────────────────┤│
+│                      ││   │ nkr · said · 2h                           ││
+│                      ││   │                                           ││
+│                      ││   │ This backs off forever.                   ││
+│                      ││   ╰───────────────────────────────────────────╯│
+│                      ││   │ ╭─────────────────────────────────────────╮│
+│                      ││   ╰─│ octobot · said · 1h                     ││
+╰──────────────────────╯╰──────────────────────────────────────────15/20─╯

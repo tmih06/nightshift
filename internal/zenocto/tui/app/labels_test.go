@@ -1,0 +1,185 @@
+package app_test
+
+import (
+	"errors"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/tmih06/nightshift/internal/zenocto/gh"
+)
+
+func repoLabelSet() []gh.Label {
+	return []gh.Label{
+		{ID: "LA_1", Name: "bug"},
+		{ID: "LA_2", Name: "enhancement"},
+	}
+}
+
+func labelling(t *testing.T, client *fakeSearcher) tea.Model {
+	t.Helper()
+
+	client.serveDetail("PR_412", "Caps the backoff at 30s.")
+	client.serveLabels("PR_412", repoLabelSet()[:1])
+	client.serveRepoMeta(gh.RepoMeta{Labels: repoLabelSet()})
+
+	return press(loaded(t, client, 160, 40), "enter", "1", "j", "j", "j")
+}
+
+func openLabelPicker(t *testing.T, client *fakeSearcher) tea.Model {
+	t.Helper()
+
+	m := press(labelling(t, client), "enter")
+	if out := stripANSI(render(t, m)); !strings.Contains(out, "space toggle") {
+		t.Fatalf("the label picker did not open:\n%s", out)
+	}
+	return m
+}
+
+func TestThePickerAsksTheRepositoryOnceForItsChoices(t *testing.T) {
+	client := &fakeSearcher{prs: samplePRs()}
+
+	m := openLabelPicker(t, client)
+	m = press(m, "esc", "enter")
+
+	if out := stripANSI(render(t, m)); !strings.Contains(out, "space toggle") {
+		t.Fatalf("the picker did not open a second time:\n%s", out)
+	}
+	if got, want := client.metaCalls(), []string{"acme/rocket"}; !slices.Equal(got, want) {
+		t.Errorf("asked %v, want the repository read once and cached", got)
+	}
+}
+
+func TestALabelReadsOnTheRailBeforeItLands(t *testing.T) {
+	client := &fakeSearcher{prs: samplePRs()}
+	client.holdPosts()
+
+	m := press(openLabelPicker(t, client), "down", "space", "enter")
+
+	if out := stripANSI(render(t, m)); !strings.Contains(out, "enhancement") {
+		t.Errorf("the new label is not on the rail before the write landed:\n%s", out)
+	}
+	if got, want := client.labelWrites(), []string{"PR_412: LA_1,LA_2"}; !slices.Equal(got, want) {
+		t.Errorf("sent %v, want the whole set addressed to the pull request", got)
+	}
+}
+
+func TestALabelWriteThatLandsSaysSo(t *testing.T) {
+	client := &fakeSearcher{prs: samplePRs()}
+
+	m := press(openLabelPicker(t, client), "down", "space", "enter")
+
+	if !strings.Contains(lastLine(render(t, m)), "Labels updated") {
+		t.Errorf("status bar = %q, want the write reported", strings.TrimSpace(lastLine(render(t, m))))
+	}
+	if out := stripANSI(render(t, m)); !strings.Contains(out, "enhancement") {
+		t.Errorf("the label came off the rail after landing:\n%s", out)
+	}
+}
+
+func TestAFailedLabelWritePutsTheFetchedSetBack(t *testing.T) {
+	client := &fakeSearcher{prs: samplePRs(), postErr: errors.New("502 Bad Gateway")}
+
+	m := press(openLabelPicker(t, client), "down", "space", "enter")
+
+	if out := stripANSI(render(t, m)); strings.Contains(out, "enhancement") {
+		t.Errorf("the label stayed on the rail after the write failed:\n%s", out)
+	}
+	if !strings.Contains(lastLine(render(t, m)), "502 Bad Gateway") {
+		t.Errorf("status bar = %q, want the reason on it", strings.TrimSpace(lastLine(render(t, m))))
+	}
+}
+
+func TestASyncDoesNotUndoALabelWriteStillInFlight(t *testing.T) {
+	client := &fakeSearcher{prs: samplePRs()}
+	client.holdPosts()
+
+	m := press(press(openLabelPicker(t, client), "down", "space", "enter"), "s")
+
+	if out := stripANSI(render(t, m)); !strings.Contains(out, "enhancement") {
+		t.Errorf("the sync dropped a label whose write is still on its way:\n%s", out)
+	}
+}
+
+func TestTheRailTakesGitHubsAnswerRatherThanTheAsk(t *testing.T) {
+	client := &fakeSearcher{prs: samplePRs()}
+	client.serveRepoMeta(gh.RepoMeta{Labels: repoLabelSet()})
+
+	m := openLabelPicker(t, client)
+	client.serveRepoMeta(gh.RepoMeta{Labels: repoLabelSet()[:1]})
+	m = press(m, "down", "space", "enter")
+
+	if out := stripANSI(render(t, m)); strings.Contains(out, "enhancement") {
+		t.Errorf("the rail kept a label GitHub did not confirm:\n%s", out)
+	}
+}
+
+func TestAFailedRepositoryReadSaysSoAndOpensNoPicker(t *testing.T) {
+	client := &fakeSearcher{prs: samplePRs(), metaErr: errors.New("403 Forbidden")}
+
+	m := press(labelling(t, client), "enter")
+
+	out := stripANSI(render(t, m))
+	if strings.Contains(out, "space toggle") {
+		t.Errorf("a picker opened over choices that never arrived:\n%s", out)
+	}
+	if !strings.Contains(lastLine(render(t, m)), "403 Forbidden") {
+		t.Errorf("status bar = %q, want the reason on it", strings.TrimSpace(lastLine(render(t, m))))
+	}
+}
+
+func TestQDoesNotQuitWhileAPickerIsUp(t *testing.T) {
+	client := &fakeSearcher{prs: samplePRs()}
+
+	m := press(openLabelPicker(t, client), "q")
+
+	if out := stripANSI(render(t, m)); !strings.Contains(out, "space toggle") {
+		t.Errorf("q reached the root and closed the picker:\n%s", out)
+	}
+}
+
+func TestSyncingLetsThePickerSeeANewLabel(t *testing.T) {
+	client := &fakeSearcher{prs: samplePRs()}
+
+	m := openLabelPicker(t, client)
+	m = press(m, "esc")
+
+	client.serveRepoMeta(gh.RepoMeta{Labels: append(repoLabelSet(), gh.Label{ID: "LA_3", Name: "docs"})})
+	m = press(m, "s", "enter")
+
+	if out := stripANSI(render(t, m)); !strings.Contains(out, "docs") {
+		t.Errorf("the picker does not offer a label added since the last fetch:\n%s", out)
+	}
+	if got := client.metaCalls(); len(got) != 2 {
+		t.Errorf("asked for metadata %d times, want the sync to have dropped the first answer", len(got))
+	}
+}
+
+// Reads the names off the fixture: spelled out, it would compare two constants and pass through the rename it guards.
+func TestTheTwoRepoFixtureSortsInTheOrderTheWalkAssumes(t *testing.T) {
+	prs := twoRepoPRs()
+	main, other := prs[0].Repository, prs[1].Repository
+
+	if other >= main {
+		t.Errorf("%q sorts at or after %q, so the pull request the test opens first "+
+			"is no longer the one it asserts on", other, main)
+	}
+}
+
+func twoRepoPRs() []gh.PullRequest {
+	return []gh.PullRequest{
+		{
+			ID: "PR_412", Number: 412, Title: "Fix auth retry", Repository: "acme/rocket",
+			Author: gh.Actor{Login: "drucial"}, State: gh.PRStateOpen, BaseRefName: "main",
+			HeadRefName: "fix-auth", UpdatedAt: time.Now().Add(-2 * time.Hour),
+		},
+		{
+			ID: "PR_9", Number: 9, Title: "Other repo", Repository: "acme/landing",
+			Author: gh.Actor{Login: "drucial"}, State: gh.PRStateOpen, BaseRefName: "main",
+			HeadRefName: "copy", UpdatedAt: time.Now().Add(-3 * time.Hour),
+		},
+	}
+}

@@ -91,6 +91,15 @@ func (m Model) renderBar() string {
 		Bold(true).
 		Padding(0, 1).
 		Render(brand)
+	if m.notice != "" {
+		fg := m.theme.FaintText
+		if m.noticeBad {
+			fg = m.theme.ErrorText
+		}
+		room := max(0, m.width-used-lipgloss.Width(logo)-2)
+		notice := bar.Foreground(fg).Render(truncate(m.notice, room) + " ")
+		logo = notice + logo
+	}
 	rest := m.width - used - lipgloss.Width(logo)
 	if rest < 1 {
 		return truncate(b.String()+bar.Render(strings.Repeat(" ", max(0, m.width-used))), m.width)
