@@ -1,12 +1,14 @@
 package dashboard
 
 import (
-	tea "github.com/charmbracelet/bubbletea"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/tmih06/nightshift/internal/session"
 )
 
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 	if _, transient := msg.(tickMsg); transient {
 		m.expireStatus()
 	}
@@ -17,7 +19,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshInspectCache()
 			m.scrollInspect(0)
 		}
-	case tea.KeyMsg:
+	case tea.PasteMsg:
+		if m.focus == focusShell {
+			return m.pasteIntoShell(msg.Content)
+		}
+	case tea.KeyPressMsg:
 		switch m.focus {
 		case focusShell:
 			return m.updateShellKeys(msg)
@@ -32,7 +38,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(fetchCmd(), tickCmd())
 	case shellTickMsg:
 		cmds := []tea.Cmd{shellTickCmd()}
-		if b := m.selectedBox(); b != nil && m.sessions[b.Name] && b.Phase == "Running" {
+		if b := m.selectedBox(); !m.hidden && b != nil && m.sessions[b.Name] && b.Phase == "Running" {
 			cmds = append(cmds, m.captureSelected(b.Name))
 		}
 		return m, tea.Batch(cmds...)
@@ -49,9 +55,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.boxes, m.pool, m.sessions = msg.boxes, msg.pool, msg.sessions
 		m.metricsOK, m.err, m.loaded = msg.metricsOK, msg.err, true
 		m.dataRev++
+		m.updatedAt = time.Now()
+		m.applyLive(msg.cgroups)
 		m.appendHistory()
-		if m.selectedBox() == nil && len(m.boxes) > 0 {
-			order := m.navigationIndices()
+		if order := m.navigationIndices(); m.selectedBox() == nil && len(order) > 0 {
+			// The selection is gone (destroyed, say): take its neighbour in
+			// the section, which may itself now be empty.
 			m.selectPod(m.boxes[order[clamp(prev, 0, len(order)-1)]].Name)
 		} else {
 			m.selectPod(m.selected)
@@ -72,14 +81,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case claimMsg:
 		if msg.err != nil {
-			m.sticky("claim failed: " + msg.err.Error())
+			m.fail("claim failed: " + msg.err.Error())
 			return m, nil
 		}
 		m.flash("claiming " + msg.name + ", waiting for a warm sandbox…")
 		return m, waitClaimCmd(msg.name)
 	case claimAdoptedMsg:
 		if msg.err != nil {
-			m.sticky("claim failed: " + msg.err.Error())
+			m.fail("claim failed: " + msg.err.Error())
 			return m, fetchCmd()
 		}
 		m.pendingPod = msg.pod
@@ -87,7 +96,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, fetchCmd()
 	case deletedMsg:
 		if msg.err != nil {
-			m.sticky("destroy failed: " + msg.err.Error())
+			m.fail("destroy failed: " + msg.err.Error())
 			return m, nil
 		}
 		m.flash("destroyed claim " + msg.claim + ", pool is restocking")
@@ -95,7 +104,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, fetchCmd()
 	case attachReadyMsg:
 		if msg.err != nil {
-			m.sticky("session failed: " + msg.err.Error())
+			m.fail("session failed: " + msg.err.Error())
 			return m, nil
 		}
 		if m.sessions == nil {
@@ -111,7 +120,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case fullReadyMsg:
 		if msg.err != nil {
-			m.sticky("session failed: " + msg.err.Error())
+			m.fail("session failed: " + msg.err.Error())
 			return m, nil
 		}
 		return m, tea.ExecProcess(session.Attach(msg.pod), func(err error) tea.Msg {
@@ -121,7 +130,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Fullscreen attach changes the terminal size; restore the embedded size.
 		m.shellW, m.shellH = 0, 0
 		if msg.err != nil {
-			m.sticky("bash ended: " + msg.err.Error())
+			m.fail("bash ended: " + msg.err.Error())
 		} else {
 			m.flash("back from fullscreen, session still running")
 		}
@@ -129,7 +138,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sentMsg:
 		m.sending = false
 		if msg.err != nil {
-			m.sticky("send failed: " + msg.err.Error())
+			m.fail("send failed: " + msg.err.Error())
 			m.pending = nil
 			return m, nil
 		}

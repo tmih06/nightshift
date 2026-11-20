@@ -1,11 +1,13 @@
 package dashboard
 
 import (
+	"sync"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/tmih06/nightshift/internal/cluster"
+	ghtheme "github.com/tmih06/nightshift/internal/ghdash/tui/theme"
 	"github.com/tmih06/nightshift/internal/session"
 )
 
@@ -29,6 +31,14 @@ type inspectCache struct {
 	lines []string
 }
 
+// liveUsage is a claimed sandbox's usage from its own cgroup counters:
+// base is the sample the next CPU rate is measured from.
+type liveUsage struct {
+	base  cluster.CgroupSample
+	cpu   int64
+	cpuOK bool
+}
+
 type usageHistory struct {
 	cpu, mem []float64
 }
@@ -43,17 +53,23 @@ type model struct {
 	loaded         bool
 	status         string
 	statusTTL      time.Duration // 0 = sticky until replaced
+	statusBad      bool
 	confirmDestroy bool
 
-	leftWidth  int
-	leftHeight int
-	dragging   bool
+	section     int
+	sideWidth   int // 0 picks half the width
+	tableHeight int // stacked layout only; 0 picks 40%
+	dragging    bool
+	showHelp    bool
+	updatedAt   time.Time
+	rowCache    *rowCacheEntry
 
 	focus          focusPane
 	prefix         bool
 	inspectScroll  int
 	dataRev        int
 	inspect        inspectCache
+	inspectDocs    map[string]inspectCache // shared by every copy of the model
 	shellLines     []string
 	shellPod       string
 	shellW, shellH int
@@ -61,14 +77,38 @@ type model struct {
 	sending        bool
 	pendingPod     string
 	hist           map[string]usageHistory
+	live           map[string]liveUsage
+
+	// hidden is set while another tab is on screen, so the shell stops
+	// polling Herdr for a pane nobody sees.
+	hidden bool
 
 	width  int
 	height int
 }
 
-func New() tea.Model {
-	return model{sessions: map[string]bool{}}
+// Model is the sandbox tab: the fleet tree, the bento header, and the
+// embedded shell or warm-pool inspector.
+type Model = model
+
+// New returns the sandbox tab painted from gh-dash's theme t.
+func New(t ghtheme.Theme) Model {
+	useTheme(t)
+	return model{sessions: map[string]bool{}, rowCache: &rowCacheEntry{}, inspectDocs: map[string]inspectCache{}}
 }
+
+// SetHidden tells the tab whether another tab covers it.
+func (m model) SetHidden(hidden bool) Model {
+	m.hidden = hidden
+	if !hidden {
+		m.shellW, m.shellH = 0, 0
+	}
+	return m
+}
+
+// Capturing is whether every key belongs to the embedded shell, so the host
+// must not take tab or any other key for itself.
+func (m model) Capturing() bool { return m.focus == focusShell && m.canFocusShell() }
 
 func (m model) Init() tea.Cmd {
 	return tea.Batch(fetchCmd(), tickCmd(), shellTickCmd())
@@ -82,6 +122,7 @@ type loadedMsg struct {
 	pool      cluster.Pool
 	sessions  map[string]bool
 	metricsOK bool
+	cgroups   map[string]cluster.CgroupSample
 	err       error
 }
 
@@ -126,6 +167,17 @@ type sentMsg struct {
 	err   error
 }
 
+// Owns is whether msg is one of the sandbox tab's own, so a host need not
+// offer it to anything else. The shell refresh sends several a second.
+func Owns(msg tea.Msg) bool {
+	switch msg.(type) {
+	case tickMsg, shellTickMsg, loadedMsg, claimMsg, claimAdoptedMsg, deletedMsg,
+		attachReadyMsg, fullReadyMsg, resumeMsg, shellMsg, sentMsg:
+		return true
+	}
+	return false
+}
+
 func tickCmd() tea.Cmd {
 	return tea.Tick(refreshEvery, func(time.Time) tea.Msg { return tickMsg{} })
 }
@@ -137,8 +189,22 @@ func shellTickCmd() tea.Cmd {
 func fetchCmd() tea.Cmd {
 	return func() tea.Msg {
 		boxes, pool, metricsOK, err := cluster.Fetch()
-		sessions := session.Live(boxes)
-		return loadedMsg{boxes: boxes, pool: pool, sessions: sessions, metricsOK: metricsOK, err: err}
+		var claimed []string
+		for _, b := range boxes {
+			if b.OwnerKind == "SandboxClaim" && b.Phase == "Running" {
+				claimed = append(claimed, b.Name)
+			}
+		}
+		var (
+			sessions map[string]bool
+			cgroups  map[string]cluster.CgroupSample
+			wg       sync.WaitGroup
+		)
+		wg.Add(2)
+		go func() { defer wg.Done(); sessions = session.Live(boxes) }()
+		go func() { defer wg.Done(); cgroups = cluster.ReadCgroups(claimed) }()
+		wg.Wait()
+		return loadedMsg{boxes: boxes, pool: pool, sessions: sessions, metricsOK: metricsOK, cgroups: cgroups, err: err}
 	}
 }
 
@@ -214,15 +280,50 @@ func (m *model) startDrain() tea.Cmd {
 	return drainCmd(b.Name, keys)
 }
 
-func (m *model) appendHistory() {
-	if !m.metricsOK {
-		return
+// applyLive puts claimed sandboxes' own counters over metrics-server's
+// numbers. Memory is live from the first sample; CPU from the second, as it
+// is a rate between two.
+func (m *model) applyLive(samples map[string]cluster.CgroupSample) {
+	next := make(map[string]liveUsage, len(samples))
+	for i := range m.boxes {
+		b := &m.boxes[i]
+		s, ok := samples[b.Name]
+		if !ok {
+			continue
+		}
+		st, seen := m.live[b.Name]
+		switch {
+		case !seen:
+			st = liveUsage{base: s}
+		case s.Uptime < st.base.Uptime || s.CPUUsec < st.base.CPUUsec:
+			st = liveUsage{base: s} // restarted: start over
+		default:
+			if mc, ok := cluster.CPURate(st.base, s); ok {
+				st.cpu, st.cpuOK, st.base = mc, true, s
+			}
+		}
+		b.MemUsageMiB = s.MemMiB()
+		if st.cpuOK {
+			b.CPUUsageMC = st.cpu
+		}
+		next[b.Name] = st
 	}
+	m.live = next
+}
+
+// usageKnown is whether b's numbers are real: metrics-server answered, or
+// the sandbox's own counters did.
+func (m model) usageKnown(name string) bool {
+	return m.metricsOK || m.live[name].cpuOK
+}
+
+func (m *model) appendHistory() {
 	if m.hist == nil {
 		m.hist = map[string]usageHistory{}
 	}
-	for _, b := range m.boxes {
-		if b.CPULimitMC <= 0 || b.MemLimitMiB <= 0 {
+	for i := range m.boxes {
+		b := &m.boxes[i]
+		if !m.usageKnown(b.Name) || b.CPULimitMC <= 0 || b.MemLimitMiB <= 0 {
 			continue
 		}
 		h := m.hist[b.Name]
@@ -239,11 +340,19 @@ func (m *model) appendHistory() {
 func (m *model) flash(msg string) {
 	m.status = msg
 	m.statusTTL = 5 * time.Second
+	m.statusBad = false
 }
 
 func (m *model) sticky(msg string) {
 	m.status = msg
 	m.statusTTL = 0
+	m.statusBad = false
+}
+
+// fail is sticky and painted as an error.
+func (m *model) fail(msg string) {
+	m.sticky(msg)
+	m.statusBad = true
 }
 
 func (m *model) expireStatus() {
@@ -302,6 +411,20 @@ func (m *model) selectPod(name string) {
 		m.focus = focusNav
 	}
 	m.refreshInspectCache()
+}
+
+// setSection shows section, keeping the selection when it is in it.
+func (m *model) setSection(section int) {
+	m.section = (section + len(sectionTitles)) % len(sectionTitles)
+	order := m.navigationIndices()
+	for _, i := range order {
+		if m.boxes[i].Name == m.selected {
+			return
+		}
+	}
+	if len(order) > 0 {
+		m.selectPod(m.boxes[order[0]].Name)
+	}
 }
 
 func (m *model) moveSelection(delta int) {

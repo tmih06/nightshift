@@ -1,74 +1,80 @@
 package dashboard
 
-import tea "github.com/charmbracelet/bubbletea"
+import tea "charm.land/bubbletea/v2"
 
-// Row 0 is the title line and row 1 the top border, so sidebar content starts at row 2.
-const contentStartY = 2
-
-func (m model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+func (m model) updateMouse(msg tea.MouseMsg) (model, tea.Cmd) {
+	mouse := msg.Mouse()
+	x, y := mouse.X, mouse.Y
 	if m.focus == focusShell && !m.dragging {
-		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-			if m.overDivider(msg.X, msg.Y) {
+		if click, ok := msg.(tea.MouseClickMsg); ok && click.Button == tea.MouseLeft {
+			switch {
+			case m.overDivider(x, y):
 				m.dragging = true
-			} else if m.inLeftPane(msg.X, msg.Y) {
-				m = m.clickLeftPane(msg.X, msg.Y)
+			case m.inTable(x, y) || m.inTabs(y):
+				m = m.clickTable(x, y)
 			}
 		}
 		return m, nil
 	}
-	switch msg.Action {
-	case tea.MouseActionPress:
-		switch msg.Button {
-		case tea.MouseButtonWheelUp:
-			if m.isWarmSelected() && (m.inLowerPane(msg.X, msg.Y) || (m.focus == focusInspect && !m.inLeftPane(msg.X, msg.Y))) {
-				m.scrollInspect(-3)
-			} else {
-				m.moveSelection(-1)
-			}
-		case tea.MouseButtonWheelDown:
-			if m.isWarmSelected() && (m.inLowerPane(msg.X, msg.Y) || (m.focus == focusInspect && !m.inLeftPane(msg.X, msg.Y))) {
-				m.scrollInspect(3)
-			} else {
-				m.moveSelection(1)
-			}
-		case tea.MouseButtonLeft:
-			if m.overDivider(msg.X, msg.Y) {
-				m.dragging = true
-			} else {
-				return m.applyClick(msg.X, msg.Y)
-			}
+	switch msg.(type) {
+	case tea.MouseWheelMsg:
+		delta := 0
+		switch mouse.Button {
+		case tea.MouseWheelUp:
+			delta = -1
+		case tea.MouseWheelDown:
+			delta = 1
+		default:
+			return m, nil
 		}
-	case tea.MouseActionMotion:
-		if m.dragging && msg.Button == tea.MouseButtonLeft {
-			m = m.applyDrag(msg.X, msg.Y)
+		if m.isWarmSelected() && (m.inSidebar(x, y) || (m.focus == focusInspect && !m.inTable(x, y))) {
+			m.scrollInspect(3 * delta)
+		} else {
+			m.moveSelection(delta)
 		}
-	case tea.MouseActionRelease:
+	case tea.MouseClickMsg:
+		if mouse.Button != tea.MouseLeft {
+			return m, nil
+		}
+		if m.overDivider(x, y) {
+			m.dragging = true
+			return m, nil
+		}
+		return m.applyClick(x, y)
+	case tea.MouseMotionMsg:
+		if m.dragging && mouse.Button == tea.MouseLeft {
+			m = m.applyDrag(x, y)
+		}
+	case tea.MouseReleaseMsg:
 		m.dragging = false
 	}
 	return m, nil
 }
 
+// overDivider is whether (x, y) is on the line between the table and the
+// sidebar, which a drag moves.
 func (m model) overDivider(x, y int) bool {
 	l := m.layout()
 	if l.stacked {
-		d := contentStartY + l.leftH - 1
-		return y >= d-1 && y <= d+1
+		return y >= l.sideTop-1 && y <= l.sideTop+1
 	}
-	return x >= l.leftW-2 && x <= l.leftW+1
+	return y >= l.bodyTop && y < l.bodyTop+l.bodyH && x >= l.sideX-1 && x <= l.sideX+1
 }
 
 func (m model) applyDrag(x, y int) model {
-	if m.width < stackedBelow {
-		m.leftHeight = y - contentStartY + 1
+	l := m.layout()
+	if l.stacked {
+		m.tableHeight = y - l.bodyTop
 	} else {
-		m.leftWidth = x
+		m.sideWidth = m.width - x
 	}
+	m.shellW, m.shellH = 0, 0
 	m.refreshInspectCache()
 	return m
 }
 
-func (m model) applyClick(x, y int) (tea.Model, tea.Cmd) {
-	if m.inLowerPane(x, y) {
+func (m model) applyClick(x, y int) (model, tea.Cmd) {
+	if m.inSidebar(x, y) {
 		if m.isWarmSelected() {
 			m.focusWarmInspect()
 			m.prefix = false
@@ -85,37 +91,45 @@ func (m model) applyClick(x, y int) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	return m.clickLeftPane(x, y), nil
+	return m.clickTable(x, y), nil
 }
 
-func (m model) inLeftPane(x, y int) bool {
+func (m model) inTabs(y int) bool { return y >= 0 && y < tabsH }
+
+func (m model) inTable(x, y int) bool {
 	l := m.layout()
-	if y < 1 || y >= m.height-1 {
+	if y < l.bodyTop || y >= l.bodyTop+l.tableH {
 		return false
 	}
-	if l.stacked {
-		return y < 1+l.leftH
-	}
-	return x >= 0 && x < l.leftW
+	return l.stacked || x < l.tableW
 }
 
-func (m model) inLowerPane(x, y int) bool {
+func (m model) inSidebar(x, y int) bool {
 	l := m.layout()
-	if y < l.shellTop || y >= m.height-1 {
+	if y < l.sideTop || y >= l.sideTop+l.sideH {
 		return false
 	}
-	return l.stacked || x >= l.leftW
+	return l.stacked || x >= l.sideX
 }
 
-func (m model) clickLeftPane(x, y int) model {
-	if !m.inLeftPane(x, y) {
+// clickTable selects the section tab or the sandbox under (x, y) and returns
+// to navigation.
+func (m model) clickTable(x, y int) model {
+	if m.inTabs(y) {
+		for i, s := range m.sectionSpans() {
+			if y == 0 && x >= s.from && x < s.to {
+				m.focus, m.prefix = focusNav, false
+				m.setSection(i)
+			}
+		}
 		return m
 	}
-	m.focus = focusNav
-	m.prefix = false
-	_, targets := m.leftLines()
-	if idx, ok := targets[y-contentStartY]; ok && idx < len(m.boxes) {
-		m.selectPod(m.boxes[idx].Name)
+	if !m.inTable(x, y) {
+		return m
+	}
+	m.focus, m.prefix = focusNav, false
+	if i, ok := m.rowAt(y); ok {
+		m.selectPod(m.boxes[i].Name)
 	}
 	return m
 }

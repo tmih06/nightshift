@@ -5,14 +5,14 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/tmih06/nightshift/internal/cluster"
 )
 
 func (m model) inspectPageSize() int {
-	return max(m.layout().shellH-3, 1)
+	return max(m.layout().docH, 1)
 }
 
 func (m *model) refreshInspectCache() {
@@ -20,7 +20,7 @@ func (m *model) refreshInspectCache() {
 		m.inspect = inspectCache{}
 		return
 	}
-	innerW := max(m.layout().colW-4, 1)
+	innerW := max(m.layout().docW, 1)
 	if m.inspect.lines != nil && m.inspect.pod == m.selected && m.inspect.width == innerW && m.inspect.rev == m.dataRev {
 		return
 	}
@@ -28,15 +28,29 @@ func (m *model) refreshInspectCache() {
 		pod:   m.selected,
 		width: innerW,
 		rev:   m.dataRev,
-		lines: m.warmInspectLines(innerW),
+		lines: m.cachedInspectLines(innerW),
 	}
 }
 
+// cachedInspectLines returns the selected sandbox's document, rendered once
+// per sandbox, width, and fleet refresh, so moving the selection is cheap.
 func (m model) cachedInspectLines(innerW int) []string {
 	if m.inspect.lines != nil && m.inspect.pod == m.selected && m.inspect.width == innerW && m.inspect.rev == m.dataRev {
 		return m.inspect.lines
 	}
-	return m.warmInspectLines(innerW)
+	if m.inspectDocs != nil {
+		if c, ok := m.inspectDocs[m.selected]; ok && c.width == innerW && c.rev == m.dataRev {
+			return c.lines
+		}
+	}
+	lines := m.warmInspectLines(innerW)
+	if m.inspectDocs != nil {
+		if len(m.inspectDocs) > 64 {
+			clear(m.inspectDocs)
+		}
+		m.inspectDocs[m.selected] = inspectCache{pod: m.selected, width: innerW, rev: m.dataRev, lines: lines}
+	}
+	return lines
 }
 
 func (m *model) scrollInspect(delta int) {
@@ -45,32 +59,31 @@ func (m *model) scrollInspect(delta int) {
 	m.inspectScroll = clamp(m.inspectScroll+delta, 0, maxOffset)
 }
 
-func (m model) warmInspectView(l layout) []string {
-	innerW := max(l.colW-4, 1)
-	pageH := max(l.shellH-3, 1)
+// warmInspectView returns the visible page of the warm sandbox's document
+// and the pane footer naming the position and how to focus it.
+func (m model) warmInspectView(l layout) ([]string, string) {
+	innerW := max(l.docW, 1)
+	pageH := max(l.docH, 1)
 
 	doc := m.cachedInspectLines(innerW)
 	total := len(doc)
 	offset := clamp(m.inspectScroll, 0, max(total-pageH, 0))
 	end := min(offset+pageH, total)
 
-	pos := ""
+	var footer []string
 	if total > pageH {
-		pos = fmt.Sprintf(" %d-%d/%d", offset+1, end, total)
+		footer = append(footer, fmt.Sprintf("%d-%d/%d", offset+1, end, total))
 	}
-	var title string
 	if m.focus == focusInspect {
-		title = cursorStyle.Render("▶ configs & templates") + dim(pos+" · j/k/pgup/pgdn scroll · esc leaves")
+		footer = append(footer, "esc leaves")
 	} else {
-		title = dim("configs & templates" + pos + " · scroll or click to focus")
+		footer = append(footer, "scroll or click to focus")
 	}
 
-	lines := make([]string, 0, pageH+1)
-	lines = append(lines, title)
-	if offset < total {
-		lines = append(lines, doc[offset:end]...)
+	if offset >= total {
+		return nil, strings.Join(footer, " · ")
 	}
-	return lines
+	return doc[offset:end], strings.Join(footer, " · ")
 }
 
 func (m model) warmInspectLines(width int) []string {

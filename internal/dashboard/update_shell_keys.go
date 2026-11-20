@@ -4,13 +4,13 @@ import (
 	"regexp"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/tmih06/nightshift/internal/session"
 )
 
-// sgrMouseLeakRe matches SGR mouse suffixes that leak as KeyRunes when
-// a PTY or SSH splits ESC from the rest of the sequence across reads.
+// sgrMouseLeakRe matches SGR mouse suffixes that leak as text when a PTY or
+// SSH splits ESC from the rest of the sequence across reads.
 var sgrMouseLeakRe = regexp.MustCompile(`^(?:\[?<\d+;\d+;\d+[Mm])+$`)
 
 var shellKeys = map[string]string{
@@ -30,7 +30,7 @@ var shellKeys = map[string]string{
 	"shift+tab": "BTab",
 }
 
-func (m model) updateShellKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) updateShellKeys(msg tea.KeyPressMsg) (model, tea.Cmd) {
 	if !m.canFocusShell() {
 		m.focus = focusNav
 		m.prefix = false
@@ -52,6 +52,17 @@ func (m model) updateShellKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
+	return m.queueShell(key)
+}
+
+func (m model) pasteIntoShell(text string) (model, tea.Cmd) {
+	if !m.canFocusShell() || text == "" {
+		return m, nil
+	}
+	return m.queueShell(session.Key{Text: text})
+}
+
+func (m model) queueShell(key session.Key) (model, tea.Cmd) {
 	m.pending = append(m.pending, key)
 	if m.sending {
 		return m, nil
@@ -59,22 +70,19 @@ func (m model) updateShellKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, m.startDrain()
 }
 
-func isMouseEscapeFragment(msg tea.KeyMsg) bool {
-	if msg.Type != tea.KeyRunes {
-		return false
-	}
-	if msg.Alt && len(msg.Runes) == 1 && msg.Runes[0] == '[' {
+func isMouseEscapeFragment(msg tea.KeyPressMsg) bool {
+	if msg.Mod == tea.ModAlt && msg.Code == '[' {
 		return true
 	}
-	return !msg.Paste && sgrMouseLeakRe.MatchString(string(msg.Runes))
+	return msg.Text != "" && sgrMouseLeakRe.MatchString(msg.Text)
 }
 
-func shellKeyFromMsg(msg tea.KeyMsg) (session.Key, bool) {
+func shellKeyFromMsg(msg tea.KeyPressMsg) (session.Key, bool) {
 	if isMouseEscapeFragment(msg) {
 		return session.Key{}, false
 	}
-	if msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace {
-		return session.Key{Text: string(msg.Runes)}, true
+	if msg.Text != "" && msg.Mod&^tea.ModShift == 0 {
+		return session.Key{Text: msg.Text}, true
 	}
 	name, ok := shellKeyName(msg.String())
 	return session.Key{Name: name}, ok
@@ -83,6 +91,9 @@ func shellKeyFromMsg(msg tea.KeyMsg) (session.Key, bool) {
 func shellKeyName(s string) (string, bool) {
 	if name, ok := shellKeys[s]; ok {
 		return name, true
+	}
+	if s == "space" {
+		return "", false
 	}
 	if strings.HasPrefix(s, "ctrl+") && len(s) == 6 {
 		return "C-" + s[5:], true

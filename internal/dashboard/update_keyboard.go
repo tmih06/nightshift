@@ -1,18 +1,24 @@
 package dashboard
 
-import tea "github.com/charmbracelet/bubbletea"
+import tea "charm.land/bubbletea/v2"
 
-func (m model) updateKeyboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) updateKeyboard(msg tea.KeyPressMsg) (model, tea.Cmd) {
 	if m.confirmDestroy && msg.String() != "x" {
 		m.confirmDestroy = false
 	}
 	switch msg.String() {
+	case "?":
+		m.showHelp = !m.showHelp
 	case "q", "esc", "ctrl+c":
 		return m, tea.Quit
 	case "up", "k":
 		m.moveSelection(-1)
 	case "down", "j":
 		m.moveSelection(1)
+	case "h", "left", "[":
+		m.setSection(m.section - 1)
+	case "l", "right", "]":
+		m.setSection(m.section + 1)
 	case "g":
 		if order := m.navigationIndices(); len(order) > 0 {
 			m.selectPod(m.boxes[order[0]].Name)
@@ -20,10 +26,6 @@ func (m model) updateKeyboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "G":
 		if order := m.navigationIndices(); len(order) > 0 {
 			m.selectPod(m.boxes[order[len(order)-1]].Name)
-		}
-	case "tab":
-		if m.isWarmSelected() {
-			m.focusWarmInspect()
 		}
 	case "r":
 		m.status, m.statusTTL = "", 0
@@ -79,15 +81,17 @@ func (m model) updateKeyboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) updateInspectKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) updateInspectKeys(msg tea.KeyPressMsg) (model, tea.Cmd) {
 	if !m.isWarmSelected() {
 		m.focus = focusNav
 		return m, nil
 	}
 	page := max(m.inspectPageSize()/2, 1)
 	switch msg.String() {
-	case "esc", "tab":
+	case "esc":
 		m.focus = focusNav
+	case "?":
+		m.showHelp = !m.showHelp
 	case "q", "ctrl+c":
 		return m, tea.Quit
 	case "up", "k":

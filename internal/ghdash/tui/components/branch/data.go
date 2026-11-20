@@ -1,0 +1,45 @@
+package branch
+
+import (
+	"time"
+
+	"github.com/tmih06/nightshift/internal/ghdash/data"
+	"github.com/tmih06/nightshift/internal/ghdash/git"
+)
+
+type BranchData struct {
+	Data git.Branch
+	PR   *data.PullRequestData
+}
+
+func (b BranchData) GetRepoNameWithOwner() string {
+	if len(b.Data.Remotes) == 0 {
+		return ""
+	}
+	return b.Data.Remotes[0]
+}
+
+func (b BranchData) GetTitle() string {
+	return b.Data.Name
+}
+
+func (b BranchData) GetNumber() int {
+	if b.PR == nil {
+		return 0
+	}
+	return b.PR.Number
+}
+
+func (b BranchData) GetUrl() string {
+	if b.PR == nil {
+		return ""
+	}
+	return b.PR.Url
+}
+
+func (b BranchData) GetUpdatedAt() time.Time {
+	if b.Data.LastUpdatedAt == nil {
+		return time.Time{}
+	}
+	return *b.Data.LastUpdatedAt
+}
