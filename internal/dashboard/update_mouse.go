@@ -85,7 +85,7 @@ func (m model) applyClick(x, y int) (model, tea.Cmd) {
 			m.prefix = false
 			return m, nil
 		}
-		if b := m.selectedBox(); b != nil && b.OwnerKind == "SandboxClaim" && b.Phase == "Running" {
+		if b := m.selectedBox(); b != nil && b.Claimed() && b.Phase == "Running" {
 			m.flash("starting bash in " + b.Name)
 			return m, attachCmd(b.Name)
 		}

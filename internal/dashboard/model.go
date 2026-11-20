@@ -77,8 +77,15 @@ type model struct {
 	pending        []session.Key
 	sending        bool
 	pendingPod     string
-	hist           map[string]usageHistory
-	live           map[string]liveUsage
+	// checkout is the pull request checkout in flight, shown as a card.
+	checkout *checkoutRun
+	// destroy, while open, asks whether a sandbox's volume goes with it.
+	destroy *destroyDialog
+	// pendingCheckout is the pull request checked out in pendingPod, whose
+	// shell takes the keyboard once the fleet shows it.
+	pendingCheckout *Checkout
+	hist            map[string]usageHistory
+	live            map[string]liveUsage
 
 	// hidden stops shell screen renders while another tab is on screen.
 	hidden bool
@@ -108,7 +115,9 @@ func (m model) SetHidden(hidden bool) Model {
 
 // Capturing is whether every key belongs to the embedded shell, so the host
 // must not take tab or any other key for itself.
-func (m model) Capturing() bool { return m.focus == focusShell && m.canFocusShell() }
+func (m model) Capturing() bool {
+	return m.destroy != nil || (m.focus == focusShell && m.canFocusShell())
+}
 
 func (m model) Init() tea.Cmd {
 	return tea.Batch(fetchCmd(), tickCmd(), shellTickCmd())
@@ -136,9 +145,14 @@ type claimAdoptedMsg struct {
 	err error
 }
 
+// deletedMsg reports a destroyed claim, or a sandbox on a volume and
+// whether the volume went too.
 type deletedMsg struct {
-	claim string
-	err   error
+	claim      string
+	sandbox    string
+	volume     string
+	volumeGone bool
+	err        error
 }
 
 type attachReadyMsg struct {
@@ -172,7 +186,7 @@ type sentMsg struct {
 func Owns(msg tea.Msg) bool {
 	switch msg.(type) {
 	case tickMsg, shellTickMsg, loadedMsg, claimMsg, claimAdoptedMsg, deletedMsg,
-		attachReadyMsg, fullReadyMsg, resumeMsg, shellMsg, sentMsg:
+		attachReadyMsg, fullReadyMsg, resumeMsg, shellMsg, sentMsg, checkoutMsg:
 		return true
 	}
 	return false
@@ -191,7 +205,7 @@ func fetchCmd() tea.Cmd {
 		boxes, pools, metricsOK, err := cluster.Fetch()
 		var claimed []string
 		for _, b := range boxes {
-			if b.OwnerKind == "SandboxClaim" && b.Phase == "Running" {
+			if b.Claimed() && b.Phase == "Running" {
 				claimed = append(claimed, b.Name)
 			}
 		}
@@ -393,12 +407,12 @@ func (m model) selectedIndex() int {
 
 func (m model) isWarmSelected() bool {
 	b := m.selectedBox()
-	return b != nil && b.OwnerKind != "SandboxClaim"
+	return b != nil && !b.Claimed()
 }
 
 func (m model) canFocusShell() bool {
 	b := m.selectedBox()
-	return b != nil && b.OwnerKind == "SandboxClaim" && m.sessions[b.Name]
+	return b != nil && b.Claimed() && m.sessions[b.Name]
 }
 
 func (m *model) focusWarmInspect() {

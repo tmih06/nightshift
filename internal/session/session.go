@@ -367,7 +367,7 @@ func Live(boxes []cluster.Sandbox) map[string]bool {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	for _, box := range boxes {
-		if box.OwnerKind != "SandboxClaim" || box.Phase != "Running" {
+		if !box.Claimed() || box.Phase != "Running" {
 			continue
 		}
 		wg.Add(1)

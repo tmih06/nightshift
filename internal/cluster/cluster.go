@@ -22,8 +22,9 @@ const (
 
 type Sandbox struct {
 	Name        string
-	OwnerKind   string // SandboxWarmPool or SandboxClaim
-	Owner       string
+	OwnerKind   string // SandboxWarmPool or SandboxClaim; empty on a volume
+	Owner       string // the pool or claim; on a volume, the volume
+	Volume      string // the pull request volume it mounts, if Nightshift started it on one
 	Template    string
 	NodeName    string
 	Phase       string // pod phase, "…" until the pod exists
@@ -60,6 +61,7 @@ type ownerReference struct {
 type sandboxItem struct {
 	Metadata struct {
 		Name            string            `json:"name"`
+		Labels          map[string]string `json:"labels"`
 		Annotations     map[string]string `json:"annotations"`
 		Created         string            `json:"creationTimestamp"`
 		OwnerReferences []ownerReference  `json:"ownerReferences"`
@@ -192,8 +194,10 @@ func buildSandboxes(sb sandboxList, pl podList, ml *podMetricsList) ([]Sandbox, 
 		if len(item.Metadata.OwnerReferences) > 0 {
 			b.OwnerKind = item.Metadata.OwnerReferences[0].Kind
 			b.Owner = item.Metadata.OwnerReferences[0].Name
+		} else if v := item.Metadata.Labels[VolumeLabel]; v != "" {
+			b.Volume, b.Owner = v, v
 		}
-		isWarm := b.OwnerKind != "SandboxClaim"
+		isWarm := !b.Claimed()
 		if isWarm {
 			b.ManifestYAML = cleanManifestYAML(raw)
 		}
@@ -248,7 +252,7 @@ func buildSandboxes(sb sandboxList, pl podList, ml *podMetricsList) ([]Sandbox, 
 	}
 
 	sort.SliceStable(boxes, func(i, j int) bool {
-		if ri, rj := ownerRank(boxes[i].OwnerKind), ownerRank(boxes[j].OwnerKind); ri != rj {
+		if ri, rj := OwnerRank(boxes[i]), OwnerRank(boxes[j]); ri != rj {
 			return ri < rj
 		}
 		return boxes[i].Name < boxes[j].Name
@@ -256,11 +260,16 @@ func buildSandboxes(sb sandboxList, pl podList, ml *podMetricsList) ([]Sandbox, 
 	return boxes, nil
 }
 
-func ownerRank(kind string) int {
-	switch kind {
-	case "SandboxWarmPool":
+// Claimed is whether b is someone's workspace: adopted by a claim, or
+// started by Nightshift on a pull request's volume.
+func (b Sandbox) Claimed() bool { return b.OwnerKind == "SandboxClaim" || b.Volume != "" }
+
+// OwnerRank orders sandboxes warm, then claimed, then anything else.
+func OwnerRank(b Sandbox) int {
+	switch {
+	case b.OwnerKind == "SandboxWarmPool":
 		return 0
-	case "SandboxClaim":
+	case b.Claimed():
 		return 1
 	default:
 		return 2

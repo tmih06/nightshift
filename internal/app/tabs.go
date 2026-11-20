@@ -91,13 +91,17 @@ func (m Model) renderBar() string {
 		Bold(true).
 		Padding(0, 1).
 		Render(brand)
-	if m.notice != "" {
+	text, bad := m.notice, m.noticeBad
+	if text == "" && m.active != TabSandboxes {
+		text = m.sandboxes.CheckoutLine() // a checkout's progress, while its tab is hidden
+	}
+	if text != "" {
 		fg := m.theme.FaintText
-		if m.noticeBad {
+		if bad {
 			fg = m.theme.ErrorText
 		}
 		room := max(0, m.width-used-lipgloss.Width(logo)-2)
-		notice := bar.Foreground(fg).Render(truncate(m.notice, room) + " ")
+		notice := bar.Foreground(fg).Render(truncate(text, room) + " ")
 		logo = notice + logo
 	}
 	rest := m.width - used - lipgloss.Width(logo)

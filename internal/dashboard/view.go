@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/tmih06/nightshift/internal/cluster"
+	"github.com/tmih06/nightshift/internal/dialog"
 	"github.com/tmih06/nightshift/internal/ghdash/tui/common"
 )
 
@@ -97,7 +98,7 @@ type nodeGroup struct {
 func (m model) nodeGroups(ownerRank int) []nodeGroup {
 	byNode := make(map[string][]int)
 	for i, b := range m.boxes {
-		if sidebarOwnerRank(b.OwnerKind) == ownerRank {
+		if cluster.OwnerRank(b) == ownerRank {
 			byNode[b.NodeName] = append(byNode[b.NodeName], i)
 		}
 	}
@@ -126,17 +127,6 @@ func (m model) nodeGroups(ownerRank int) []nodeGroup {
 	return groups
 }
 
-func sidebarOwnerRank(kind string) int {
-	switch kind {
-	case "SandboxWarmPool":
-		return 0
-	case "SandboxClaim":
-		return 1
-	default:
-		return 2
-	}
-}
-
 // navigationIndices is the table's order for the current section: warm,
 // claimed, then other, each by node and name.
 func (m model) navigationIndices() []int {
@@ -155,7 +145,7 @@ func (m model) navigationIndices() []int {
 func (m model) sectionCount(section int) int {
 	n := 0
 	for _, b := range m.boxes {
-		rank := sidebarOwnerRank(b.OwnerKind)
+		rank := cluster.OwnerRank(b)
 		if section == sectionAll || (section == sectionWarm && rank == 0) || (section == sectionClaimed && rank == 1) {
 			n++
 		}
@@ -277,13 +267,7 @@ func (m model) renderRow(i, inner int, selected bool) []string {
 		return s
 	}
 
-	var kindColor color.Color = th.FaintText
-	switch b.OwnerKind {
-	case "SandboxWarmPool":
-		kindColor = warmColor
-	case "SandboxClaim":
-		kindColor = claimColor
-	}
+	_, kindColor := kindName(&b)
 	node := b.NodeName
 	if node == "" {
 		node = "unassigned"
@@ -440,10 +424,10 @@ func phaseColor(phase string) color.Color {
 }
 
 func kindName(b *cluster.Sandbox) (string, color.Color) {
-	switch b.OwnerKind {
-	case "SandboxWarmPool":
+	switch {
+	case b.OwnerKind == "SandboxWarmPool":
 		return "Warm", warmColor
-	case "SandboxClaim":
+	case b.Claimed():
 		return "Claimed", claimColor
 	}
 	return b.OwnerKind, warnColor
@@ -470,12 +454,15 @@ func (m model) infoLines(width int) []string {
 		dim(" · node ") + node + dim(" · "+ageString(b.Created))
 
 	var facts []string
-	if b.OwnerKind == "SandboxClaim" {
+	if b.Claimed() {
 		h := m.hist[b.Name]
 		facts = usageTable([]usageRow{
 			{"CPU", b.CPUUsageMC, b.CPULimitMC, "m", h.cpu},
 			{"MEM", b.MemUsageMiB, b.MemLimitMiB, "Mi", h.mem},
 		}, m.usageKnown(b.Name), width-1)
+		if b.Volume != "" {
+			facts = append(facts, truncateANSI(dim("volume ")+b.Volume+dim(" · kept when destroyed"), max(width-1, 1)))
+		}
 	} else {
 		facts = []string{
 			truncateANSI(dim("image ")+b.Image, max(width-1, 1)),
@@ -784,7 +771,23 @@ func (m model) View() string {
 	if m.showHelp {
 		b.WriteString("\n" + m.helpView())
 	}
-	return b.String()
+	return m.overlays(b.String())
+}
+
+// overlays draws the checkout card in the bottom right, over the sidebar,
+// and the destroy dialog over everything.
+func (m model) overlays(view string) string {
+	if m.checkout != nil {
+		card := m.checkoutCard(time.Now())
+		x := max(0, m.width-lipgloss.Width(card)-1)
+		y := max(0, m.height-m.footerHeight()-lipgloss.Height(card))
+		view = dialog.Overlay(view, card, x, y, m.height)
+	}
+	if m.destroy != nil {
+		p := m.destroyPlaced()
+		view = dialog.Overlay(view, p.Box, p.X, p.Y, m.height)
+	}
+	return view
 }
 
 // ---- helpers ------------------------------------------------------------

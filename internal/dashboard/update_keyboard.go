@@ -45,7 +45,7 @@ func (m model) updateKeyboard(msg tea.KeyPressMsg) (model, tea.Cmd) {
 		if b == nil {
 			return m, nil
 		}
-		if b.OwnerKind != "SandboxClaim" {
+		if !b.Claimed() {
 			m.flash("warm pool sandbox — claim it with c, bash starts with the claim")
 			return m, nil
 		}
@@ -60,7 +60,7 @@ func (m model) updateKeyboard(msg tea.KeyPressMsg) (model, tea.Cmd) {
 		if b == nil || b.Phase != "Running" {
 			return m, nil
 		}
-		if b.OwnerKind != "SandboxClaim" {
+		if !b.Claimed() {
 			m.flash("warm pool sandbox — claim it with c first")
 			return m, nil
 		}
@@ -68,8 +68,13 @@ func (m model) updateKeyboard(msg tea.KeyPressMsg) (model, tea.Cmd) {
 		return m, fullCmd(b.Name)
 	case "x":
 		b := m.selectedBox()
-		if b == nil || b.OwnerKind != "SandboxClaim" {
+		if b == nil || !b.Claimed() {
 			m.flash("only a claimed sandbox can be destroyed")
+			return m, nil
+		}
+		if b.OwnerKind != "SandboxClaim" {
+			m.confirmDestroy = false
+			m.destroy = &destroyDialog{pod: b.Name, volume: b.Volume}
 			return m, nil
 		}
 		if !m.confirmDestroy {

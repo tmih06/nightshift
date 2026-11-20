@@ -20,10 +20,16 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 			m.scrollInspect(0)
 		}
 	case tea.PasteMsg:
+		if m.destroy != nil {
+			return m, nil
+		}
 		if m.focus == focusShell {
 			return m.pasteIntoShell(msg.Content)
 		}
 	case tea.KeyPressMsg:
+		if m.destroy != nil {
+			return m.updateDestroyKeys(msg)
+		}
 		switch m.focus {
 		case focusShell:
 			return m.updateShellKeys(msg)
@@ -33,6 +39,9 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 			return m.updateKeyboard(msg)
 		}
 	case tea.MouseMsg:
+		if m.destroy != nil {
+			return m.destroyMouse(msg)
+		}
 		return m.updateMouse(msg)
 	case tickMsg:
 		return m, tea.Batch(fetchCmd(), tickCmd())
@@ -73,6 +82,12 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 				}
 				m.selectPod(b.Name)
 				m.pendingPod = ""
+				if co := m.pendingCheckout; co != nil {
+					m.pendingCheckout = nil
+					if m.sessions[b.Name] {
+						return m.focusCheckout(b.Name, *co)
+					}
+				}
 				if m.sessions[b.Name] {
 					m.flash("bash ready in " + b.Name + " — enter attaches")
 					return m, fetchCmd()
@@ -100,7 +115,14 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 			m.fail("destroy failed: " + msg.err.Error())
 			return m, nil
 		}
-		m.flash("destroyed claim " + msg.claim + ", pool is restocking")
+		switch {
+		case msg.volumeGone:
+			m.flash("destroyed sandbox " + msg.sandbox + " and volume " + msg.volume)
+		case msg.volume != "":
+			m.flash("destroyed sandbox " + msg.sandbox + ", volume " + msg.volume + " kept")
+		default:
+			m.flash("destroyed claim " + msg.claim + ", pool is restocking")
+		}
 		m.confirmDestroy = false
 		return m, fetchCmd()
 	case attachReadyMsg:
@@ -112,7 +134,7 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 			m.sessions = map[string]bool{}
 		}
 		m.sessions[msg.pod] = true
-		if b := m.selectedBox(); b != nil && b.Name == msg.pod && b.OwnerKind == "SandboxClaim" {
+		if b := m.selectedBox(); b != nil && b.Name == msg.pod && b.Claimed() {
 			m.focus = focusShell
 			m.prefix = false
 			m.flash("bash ready — C-b q or click sidebar to leave")
@@ -138,6 +160,8 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 			m.flash("back from fullscreen, session still running")
 		}
 		return m, fetchCmd()
+	case checkoutMsg:
+		return m.checkoutEvent(msg)
 	case sentMsg:
 		m.sending = false
 		if msg.err != nil {

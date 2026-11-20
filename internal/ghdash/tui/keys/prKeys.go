@@ -19,6 +19,7 @@ type PRKeyMap struct {
 	Comment              key.Binding
 	Diff                 key.Binding
 	Checkout             key.Binding
+	Sandbox              key.Binding
 	Close                key.Binding
 	SummaryViewMore      key.Binding
 	Ready                key.Binding
@@ -67,6 +68,10 @@ var PRKeys = PRKeyMap{
 	Checkout: key.NewBinding(
 		key.WithKeys("C", "space"),
 		key.WithHelp("C/Space", "checkout"),
+	),
+	Sandbox: key.NewBinding(
+		key.WithKeys("S"),
+		key.WithHelp("S", "checkout in sandbox"),
 	),
 	Close: key.NewBinding(
 		key.WithKeys("x"),
@@ -121,6 +126,7 @@ func PRFullHelp() []key.Binding {
 		PRKeys.Comment,
 		PRKeys.Diff,
 		PRKeys.Checkout,
+		PRKeys.Sandbox,
 		PRKeys.Close,
 		PRKeys.Ready,
 		PRKeys.Reopen,
@@ -178,6 +184,8 @@ func rebindPRKeys(keys []config.Keybinding) error {
 			key = &PRKeys.Diff
 		case "checkout":
 			key = &PRKeys.Checkout
+		case "sandbox":
+			key = &PRKeys.Sandbox
 		case "close":
 			key = &PRKeys.Close
 		case "ready":

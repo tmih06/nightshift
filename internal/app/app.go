@@ -64,6 +64,10 @@ type Model struct {
 	noticeBad bool
 	noticeAt  time.Time
 
+	// picker, while open, asks which pool a pull request's sandbox comes
+	// from; it holds the keyboard.
+	picker *picker
+
 	// start is the pull request -pr asked for, opened once the screen is up.
 	start *ghtui.OpenPullRequestMsg
 
@@ -112,6 +116,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.broadcast(tea.WindowSizeMsg{Width: msg.Width, Height: max(0, msg.Height-barHeight)})
 
 	case tea.KeyPressMsg:
+		if m.picker != nil {
+			return m.updatePicker(msg)
+		}
 		if !m.capturing() {
 			switch msg.String() {
 			case "tab":
@@ -123,10 +130,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.toActive(msg)
 
 	case tea.PasteMsg:
+		if m.picker != nil {
+			return m, nil
+		}
 		return m.toActive(msg)
 
 	case ghtui.OpenPullRequestMsg:
 		return m.openPR(msg)
+
+	case ghtui.SandboxPullRequestMsg:
+		return m.openPicker(msg)
 
 	case prFoundMsg:
 		return m.prFound(msg)
@@ -142,6 +155,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseMsg:
+		if m.picker != nil {
+			return m.pickerMouse(msg)
+		}
 		mouse := msg.Mouse()
 		if mouse.Y < barHeight {
 			if click, ok := msg.(tea.MouseClickMsg); ok && click.Button == tea.MouseLeft {
@@ -159,6 +175,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // capturing is whether the active tab holds the keyboard for text, a prompt,
 // or the embedded shell, so tab belongs to it rather than to the tab bar.
 func (m Model) capturing() bool {
+	if m.picker != nil {
+		return true
+	}
 	switch m.active {
 	case TabSandboxes:
 		return m.sandboxes.Capturing()
@@ -227,6 +246,9 @@ func (m Model) View() tea.View {
 		return v
 	}
 	body := m.body()
+	if m.picker != nil {
+		body.Content, body.Cursor = m.overPicker(body.Content), nil
+	}
 	v.Content = m.renderBar() + "\n" + body.Content
 	if body.Cursor != nil {
 		moved := *body.Cursor
