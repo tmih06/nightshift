@@ -70,6 +70,10 @@ jobs:
           sudo mv kind /usr/local/bin/
       - name: Create cluster
         run: kind create cluster --name agent-sandbox
+      - name: Build and load the sandbox image
+        run: |
+          docker build -t nightshift-agent:0.1.0 images/agent
+          kind load docker-image nightshift-agent:0.1.0 --name agent-sandbox
       - name: Install agent-sandbox v1.0.11
         run: |
           kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v1.0.11/sandbox-with-extensions.yaml
