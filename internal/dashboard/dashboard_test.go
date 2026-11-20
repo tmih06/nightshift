@@ -38,26 +38,21 @@ func baseModel() model {
 		loaded: true, width: 100, height: 30}
 }
 
-// The left pane is the contract: warm and claimed sandboxes live in
-// separate sections, warm first, and every entry line maps back to its
-// sandbox for the mouse.
-func TestLeftLinesSections(t *testing.T) {
+// The left pane separates warm and claimed trees, groups each by node,
+// and maps only selectable entries back to the underlying sandbox.
+func TestLeftLinesTree(t *testing.T) {
 	m := baseModel()
 	lines, targets := m.leftLines()
 
-	if !strings.Contains(lines[0], "WARM POOL (2)") {
-		t.Errorf("first line = %q, want the warm pool section header", lines[0])
+	if !strings.Contains(lines[0], "WARM POOL (2)") || !strings.Contains(lines[1], "unassigned (2)") ||
+		!strings.Contains(lines[4], "CLAIMED (1)") || !strings.Contains(lines[5], "unassigned (1)") {
+		t.Errorf("tree headers = %q, want separate warm and claimed node trees", lines)
 	}
-	warm0 := targets[1]
-	if warm0 != 0 || !strings.Contains(lines[1], "agent-pool-5ss7w") {
-		t.Errorf("first entry row = %q, targets %v", lines[1], targets)
+	if got, ok := targets[2]; !ok || got != 0 || !strings.Contains(lines[2], "[warm]") || !strings.Contains(lines[2], "agent-pool-5ss7w") {
+		t.Errorf("first sandbox row = %q, targets %v", lines[2], targets)
 	}
-	claimedHeaderIdx := 4 // header, entry, entry, blank, header
-	if !strings.Contains(lines[claimedHeaderIdx], "CLAIMED (1)") {
-		t.Errorf("line %d = %q, want the claimed section header", claimedHeaderIdx, lines[claimedHeaderIdx])
-	}
-	if got := targets[claimedHeaderIdx+1]; got != 2 || !strings.Contains(lines[claimedHeaderIdx+1], "agent-pool-bkl2p") {
-		t.Errorf("claimed entry = %q, targets %v", lines[claimedHeaderIdx+1], targets)
+	if got, ok := targets[6]; !ok || got != 2 || !strings.Contains(lines[6], "[claimed]") || !strings.Contains(lines[6], "agent-pool-bkl2p") {
+		t.Errorf("claimed sandbox row = %q, targets %v", lines[6], targets)
 	}
 
 	// Session dots: the live session marker appears only for that pod.
@@ -76,11 +71,142 @@ func TestLeftLinesSections(t *testing.T) {
 	}
 }
 
+func TestNodeTreeOrderingAndNavigation(t *testing.T) {
+	m := baseModel()
+	m.boxes[0].NodeName = "node-b"
+	m.boxes[1].NodeName = "node-a"
+	m.boxes[2].NodeName = "node-a"
+	lines, targets := m.leftLines()
+
+	rowContaining := func(text string) int {
+		t.Helper()
+		for row, line := range lines {
+			if strings.Contains(line, text) {
+				return row
+			}
+		}
+		t.Fatalf("tree missing %q: %q", text, lines)
+		return -1
+	}
+	warmNodeA, nodeB := rowContaining("node-a (1)"), rowContaining("node-b (1)")
+	claimed := rowContaining("CLAIMED (1)")
+	claimedNodeA := claimed + 1
+	if warmNodeA >= nodeB || nodeB >= claimed || !strings.Contains(lines[claimedNodeA], "node-a (1)") {
+		t.Fatalf("tree order incorrect: %q", lines)
+	}
+	if got, ok := targets[warmNodeA+1]; !ok || got != 1 {
+		t.Errorf("node-a warm leaf target = %d, %v; want sandbox index 1", got, ok)
+	}
+	if got, ok := targets[claimedNodeA+1]; !ok || got != 2 {
+		t.Errorf("node-a claimed leaf target = %d, %v; want sandbox index 2", got, ok)
+	}
+	if got, ok := targets[nodeB+1]; !ok || got != 0 {
+		t.Errorf("node-b leaf target = %d, %v; want sandbox index 0", got, ok)
+	}
+	for _, row := range []int{0, warmNodeA, claimed, claimedNodeA} {
+		if _, ok := targets[row]; ok {
+			t.Errorf("tree header row %d should not be selectable", row)
+		}
+	}
+
+	m.selected = "agent-pool-lqbmx"
+	m.moveSelection(1)
+	if m.selected != "agent-pool-5ss7w" {
+		t.Errorf("j moved to %q, want node-b's warm leaf", m.selected)
+	}
+	m.moveSelection(1)
+	if m.selected != "agent-pool-bkl2p" {
+		t.Errorf("j moved to %q, want the claimed leaf", m.selected)
+	}
+	newM, _ := m.updateKeyboard(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	if newM.(model).selected != "agent-pool-lqbmx" {
+		t.Errorf("g selected %q, want the first leaf in node order", newM.(model).selected)
+	}
+	newM, _ = m.updateKeyboard(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	if newM.(model).selected != "agent-pool-bkl2p" {
+		t.Errorf("G selected %q, want the last leaf in tree order", newM.(model).selected)
+	}
+
+	m.selected = "agent-pool-5ss7w"
+	m = m.clickLeftPane(5, contentStartY+warmNodeA)
+	if m.selected != "agent-pool-5ss7w" {
+		t.Errorf("clicking a node header selected %q", m.selected)
+	}
+	m = m.clickLeftPane(5, contentStartY+warmNodeA+1)
+	if m.selected != "agent-pool-lqbmx" {
+		t.Errorf("clicking node-a's first leaf selected %q", m.selected)
+	}
+}
+
+func TestNodeTreeHandlesUnassignedSandboxes(t *testing.T) {
+	m := baseModel()
+	m.boxes[0].NodeName = "worker-a"
+	lines, targets := m.leftLines()
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "worker-a (1)") || strings.Count(joined, "unassigned (1)") != 2 {
+		t.Errorf("trees did not group assigned and unassigned sandboxes: %q", lines)
+	}
+	if targets[4] != 1 || targets[7] != 2 {
+		t.Errorf("unassigned leaves map to %v, want sandbox indices 1 and 2", targets)
+	}
+}
+
+func TestTreesHandleEmptyAndOtherGroups(t *testing.T) {
+	m := baseModel()
+	m.boxes = []cluster.Sandbox{
+		{Name: "unknown", OwnerKind: "Other", NodeName: "node-a"},
+		{Name: "claimed", OwnerKind: "SandboxClaim", NodeName: "node-a"},
+	}
+	m.selected = "claimed"
+	lines, targets := m.leftLines()
+	joined := strings.Join(lines, "\n")
+	for _, want := range []string{"WARM POOL (0)", "CLAIMED (1)", "OTHER (1)", "[other]"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("trees missing %q: %q", want, lines)
+		}
+	}
+	if len(targets) != 2 || targets[3] != 1 || targets[6] != 0 {
+		t.Errorf("leaf targets = %v, want claimed then other", targets)
+	}
+	m.moveSelection(1)
+	if m.selected != "unknown" {
+		t.Errorf("navigation selected %q, want other leaf", m.selected)
+	}
+}
+
+func TestNodeTreeScrollKeepsSelectedLeafVisible(t *testing.T) {
+	m := baseModel()
+	m.height = 12
+	m.boxes = make([]cluster.Sandbox, 8)
+	for i := range m.boxes {
+		letter := string(rune('a' + i))
+		m.boxes[i] = cluster.Sandbox{Name: "sandbox-" + letter, NodeName: "node-" + letter, OwnerKind: "SandboxWarmPool"}
+	}
+	m.selected = "sandbox-h"
+	lines, targets := m.leftLines()
+	selectedRow := -1
+	for row, line := range lines {
+		if strings.Contains(line, m.selected) {
+			selectedRow = row
+			if got := m.boxes[targets[row]].Name; got != m.selected {
+				t.Fatalf("visible selected row maps to %q, want %q", got, m.selected)
+			}
+		}
+	}
+	if selectedRow < 0 {
+		t.Fatalf("selected leaf %q is not visible in %q", m.selected, lines)
+	}
+	m = m.clickLeftPane(5, contentStartY+selectedRow)
+	if m.selected != "sandbox-h" {
+		t.Errorf("clicking visible selected leaf changed selection to %q", m.selected)
+	}
+}
+
 func TestMouseClickSelectsEntry(t *testing.T) {
 	m := baseModel()
 
-	// Click the second warm entry: row 1 is the first entry, row 2 the second.
-	m = m.clickLeftPane(5, contentStartY+2)
+	// Click the second warm entry after the root and unassigned node rows.
+	m = m.clickLeftPane(5, contentStartY+3)
 	if m.selected != "agent-pool-lqbmx" {
 		t.Errorf("selected = %q after clicking the second entry, want agent-pool-lqbmx", m.selected)
 	}
@@ -115,8 +241,8 @@ func TestMouseWheelMoves(t *testing.T) {
 func TestStackedClickUsesY(t *testing.T) {
 	m := baseModel()
 	m.width = 40 // below stackedBelow
-	// The left pane is the top half; clicking its rows selects entries.
-	m = m.clickLeftPane(5, contentStartY+2)
+	// The left pane is the top half; clicking a tree leaf selects its sandbox.
+	m = m.clickLeftPane(5, contentStartY+3)
 	if m.selected != "agent-pool-lqbmx" {
 		t.Errorf("stacked click selected %q, want agent-pool-lqbmx", m.selected)
 	}
@@ -281,20 +407,30 @@ func TestKeyboardNavigationAndActions(t *testing.T) {
 }
 
 func TestClaimShortcuts(t *testing.T) {
-	for _, key := range []rune{'c', 'C'} {
-		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}}
-
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}}
+	for _, selected := range []string{"agent-pool-5ss7w", "agent-pool-bkl2p"} {
 		nav := baseModel()
+		nav.selected = selected
 		newM, cmd := nav.Update(msg)
 		if cmd == nil || !strings.Contains(newM.(model).status, "claiming from the warm pool") {
-			t.Errorf("%q in navigation did not start a claim", key)
+			t.Errorf("c on %s did not start a claim", selected)
 		}
+	}
 
-		inspect := baseModel()
-		inspect.focus = focusInspect
-		newM, cmd = inspect.Update(msg)
-		if cmd == nil || newM.(model).focus != focusNav || !strings.Contains(newM.(model).status, "claiming from the warm pool") {
-			t.Errorf("%q in config view did not start a claim", key)
+	inspect := baseModel()
+	inspect.focus = focusInspect
+	newM, cmd := inspect.Update(msg)
+	if cmd == nil || newM.(model).focus != focusNav || !strings.Contains(newM.(model).status, "claiming from the warm pool") {
+		t.Error("c in config view did not start a claim")
+	}
+
+	uppercase := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'C'}}
+	for _, focus := range []focusPane{focusNav, focusInspect} {
+		m := baseModel()
+		m.focus = focus
+		newM, cmd := m.Update(uppercase)
+		if cmd != nil || newM.(model).focus != focus || newM.(model).status != "" {
+			t.Errorf("uppercase C in focus %v should not start a claim", focus)
 		}
 	}
 
@@ -304,7 +440,7 @@ func TestClaimShortcuts(t *testing.T) {
 	shell.sessions["agent-pool-bkl2p"] = true
 	shell.focus = focusShell
 	shell.sending = true
-	newM, cmd := shell.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'C'}})
+	newM, cmd = shell.Update(uppercase)
 	got := newM.(model)
 	if cmd != nil || got.focus != focusShell || len(got.pending) != 1 || got.pending[0].Text != "C" {
 		t.Errorf("uppercase C in bash = focus %v pending %v cmd=%v, want queued text", got.focus, got.pending, cmd != nil)
@@ -383,6 +519,9 @@ func TestViewFrame(t *testing.T) {
 		"nightshift",
 		"WARM POOL (2)",
 		"CLAIMED (1)",
+		"unassigned (2)",
+		"[warm]",
+		"[claimed]",
 		"agent-pool-5ss7w",
 		"agent-pool-lqbmx",
 		"agent-pool-bkl2p",
@@ -549,8 +688,8 @@ func release(x, y int) tea.MouseMsg {
 func TestLayoutDefaultsAndDragOverride(t *testing.T) {
 	m := baseModel() // 100x30
 	l := m.layout()
-	if l.leftW != 24 || l.headerH != 6 || l.shellH != 22 || l.stacked {
-		t.Errorf("default layout = %+v, want leftW 24, header 6, shell 22", l)
+	if l.leftW != 40 || l.headerH != 6 || l.shellH != 22 || l.stacked {
+		t.Errorf("default layout = %+v, want leftW 40, header 6, shell 22", l)
 	}
 
 	m.leftWidth = 60
@@ -569,7 +708,7 @@ func TestLayoutDefaultsAndDragOverride(t *testing.T) {
 }
 
 func TestDragResizesLeftPane(t *testing.T) {
-	m := baseModel() // divider sits at the fitted left edge, x=24
+	m := baseModel() // divider sits at the fitted left edge, x=40
 	divX := m.layout().leftW
 
 	newM, _ := m.updateMouse(press(divX, 10))
@@ -636,7 +775,7 @@ func TestClickFocusesShellPane(t *testing.T) {
 		t.Error("click in the shell pane of a claimed sandbox did not focus bash")
 	}
 
-	newM, _ = newM.(model).updateMouse(press(5, 4))
+	newM, _ = newM.(model).updateMouse(press(5, 5))
 	if newM.(model).focus != focusNav {
 		t.Error("click on a left-pane entry must return to navigation")
 	}
@@ -952,14 +1091,14 @@ func TestClaimCreatesBashImmediately(t *testing.T) {
 }
 
 func TestLeftWidthFitsContent(t *testing.T) {
-	m := baseModel() // longest name is 16 runes
-	if got := m.layout().leftW; got != 24 {
-		t.Errorf("default leftW = %d, want 24 fitted to the longest name", got)
+	m := baseModel() // longest name is 16 runes, plus tree labels and branches
+	if got := m.layout().leftW; got != 40 {
+		t.Errorf("default leftW = %d, want 40 fitted to the longest tree leaf", got)
 	}
 	long := baseModel()
 	long.boxes[0].Name = "agent-pool-with-a-much-longer-name-123456"
-	if got := long.layout().leftW; got != 49 { // 41 runes + 8
-		t.Errorf("fitted leftW = %d, want 49", got)
+	if got := long.layout().leftW; got != 65 { // 41 runes + 24 for tree labels
+		t.Errorf("fitted leftW = %d, want 65", got)
 	}
 	// The fit never swallows the right column.
 	huge := baseModel()
@@ -1121,6 +1260,20 @@ func TestSelectionFollowsNameAcrossResort(t *testing.T) {
 	}
 }
 
+func TestSelectionFallbackUsesNodeOrder(t *testing.T) {
+	m := baseModel()
+	m.boxes[0].NodeName = "worker-b"
+	m.boxes[1].NodeName = "worker-a"
+	m.boxes[2].NodeName = "worker-a"
+	m.selected = "agent-pool-lqbmx"
+	refilled := []cluster.Sandbox{m.boxes[0], m.boxes[2]}
+
+	newM, _ := m.Update(loadedMsg{boxes: refilled, sessions: m.sessions, metricsOK: true})
+	if got := newM.(model).selected; got != "agent-pool-5ss7w" {
+		t.Errorf("selection fallback = %q, want first remaining leaf in tree order", got)
+	}
+}
+
 // levelColor maps stress to the green-to-red ramp; the graph colors
 // each cell by its stronger sample, so a spike reads red wherever it
 // happened.
@@ -1224,7 +1377,7 @@ func TestNoInputLeaksFromShell(t *testing.T) {
 	}
 
 	// Clicking the sidebar always exits shell focus and selects the entry.
-	newM, _ = m.updateMouse(press(5, 4))
+	newM, _ = m.updateMouse(press(5, 5))
 	if newM.(model).focus != focusNav {
 		t.Error("a sidebar click must stop focusing the shell")
 	}

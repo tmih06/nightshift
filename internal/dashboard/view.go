@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -84,11 +85,72 @@ func headerBoxWidths(colW int, info []string) (infoW, usageW int) {
 func (m model) fitLeftWidth() int {
 	w := 18
 	for _, b := range m.boxes {
-		if n := len([]rune(b.Name)) + 8; n > w {
+		if n := len([]rune(b.Name)) + 24; n > w {
+			w = n
+		}
+		if n := len([]rune(b.NodeName)) + 13; n > w {
 			w = n
 		}
 	}
 	return clamp(w, minLeftW, max(m.width-minRightW, minLeftW))
+}
+
+type nodeGroup struct {
+	name  string
+	boxes []int
+}
+
+func (m model) nodeGroups(ownerRank int) []nodeGroup {
+	byNode := make(map[string][]int)
+	for i, b := range m.boxes {
+		if sidebarOwnerRank(b.OwnerKind) == ownerRank {
+			byNode[b.NodeName] = append(byNode[b.NodeName], i)
+		}
+	}
+	nodes := make([]string, 0, len(byNode))
+	for node := range byNode {
+		nodes = append(nodes, node)
+	}
+	sort.Slice(nodes, func(i, j int) bool {
+		if nodes[i] == "" {
+			return false
+		}
+		if nodes[j] == "" {
+			return true
+		}
+		return nodes[i] < nodes[j]
+	})
+
+	groups := make([]nodeGroup, 0, len(nodes))
+	for _, node := range nodes {
+		indices := byNode[node]
+		sort.SliceStable(indices, func(i, j int) bool {
+			return m.boxes[indices[i]].Name < m.boxes[indices[j]].Name
+		})
+		groups = append(groups, nodeGroup{name: node, boxes: indices})
+	}
+	return groups
+}
+
+func sidebarOwnerRank(kind string) int {
+	switch kind {
+	case "SandboxWarmPool":
+		return 0
+	case "SandboxClaim":
+		return 1
+	default:
+		return 2
+	}
+}
+
+func (m model) navigationIndices() []int {
+	indices := make([]int, 0, len(m.boxes))
+	for rank := 0; rank < 3; rank++ {
+		for _, group := range m.nodeGroups(rank) {
+			indices = append(indices, group.boxes...)
+		}
+	}
+	return indices
 }
 
 func (m model) shellPaneSize() (int, int) {
@@ -119,49 +181,100 @@ func (m model) leftLinesWith(l layout) ([]string, map[int]int) {
 	if len(m.boxes) == 0 {
 		return []string{dim("no sandboxes…")}, targets
 	}
-	var warm, claimed []int
-	for i, b := range m.boxes {
-		if b.OwnerKind == "SandboxWarmPool" {
-			warm = append(warm, i)
-		} else {
-			claimed = append(claimed, i)
-		}
-	}
 
-	entry := func(i int) string {
+	lines := make([]string, 0, len(m.boxes)+4)
+	entry := func(i int, prefix string) string {
 		b := m.boxes[i]
 		marker := " "
 		if b.Name == m.selected {
 			marker = cursorStyle.Render("▶")
 		}
-		text := truncateANSI(b.Name, max(innerW-4, 1))
+		kind, kindStyle := "[other]", warnStyle
+		switch b.OwnerKind {
+		case "SandboxWarmPool":
+			kind, kindStyle = "[warm]", warmStyle
+		case "SandboxClaim":
+			kind, kindStyle = "[claimed]", claimStyle
+		}
+		nameW := max(innerW-lipgloss.Width(prefix)-lipgloss.Width(kind)-5, 1)
+		name := truncateANSI(b.Name, nameW)
 		switch {
 		case b.Name == m.selected:
-			text = cursorStyle.Render(text)
+			name = cursorStyle.Render(name)
 		case b.OwnerKind == "SandboxWarmPool":
-			text = warmStyle.Render(text)
+			name = warmStyle.Render(name)
+		case b.OwnerKind == "SandboxClaim":
+			name = claimStyle.Render(name)
 		default:
-			text = claimStyle.Render(text)
+			name = warnStyle.Render(name)
 		}
-		sess := dim("○")
+		session := dim("○")
 		if m.sessions[b.Name] {
-			sess = warmStyle.Render("●")
+			session = warmStyle.Render("●")
 		}
-		return marker + " " + text + " " + sess
+		return prefix + marker + " " + kindStyle.Render(kind) + " " + name + " " + session
 	}
 
-	lines := make([]string, 0, len(m.boxes)+3)
-	lines = append(lines, sectionStyle.Render(fmt.Sprintf("WARM POOL (%d)", len(warm))))
-	for _, i := range warm {
-		targets[len(lines)] = i
-		lines = append(lines, entry(i))
+	for rank, title := range []string{"WARM POOL", "CLAIMED", "OTHER"} {
+		groups := m.nodeGroups(rank)
+		if rank == 2 && len(groups) == 0 {
+			continue
+		}
+		count := 0
+		for _, group := range groups {
+			count += len(group.boxes)
+		}
+		lines = append(lines, sectionStyle.Render(fmt.Sprintf("%s (%d)", title, count)))
+		for groupIndex, group := range groups {
+			lastGroup := groupIndex == len(groups)-1
+			branch := "├─ "
+			if lastGroup {
+				branch = "└─ "
+			}
+			nodeName := group.name
+			if nodeName == "" {
+				nodeName = "unassigned"
+			}
+			lines = append(lines, branch+sectionStyle.Render(fmt.Sprintf("%s (%d)", nodeName, len(group.boxes))))
+
+			parentBranch := "│  "
+			if lastGroup {
+				parentBranch = "   "
+			}
+			for i, boxIndex := range group.boxes {
+				leafBranch := parentBranch + "├─ "
+				if i == len(group.boxes)-1 {
+					leafBranch = parentBranch + "└─ "
+				}
+				targets[len(lines)] = boxIndex
+				lines = append(lines, entry(boxIndex, leafBranch))
+			}
+		}
 	}
-	lines = append(lines, "", sectionStyle.Render(fmt.Sprintf("CLAIMED (%d)", len(claimed))))
-	for _, i := range claimed {
-		targets[len(lines)] = i
-		lines = append(lines, entry(i))
+
+	visibleRows := max(l.leftH-2, 1)
+	if len(lines) <= visibleRows {
+		return lines, targets
 	}
-	return lines, targets
+	selectedRow := -1
+	for row, boxIndex := range targets {
+		if m.boxes[boxIndex].Name == m.selected {
+			selectedRow = row
+			break
+		}
+	}
+	start := 0
+	if selectedRow >= 0 {
+		start = clamp(selectedRow-visibleRows/2, 0, len(lines)-visibleRows)
+	}
+	visible := lines[start : start+visibleRows]
+	visibleTargets := make(map[int]int, len(targets))
+	for row, boxIndex := range targets {
+		if row >= start && row < start+visibleRows {
+			visibleTargets[row-start] = boxIndex
+		}
+	}
+	return visible, visibleTargets
 }
 
 func (m model) headerInfoLines() []string {

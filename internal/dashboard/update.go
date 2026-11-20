@@ -51,7 +51,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.dataRev++
 		m.appendHistory()
 		if m.selectedBox() == nil && len(m.boxes) > 0 {
-			m.selectPod(m.boxes[clamp(prev, 0, len(m.boxes)-1)].Name)
+			order := m.navigationIndices()
+			m.selectPod(m.boxes[order[clamp(prev, 0, len(order)-1)]].Name)
 		} else {
 			m.selectPod(m.selected)
 		}
