@@ -23,15 +23,15 @@ The demo runs on the kind cluster `kind-agent-sandbox` in the namespace
 ## What lives here
 
 - `demo/` holds the Kubernetes side: `warmpool.yaml` creates the namespace
-  `sandbox-demo` and the standing pool, one `SandboxTemplate` and one
-  `SandboxWarmPool` that keeps two warm sandboxes, each pod capped at 500m
-  CPU and 256Mi memory. `claim.yaml` claims one sandbox from the pool.
+  `sandbox-demo` and four template/pool pairs, each keeping one Pi, Codex,
+  Claude Code, or OpenCode sandbox warm. Each pod is capped at 500m CPU and
+  256Mi memory. `claim.yaml` claims a Pi sandbox by default.
   `sbx.sh` wraps that loop in one command and is installed as `sbx` through
   a symlink in `~/.local/bin`.
 - `images/base/` defines the common sandbox tools and Herdr; `images/agent/`
   adds one versioned Pi, Codex, Claude Code, or OpenCode agent. The image
-  workflow watches stable npm releases and publishes to GHCR. Build and load
-  the default Pi image into kind before applying `demo/warmpool.yaml`; see
+  workflow watches stable npm releases and publishes to GHCR. Check
+  registry access before applying `demo/warmpool.yaml`; see
   `images/agent/README.md`.
 - `cmd/nightshift` is the entrypoint of the Go program, a Bubble Tea v2
   TUI. `internal/app` is the root model: it draws the tab bar and routes
@@ -114,8 +114,9 @@ The demo runs on the kind cluster `kind-agent-sandbox` in the namespace
 - While the shell holds focus no input escapes: scrolling and clicks stay in
   the shell, only the splitter drag still works, and C-b then q is the only
   way out. A click in the table always returns to navigation.
-- `c` claims a sandbox and pre-creates its bash, staying in navigation until
-  `enter` attaches. `enter` or a click on a warm sandbox's sidebar
+- `c` claims from the selected warm sandbox's pool (or `pi-pool` when no
+  warm sandbox is selected) and pre-creates its bash, staying in navigation
+  until `enter` attaches. `enter` or a click on a warm sandbox's sidebar
   focuses its configs, and `esc` leaves them. Warm pool sandboxes refuse
   bash. `x` twice destroys a claim. `F` fullscreens.
 - Status notifications expire after 5 seconds; errors and armed
@@ -138,8 +139,8 @@ toolchain on demand, and the repo needs no other Go config.
 ## Verify
 
 - Run `bash -n demo/sbx.sh` to check that the script parses.
-- Build and load the sandbox image as documented in `images/agent/README.md`
-  before testing against the cluster.
+- Ensure the published sandbox images are accessible as documented in
+  `images/agent/README.md` before testing against the cluster.
 - With the cluster up, run `SBX_NO_EXEC=1 sbx` to check the claim and destroy
   loop end to end. The script removes the claim it creates.
 - Run `go test ./...` and `go vet ./...` to check the Go module, and

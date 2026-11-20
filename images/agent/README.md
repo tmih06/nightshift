@@ -20,22 +20,26 @@ into the images; supply provider credentials or log in at runtime.
 
 ## Demo build
 
-Build and load the default Pi image into the demo's kind cluster **before**
-applying the warm pool manifest:
+The demo manifest references the four published GHCR `latest` images and
+keeps one warm pod per agent. Ensure the cluster can pull them, then apply:
 
 ```sh
-docker build -t nightshift-base:local images/base
-docker build -t nightshift-agent:0.1.0 images/agent
-kind load docker-image nightshift-agent:0.1.0 --name agent-sandbox
 kubectl --context kind-agent-sandbox apply -f demo/warmpool.yaml
 ```
 
-The defaults are Pi 1.5.2 and the locally built base. To build another agent,
-pass `--build-arg AGENT=codex --build-arg AGENT_VERSION=<stable-version>` to
-the second build, and give the image an appropriate tag. `BASE_IMAGE` can
-also select a different local or published base. Build for the node's
-architecture. The manifest uses `IfNotPresent` and its local demo tag;
-changing images requires updating the template and replacing the pool's pods.
+On an existing demo this creates `pi-pool`; applying the manifest does not
+remove the old `agent-pool` or its warm sandbox. Existing claims are not deleted. Select a warm sandbox and
+press `c` in the dashboard to claim its pool, or use, for example,
+`POOL=codex-pool sbx`. The default `sbx` pool is Pi's `pi-pool`.
+
+The manifest uses `Always` to pull the current tag when a pod starts; already
+running pods are not automatically replaced when an image is published. For
+local builds, build `images/base` and `images/agent`, load each image into
+kind, and change the corresponding template to use its local tag and
+`IfNotPresent`. The agent Dockerfile defaults to Pi 1.5.2; set `AGENT` and
+`AGENT_VERSION` for another agent, and `BASE_IMAGE` to select a base. Build
+for the node's architecture.
+
 The workspace, agent configuration, and Herdr state are ephemeral by default.
 The demo's 256Mi memory limit may need to be raised for real agent workloads.
 
@@ -64,6 +68,7 @@ schedule alone does not rebuild already published agent versions.
 
 Publishing requires Actions to have package write access, and the GHCR
 packages must be made public or the cluster must authenticate to pull them.
-Forks publish under their own lowercase repository name. On a remote cluster,
-set the sandbox template's image to an accessible published tag or digest.
+Forks publish under their own lowercase repository name; update the templates
+accordingly. To pin versions, set each template's image to an accessible tag
+or digest.
 Loading a local image on one kind node does not make it available on others.

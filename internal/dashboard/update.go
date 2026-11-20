@@ -53,7 +53,7 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 		return m, m.watchShell()
 	case loadedMsg:
 		prev := m.selectedIndex()
-		m.boxes, m.pool, m.sessions = msg.boxes, msg.pool, msg.sessions
+		m.boxes, m.pools, m.sessions = msg.boxes, msg.pools, msg.sessions
 		m.metricsOK, m.err, m.loaded = msg.metricsOK, msg.err, true
 		m.dataRev++
 		m.updatedAt = time.Now()

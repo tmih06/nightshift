@@ -31,8 +31,9 @@ func (m model) updateKeyboard(msg tea.KeyPressMsg) (model, tea.Cmd) {
 		m.status, m.statusTTL = "", 0
 		return m, fetchCmd()
 	case "c":
-		m.flash("claiming from the warm pool…")
-		return m, claimCmd()
+		pool := m.claimPool()
+		m.flash("claiming from " + pool + "…")
+		return m, claimCmd(pool)
 	case "enter":
 		if m.isWarmSelected() {
 			m.focusWarmInspect()
@@ -108,8 +109,9 @@ func (m model) updateInspectKeys(msg tea.KeyPressMsg) (model, tea.Cmd) {
 		m.scrollInspect(1 << 20)
 	case "c":
 		m.focus = focusNav
-		m.flash("claiming from the warm pool…")
-		return m, claimCmd()
+		pool := m.claimPool()
+		m.flash("claiming from " + pool + "…")
+		return m, claimCmd(pool)
 	case "r":
 		m.status, m.statusTTL = "", 0
 		return m, fetchCmd()

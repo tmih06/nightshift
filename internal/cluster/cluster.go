@@ -17,7 +17,7 @@ import (
 const (
 	KubeContext = "kind-agent-sandbox"
 	Namespace   = "sandbox-demo"
-	WarmPool    = "agent-pool"
+	WarmPool    = "pi-pool"
 )
 
 type Sandbox struct {
@@ -265,16 +265,16 @@ func ownerRank(kind string) int {
 }
 
 // parseClusterList splits a combined kubectl List into sandboxes, pods,
-// and the warm pool plus its referenced template.
-func parseClusterList(raw []byte) (sandboxList, podList, Pool, error) {
+// and the warm pools plus their referenced templates.
+func parseClusterList(raw []byte) (sandboxList, podList, map[string]Pool, error) {
 	var list rawList
 	if err := json.Unmarshal(raw, &list); err != nil {
-		return sandboxList{}, podList{}, Pool{}, fmt.Errorf("parse cluster list: %w", err)
+		return sandboxList{}, podList{}, nil, fmt.Errorf("parse cluster list: %w", err)
 	}
 	var (
 		sb        sandboxList
 		pl        podList
-		pool      Pool
+		pools     = map[string]Pool{}
 		templates = map[string]json.RawMessage{}
 	)
 	for _, item := range list.Items {
@@ -288,12 +288,9 @@ func parseClusterList(raw []byte) (sandboxList, podList, Pool, error) {
 		case "Pod":
 			pl.Items = append(pl.Items, item)
 		case "SandboxWarmPool":
-			if meta.Metadata.Name != WarmPool {
-				continue
-			}
 			var wp warmPool
 			if json.Unmarshal(item, &wp) == nil {
-				pool = Pool{
+				pools[wp.Metadata.Name] = Pool{
 					Name:           wp.Metadata.Name,
 					Template:       wp.Spec.Template.Name,
 					Ready:          wp.Status.ReadyReplicas,
@@ -306,15 +303,18 @@ func parseClusterList(raw []byte) (sandboxList, podList, Pool, error) {
 			templates[meta.Metadata.Name] = item
 		}
 	}
-	if rawTpl, ok := templates[pool.Template]; ok {
-		pool.TemplateYAML = cleanManifestYAML(rawTpl)
+	for name, pool := range pools {
+		if rawTpl, ok := templates[pool.Template]; ok {
+			pool.TemplateYAML = cleanManifestYAML(rawTpl)
+			pools[name] = pool
+		}
 	}
-	return sb, pl, pool, nil
+	return sb, pl, pools, nil
 }
 
 // Fetch reads cluster objects and pod metrics concurrently in two
 // kubectl calls. Metrics degrade gracefully when unavailable.
-func Fetch() ([]Sandbox, Pool, bool, error) {
+func Fetch() ([]Sandbox, map[string]Pool, bool, error) {
 	var (
 		resRaw, metRaw []byte
 		resErr, metErr error
@@ -333,11 +333,11 @@ func Fetch() ([]Sandbox, Pool, bool, error) {
 	wg.Wait()
 
 	if resErr != nil {
-		return nil, Pool{}, false, resErr
+		return nil, nil, false, resErr
 	}
 	sb, pl, pool, err := parseClusterList(resRaw)
 	if err != nil {
-		return nil, Pool{}, false, err
+		return nil, nil, false, err
 	}
 
 	var ml *podMetricsList
@@ -402,9 +402,9 @@ func cleanManifestYAML(raw []byte) string {
 	return strings.TrimRight(buf.String(), "\n")
 }
 
-func Claim() (string, error) {
+func Claim(pool string) (string, error) {
 	name := fmt.Sprintf("dash-claim-%d", time.Now().UnixNano())
-	if _, err := runKubectl([]byte(claimManifest(name)), "apply", "-f", "-"); err != nil {
+	if _, err := runKubectl([]byte(claimManifest(name, pool)), "apply", "-f", "-"); err != nil {
 		return "", err
 	}
 	return name, nil
@@ -430,7 +430,7 @@ func DeleteClaim(name string) error {
 	return err
 }
 
-func claimManifest(name string) string {
+func claimManifest(name, pool string) string {
 	return fmt.Sprintf(`apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxClaim
 metadata:
@@ -441,7 +441,7 @@ spec:
     name: %s
   lifecycle:
     shutdownPolicy: Delete
-`, name, Namespace, WarmPool)
+`, name, Namespace, pool)
 }
 
 func cpuMillicores(q string) (int64, error) {

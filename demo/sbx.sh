@@ -13,12 +13,13 @@
 #        sandboxes (even in parallel: each run claims its own).
 #
 # Env overrides: CTX (default kind-agent-sandbox), NS (default sandbox-demo),
-#                POOL (default agent-pool), SBX_NO_EXEC=1 to skip the shell.
+#                POOL (default pi-pool; also codex-pool, claude-code-pool,
+#                opencode-pool), SBX_NO_EXEC=1 to skip the shell.
 set -euo pipefail
 
 CTX=${CTX:-kind-agent-sandbox}
 NS=${NS:-sandbox-demo}
-POOL=${POOL:-agent-pool}
+POOL=${POOL:-pi-pool}
 NAME=claimed-sandbox-$(date +%Y%m%d%H%M%S)-$$
 KEEP=0
 CLAIM_CREATED=0

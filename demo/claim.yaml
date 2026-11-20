@@ -1,4 +1,5 @@
-# The repeatable unit: claim a pre-warmed sandbox from the pool.
+# Claim Pi by default; use codex-pool, claude-code-pool, or opencode-pool
+# for another agent.
 # Apply this -> instant adoption (no cold start).
 # Delete this -> shutdownPolicy: Delete tears the sandbox down,
 # and the pool refills a fresh warm standby automatically.
@@ -9,6 +10,6 @@ metadata:
   namespace: sandbox-demo
 spec:
   warmPoolRef:
-    name: agent-pool
+    name: pi-pool
   lifecycle:
     shutdownPolicy: Delete

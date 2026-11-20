@@ -165,14 +165,14 @@ func TestClaimManifest(t *testing.T) {
 			} `yaml:"lifecycle"`
 		} `yaml:"spec"`
 	}
-	if err := yaml.Unmarshal([]byte(claimManifest("dash-claim-42")), &c); err != nil {
+	if err := yaml.Unmarshal([]byte(claimManifest("dash-claim-42", "codex-pool")), &c); err != nil {
 		t.Fatalf("claim manifest does not parse: %v", err)
 	}
 	if c.Kind != "SandboxClaim" || c.Metadata.Name != "dash-claim-42" || c.Metadata.Namespace != Namespace {
 		t.Errorf("claim manifest header = %+v", c)
 	}
-	if c.Spec.WarmPoolRef.Name != WarmPool {
-		t.Errorf("warmPoolRef = %q, want %q", c.Spec.WarmPoolRef.Name, WarmPool)
+	if c.Spec.WarmPoolRef.Name != "codex-pool" {
+		t.Errorf("warmPoolRef = %q, want codex-pool", c.Spec.WarmPoolRef.Name)
 	}
 	if c.Spec.Lifecycle.ShutdownPolicy != "Delete" {
 		t.Errorf("shutdownPolicy = %q, want Delete", c.Spec.Lifecycle.ShutdownPolicy)
@@ -216,14 +216,20 @@ func TestParseClusterList(t *testing.T) {
 		{"kind":"Sandbox","metadata":{"name":"sbx-1","ownerReferences":[{"kind":"SandboxWarmPool","name":"agent-pool"}]}},
 		{"kind":"Pod","metadata":{"name":"sbx-1"},"status":{"phase":"Running"}},
 		{"kind":"SandboxWarmPool","metadata":{"name":"agent-pool"},"spec":{"replicas":2,"sandboxTemplateRef":{"name":"agent-bash-template"},"updateStrategy":{"type":"Recreate"}},"status":{"readyReplicas":2}},
-		{"kind":"SandboxTemplate","metadata":{"name":"agent-bash-template"},"spec":{"failedPodPolicy":"Retain"}}
+		{"kind":"SandboxTemplate","metadata":{"name":"agent-bash-template"},"spec":{"failedPodPolicy":"Retain"}},
+		{"kind":"SandboxWarmPool","metadata":{"name":"codex-pool"},"spec":{"replicas":1,"sandboxTemplateRef":{"name":"codex-template"}}},
+		{"kind":"SandboxTemplate","metadata":{"name":"codex-template"},"spec":{"image":"codex"}}
 	]}`)
-	sb, pl, pool, err := parseClusterList(raw)
+	sb, pl, pools, err := parseClusterList(raw)
 	if err != nil {
 		t.Fatalf("parseClusterList: %v", err)
 	}
 	if len(sb.Items) != 1 || len(pl.Items) != 1 {
 		t.Fatalf("items = %d sandboxes, %d pods, want 1 and 1", len(sb.Items), len(pl.Items))
+	}
+	pool := pools["agent-pool"]
+	if len(pools) != 2 || pools["codex-pool"].Template != "codex-template" || !strings.Contains(pools["codex-pool"].TemplateYAML, "codex") {
+		t.Errorf("other pool missing or mismatched: %+v", pools)
 	}
 	if pool.Name != "agent-pool" || pool.Template != "agent-bash-template" || pool.Ready != 2 || pool.Desired != 2 {
 		t.Errorf("pool = %+v", pool)

@@ -1,6 +1,5 @@
-# Standing infra: everything connected via the extensions chain.
-# SandboxTemplate -> SandboxWarmPool (keeps 2 pre-warmed sandboxes ready).
-# You never touch Sandboxes directly: claim one with demo/claim.yaml.
+# One template and one warm standby per coding agent.
+# Claim a pool with demo/claim.yaml, sbx, or the dashboard.
 ---
 apiVersion: v1
 kind: Namespace
@@ -18,11 +17,10 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: agent
-        # Build and load images/agent into kind first.
-        image: nightshift-agent:0.1.0
-        imagePullPolicy: IfNotPresent
+        image: ghcr.io/tmih06/nightshift-pi:latest
+        imagePullPolicy: Always
         command: ["sleep", "infinity"]
-        resources:   # cap each sandbox so bursts can't starve the node
+        resources:
           requests:
             cpu: 100m
             memory: 128Mi
@@ -33,11 +31,113 @@ spec:
 apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxWarmPool
 metadata:
-  name: agent-pool
+  name: pi-pool
   namespace: sandbox-demo
 spec:
   updateStrategy:
     type: Recreate
-  replicas: 2
+  replicas: 1
   sandboxTemplateRef:
     name: agent-bash-template
+---
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxTemplate
+metadata:
+  name: codex-template
+  namespace: sandbox-demo
+spec:
+  podTemplate:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: agent
+        image: ghcr.io/tmih06/nightshift-codex:latest
+        imagePullPolicy: Always
+        command: ["sleep", "infinity"]
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+---
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxWarmPool
+metadata:
+  name: codex-pool
+  namespace: sandbox-demo
+spec:
+  updateStrategy:
+    type: Recreate
+  replicas: 1
+  sandboxTemplateRef:
+    name: codex-template
+---
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxTemplate
+metadata:
+  name: claude-code-template
+  namespace: sandbox-demo
+spec:
+  podTemplate:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: agent
+        image: ghcr.io/tmih06/nightshift-claude-code:latest
+        imagePullPolicy: Always
+        command: ["sleep", "infinity"]
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+---
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxWarmPool
+metadata:
+  name: claude-code-pool
+  namespace: sandbox-demo
+spec:
+  updateStrategy:
+    type: Recreate
+  replicas: 1
+  sandboxTemplateRef:
+    name: claude-code-template
+---
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxTemplate
+metadata:
+  name: opencode-template
+  namespace: sandbox-demo
+spec:
+  podTemplate:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: agent
+        image: ghcr.io/tmih06/nightshift-opencode:latest
+        imagePullPolicy: Always
+        command: ["sleep", "infinity"]
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+---
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxWarmPool
+metadata:
+  name: opencode-pool
+  namespace: sandbox-demo
+spec:
+  updateStrategy:
+    type: Recreate
+  replicas: 1
+  sandboxTemplateRef:
+    name: opencode-template
