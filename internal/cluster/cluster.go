@@ -24,6 +24,7 @@ type Sandbox struct {
 	Name        string
 	OwnerKind   string // SandboxWarmPool or SandboxClaim
 	Owner       string
+	Template    string
 	NodeName    string
 	Phase       string // pod phase, "…" until the pod exists
 	Created     time.Time
@@ -58,9 +59,10 @@ type ownerReference struct {
 
 type sandboxItem struct {
 	Metadata struct {
-		Name            string           `json:"name"`
-		Created         string           `json:"creationTimestamp"`
-		OwnerReferences []ownerReference `json:"ownerReferences"`
+		Name            string            `json:"name"`
+		Annotations     map[string]string `json:"annotations"`
+		Created         string            `json:"creationTimestamp"`
+		OwnerReferences []ownerReference  `json:"ownerReferences"`
 	} `json:"metadata"`
 }
 
@@ -182,9 +184,10 @@ func buildSandboxes(sb sandboxList, pl podList, ml *podMetricsList) ([]Sandbox, 
 			return nil, fmt.Errorf("parse sandbox item: %w", err)
 		}
 		b := Sandbox{
-			Name:    item.Metadata.Name,
-			Phase:   "…",
-			Created: parseTime(item.Metadata.Created),
+			Name:     item.Metadata.Name,
+			Template: item.Metadata.Annotations["agents.x-k8s.io/sandbox-template-ref"],
+			Phase:    "…",
+			Created:  parseTime(item.Metadata.Created),
 		}
 		if len(item.Metadata.OwnerReferences) > 0 {
 			b.OwnerKind = item.Metadata.OwnerReferences[0].Kind

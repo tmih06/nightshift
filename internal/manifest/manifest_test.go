@@ -68,11 +68,14 @@ func TestWarmPools(t *testing.T) {
 			templates[doc.Metadata.Name] = doc
 		}
 	}
-	agents := []struct{ pool, template, image string }{
-		{"pi-pool", "agent-bash-template", "pi"},
-		{"codex-pool", "codex-template", "codex"},
-		{"claude-code-pool", "claude-code-template", "claude-code"},
-		{"opencode-pool", "opencode-template", "opencode"},
+	agents := []struct {
+		pool, template, image string
+		requests, limits      quantities
+	}{
+		{"pi-pool", "pi-template", "pi", quantities{"100m", "128Mi"}, quantities{"500m", "256Mi"}},
+		{"codex-pool", "codex-template", "codex", quantities{"100m", "128Mi"}, quantities{"500m", "256Mi"}},
+		{"claude-code-pool", "claude-code-template", "claude-code", quantities{"100m", "128Mi"}, quantities{"500m", "256Mi"}},
+		{"opencode-pool", "opencode-template", "opencode", quantities{"100m", "512Mi"}, quantities{"500m", "2Gi"}},
 	}
 	if len(pools) != len(agents) || len(templates) != len(agents) {
 		t.Fatalf("got %d pools and %d templates, want %d each", len(pools), len(templates), len(agents))
@@ -95,7 +98,7 @@ func TestWarmPools(t *testing.T) {
 			if c.Name != "agent" || c.Image != "ghcr.io/tmih06/nightshift-"+a.image+":latest" || c.ImagePullPolicy != "Always" {
 				t.Errorf("container: %+v", c)
 			}
-			if c.Resources.Requests != (quantities{"100m", "128Mi"}) || c.Resources.Limits != (quantities{"500m", "256Mi"}) {
+			if c.Resources.Requests != a.requests || c.Resources.Limits != a.limits {
 				t.Errorf("resources: %+v", c.Resources)
 			}
 		})

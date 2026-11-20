@@ -215,10 +215,20 @@ type column struct {
 	right bool
 }
 
-func tableColumns() []column {
+func tableColumns(inner int) []column {
+	if inner < 80 {
+		return []column{
+			{title: glyphSandbox, width: 4},
+			{title: "Sandbox"},
+			{title: "Template", width: clamp(inner-4-10-11-8, 8, 22)},
+			{title: "CPU", width: 10, right: true},
+			{title: "MEM", width: 11, right: true},
+		}
+	}
 	return []column{
 		{title: glyphSandbox, width: 4},
 		{title: "Sandbox"},
+		{title: "Template", width: 22},
 		{title: glyphShell, width: 4},
 		{title: "CPU", width: 12, right: true},
 		{title: "MEM", width: 13, right: true},
@@ -229,7 +239,7 @@ func tableColumns() []column {
 // columnWidths resolves the grow column against the table's inner width,
 // the table less gh-dash's one-column container padding each side.
 func columnWidths(inner int) []int {
-	cols := tableColumns()
+	cols := tableColumns(inner)
 	widths := make([]int, len(cols))
 	taken, grow := 0, -1
 	for i, c := range cols {
@@ -258,7 +268,7 @@ func cell(style lipgloss.Style, width int, text string, right bool) string {
 func (m model) tableHeader(inner int) string {
 	widths := columnWidths(inner)
 	var b strings.Builder
-	for i, c := range tableColumns() {
+	for i, c := range tableColumns(inner) {
 		b.WriteString(cell(styles.Table.TitleCellStyle, widths[i], c.title, c.right))
 	}
 	return " " + b.String()
@@ -301,17 +311,30 @@ func (m model) renderRow(i, inner int, selected bool) []string {
 	}
 	h := m.hist[b.Name]
 
+	template := b.Template
+	if template == "" {
+		template = "—"
+	}
 	cells := [][2]string{
 		{bg(lipgloss.NewStyle().Foreground(kindColor)).Render(glyphSandbox), ""},
 		{bg(lipgloss.NewStyle().Foreground(th.SecondaryText)).Render(where),
 			bg(lipgloss.NewStyle().Foreground(th.PrimaryText)).Render(b.Name)},
-		{session, ""},
+		{bg(lipgloss.NewStyle().Foreground(th.PrimaryText)).Render(template), ""},
+	}
+	if inner >= 80 {
+		cells = append(cells, [2]string{session, ""})
+	} else {
+		cells[2][1] = session
+	}
+	cells = append(cells,
 		usageCell(m.usageKnown(b.Name), b.CPUUsageMC, b.CPULimitMC, "m", h.cpu, bg),
 		usageCell(m.usageKnown(b.Name), b.MemUsageMiB, b.MemLimitMiB, "Mi", h.mem, bg),
-		{bg(lipgloss.NewStyle().Foreground(th.SecondaryText)).Render(ageString(b.Created)), ""},
+	)
+	if inner >= 80 {
+		cells = append(cells, [2]string{bg(lipgloss.NewStyle().Foreground(th.SecondaryText)).Render(ageString(b.Created)), ""})
 	}
 	var top, bottom strings.Builder
-	for c, col := range tableColumns() {
+	for c, col := range tableColumns(inner) {
 		top.WriteString(cell(style, widths[c], cells[c][0], col.right))
 		bottom.WriteString(cell(style, widths[c], cells[c][1], col.right))
 	}

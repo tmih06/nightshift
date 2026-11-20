@@ -45,7 +45,7 @@ func TestLeftLinesTree(t *testing.T) {
 	l := m.layout()
 	table := m.tableView(l)
 	plain := ansi.Strip(strings.Join(table, "\n"))
-	for _, want := range []string{"Sandbox", "CPU", "MEM", "agent-pool-5ss7w", "agent-pool-bkl2p", "unassigned · my-agent", "2m/500m", "6Mi/256Mi"} {
+	for _, want := range []string{"Sandbox", "CPU", "MEM", "agent-pool-5ss7w", "agent-pool-bkl2p", "unassigned · my-ag…", "2m/500m", "6Mi/256Mi"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("table missing %q:\n%s", want, plain)
 		}
@@ -60,14 +60,37 @@ func TestLeftLinesTree(t *testing.T) {
 	}
 	rows := strings.Split(plain, "\n")
 	claimed := rowOf(t, m, "agent-pool-bkl2p") - l.bodyTop
-	if !strings.Contains(rows[claimed], "●") {
-		t.Errorf("live session row = %q, want ●", rows[claimed])
+	if !strings.Contains(rows[claimed+1], "●") {
+		t.Errorf("live session row = %q, want ●", rows[claimed+1])
 	}
 	if warm := rowOf(t, m, "agent-pool-5ss7w") - l.bodyTop; strings.Contains(rows[warm], "●") {
 		t.Errorf("dead session row = %q, want ○", rows[warm])
 	}
 	if !strings.Contains(rows[claimed+2], "───") {
 		t.Errorf("row under a sandbox = %q, want gh-dash's separator", rows[claimed+2])
+	}
+}
+
+func TestTemplateColumn(t *testing.T) {
+	for _, width := range []int{68, 100} {
+		m := baseModel()
+		m.boxes[0].Template = "pi-template"
+		m.boxes[1].Template = "claude-code-template"
+		m.boxes[2].Template = "opencode-template"
+		for i, want := range []string{"pi-template", "claude-code-template", "opencode-template"} {
+			row := m.renderRow(i, width, false)
+			if !strings.Contains(ansi.Strip(row[0]), want) {
+				t.Errorf("width %d row %d missing template %q: %s", width, i, want, ansi.Strip(row[0]))
+			}
+			for _, line := range row {
+				if ansi.StringWidth(line) != width+1 {
+					t.Errorf("width %d row has width %d", width, ansi.StringWidth(line))
+				}
+			}
+		}
+		if !strings.Contains(ansi.Strip(m.tableHeader(width)), "Template") {
+			t.Errorf("width %d missing Template header", width)
+		}
 	}
 }
 
