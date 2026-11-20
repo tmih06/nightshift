@@ -86,7 +86,7 @@ func TestHerdrSession(t *testing.T) {
 	if !Has(pod) || !Live(boxes)[pod] {
 		t.Fatal("session not listed")
 	}
-	if err := Resize(pod, 80, 24); err != nil {
+	if _, err := WatchScreen(pod, 80, 24, true, 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := SendBatch(pod, []Key{{Text: "printf NIGHTSHIFT_%s HERDR_OK"}, {Name: "Enter"}}); err != nil {
@@ -94,7 +94,7 @@ func TestHerdrSession(t *testing.T) {
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		lines, err := Capture(pod)
+		lines, err := WatchScreen(pod, 80, 24, false, 100*time.Millisecond)
 		if err == nil && strings.Contains(strings.Join(lines, "\n"), "NIGHTSHIFT_HERDR_OK") {
 			break
 		}
@@ -127,7 +127,7 @@ func TestHerdrSession(t *testing.T) {
 	if !Has(pod) {
 		t.Fatal("viewer disconnect ended the shell")
 	}
-	if err := Resize(pod, 91, 27); err != nil {
+	if _, err := WatchScreen(pod, 91, 27, true, 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := SendBatch(pod, []Key{{Text: "stty size"}, {Name: "Enter"}}); err != nil {
@@ -135,7 +135,7 @@ func TestHerdrSession(t *testing.T) {
 	}
 	deadline = time.Now().Add(5 * time.Second)
 	for {
-		lines, err := Capture(pod)
+		lines, err := WatchScreen(pod, 80, 24, false, 100*time.Millisecond)
 		if err == nil && strings.Contains(strings.Join(lines, "\n"), "27 91") {
 			break
 		}
@@ -166,15 +166,16 @@ func TestHerdrLivePod(t *testing.T) {
 	if err := Ensure(pod); err != nil {
 		t.Fatal(err)
 	}
-	if err := Resize(pod, 80, 24); err != nil {
+	if _, err := WatchScreen(pod, 80, 24, true, 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := SendBatch(pod, []Key{{Text: "export NIGHTSHIFT_RECONNECT=LIVE_OK; printf NIGHTSHIFT_%s LIVE_OK"}, {Name: "Enter"}}); err != nil {
+	// Output must wake the watcher even after the input batch is long gone.
+	if err := SendBatch(pod, []Key{{Text: "export NIGHTSHIFT_RECONNECT=LIVE_OK; sleep 0.3; printf NIGHTSHIFT_%s LIVE_OK"}, {Name: "Enter"}}); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		lines, err := Capture(pod)
+		lines, err := WatchScreen(pod, 80, 24, false, 100*time.Millisecond)
 		if err == nil && strings.Contains(strings.Join(lines, "\n"), "NIGHTSHIFT_LIVE_OK") {
 			break
 		}
@@ -205,7 +206,7 @@ func TestHerdrLivePod(t *testing.T) {
 	if !Has(pod) {
 		t.Fatal("shell ended when kubectl viewer disconnected")
 	}
-	if err := Resize(pod, 80, 24); err != nil {
+	if _, err := WatchScreen(pod, 80, 24, true, 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := SendBatch(pod, []Key{{Text: `printf RECONNECTED_%s "$NIGHTSHIFT_RECONNECT"`}, {Name: "Enter"}}); err != nil {
@@ -213,7 +214,7 @@ func TestHerdrLivePod(t *testing.T) {
 	}
 	deadline = time.Now().Add(10 * time.Second)
 	for {
-		lines, err := Capture(pod)
+		lines, err := WatchScreen(pod, 80, 24, false, 100*time.Millisecond)
 		if err == nil && strings.Contains(strings.Join(lines, "\n"), "RECONNECTED_LIVE_OK") {
 			break
 		}

@@ -17,11 +17,12 @@ a different shell. Warm pool pods do not get sessions. Claiming a pod prepares
 its shell, and enter focuses it.
 
 Herdr's holder owns the bash process independently of kubectl and the
-dashboard. The embedded pane runs `hc read` in the pod and uses a framed
-`kubectl exec -i ... -- hc connect` viewer to forward raw keystrokes and resize
-events. Closing the dashboard closes the viewer, not the terminal. Press C-b
-then q or click the sidebar to leave the embedded shell; `F` opens `hc attach`
-fullscreen through kubectl, where Ctrl-\ detaches back to Nightshift.
+dashboard. The embedded pane uses one framed `kubectl exec -i ... -- hc connect`
+viewer for keystrokes, resize events, and screen snapshots. Shell output triggers
+a snapshot over that same connection; an idle shell does not need screen reads.
+Closing the dashboard closes the viewer, not the terminal. Press C-b then q or
+click the sidebar to leave the embedded shell; `F` opens `hc attach` fullscreen
+through kubectl, where Ctrl-\ detaches back to Nightshift.
 
 Restarting Nightshift reuses live in-pod sessions. Deleting or restarting a
 pod destroys its processes, including Herdr and bash; Herdr does not persist

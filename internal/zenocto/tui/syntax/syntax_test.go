@@ -114,6 +114,23 @@ func TestTheSameFileIsOnlyTokenisedOnce(t *testing.T) {
 	}
 }
 
+func TestIdenticalSourceSharesTokensOnlyWithTheSameLexer(t *testing.T) {
+	s := colorizer(t)
+	first := s.Lines("before.go", "const n = 4")
+	moved := s.Lines("dir/after.go", "const n = 4")
+	if &first[0] != &moved[0] {
+		t.Error("moving identical Go source invalidated its tokens")
+	}
+	changed := s.Lines("before.go", "const n = 5")
+	if got := text(changed[0]); got != "const n = 5" {
+		t.Errorf("changed source reused stale tokens: %q", got)
+	}
+	plain := s.Lines("after.txt", "const n = 4")
+	if &first[0] == &plain[0] {
+		t.Error("different lexers shared tokens")
+	}
+}
+
 func text(tokens []syntax.Token) string {
 	var b strings.Builder
 	for _, tok := range tokens {

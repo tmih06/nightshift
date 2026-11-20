@@ -46,13 +46,12 @@ func (m *Model) SetCommitFiles(sha string, f store.Files) {
 	}
 
 	m.commit.files = f
-	m.commit.diff.blocks = nil
+	m.commit.diff.invalidate()
 	m.commit.rows = flatten(buildTree(f.Files), nil, 0, nil)
-	m.syncContent()
-
 	if took && m.tab == tabCommits {
-		m.view.GotoTop()
+		m.view.SetYOffset(0)
 	}
+	m.syncContent()
 }
 
 func (m *Model) syncCommits() {
@@ -235,7 +234,9 @@ func (m *Model) moveCommit(delta int) {
 	}
 
 	m.sideView.SetYOffset(first * commitRowHeight)
-	m.syncContent()
+	if width := m.side.InnerWidth(); width > 0 && m.sideVisible() {
+		m.sideView.SetContent(m.commitColumn(width))
+	}
 }
 
 func (m *Model) jumpCommitFile(delta int) {

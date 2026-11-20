@@ -970,6 +970,21 @@ func TestTheConversationWrapsToFitRatherThanBeingClipped(t *testing.T) {
 	}
 }
 
+func TestReturningToAnUnfocusedCommentShowsRefetchedText(t *testing.T) {
+	d := sampleDetail()
+	m := detailed(held(d), 180, 48)
+	if !strings.Contains(stripANSI(m.View()), "Coverage held") {
+		t.Fatal("setup: comment not visible")
+	}
+	d.Timeline = slices.Clone(d.Timeline)
+	d.Timeline[0] = commented("octobot", d.Timeline[0].CreatedAt, "Coverage improved.")
+	m.SetDetail(held(d))
+	out := stripANSI(m.View())
+	if !strings.Contains(out, "Coverage improved.") || strings.Contains(out, "Coverage held") {
+		t.Fatal("refetch reused stale comment paint for the same ID")
+	}
+}
+
 func TestTheSpinnerRunsUntilThereIsSomethingToRead(t *testing.T) {
 	m := detailed(store.Detail{Status: store.StatusLoading}, 120, 20)
 

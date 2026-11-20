@@ -76,7 +76,8 @@ The demo runs on the kind cluster `kind-agent-sandbox` in the namespace
   box holds the keyboard; the file, commit, or check column steps with
   `ctrl+n` and `ctrl+p`. Issues stay in gh-dash's preview.
   `go run ./cmd/nightshift -pr owner/repo#123` opens straight onto one.
-  The view only receives its own messages, as its model is large to copy. It rides on `gh`'s login,
+  Large diffs are prepared in the background so file and commit navigation
+  stay responsive. The view only receives its own messages, as its model is large to copy. It rides on `gh`'s login,
   reads gh-dash's own config (`.gh-dash.yml` in the repo, `$GH_DASH_CONFIG`,
   or `~/.config/gh-dash/config.yml`), and scopes to the repository it was
   started in, as gh-dash does. A bad config stops nightshift before the TUI
@@ -104,8 +105,9 @@ The demo runs on the kind cluster `kind-agent-sandbox` in the namespace
 - A tab out of sight keeps refreshing, but the sandbox tab stops reading the
   shell's screen until it is shown again. Table rows and warm-sandbox
   documents are rendered once per change, not per frame.
-- The shell embeds the sandbox's bash through Herdr screen reads, so Herdr
-  never takes over the terminal.
+- The shell embeds the sandbox's bash through Herdr screen reads triggered by
+  shell output on the same connection that sends keystrokes. Herdr never takes
+  over the terminal.
 - Focus is in the table during navigation and in the sidebar while bash or
   the configs have it; the sidebar's heading turns green and says how to
   leave, and its rule brightens.

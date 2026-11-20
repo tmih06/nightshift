@@ -165,7 +165,10 @@ type Model struct {
 
 	shownPath string
 
-	diff diffBody
+	diff                    diffBody
+	diffWanted, diffRunning *diffWork
+	diffTop                 int
+	diffCross               int
 
 	diffCursor int
 	diffOn     focusKey
@@ -207,7 +210,8 @@ type Model struct {
 
 	opening spot
 
-	page pageCache
+	page     pageCache
+	comments commentCards
 
 	boxLine int
 	boxCol  int
@@ -269,7 +273,7 @@ func New(th theme.Theme, pr gh.PullRequest, rail RailPreference, syntax syntax.S
 // SetFiles takes the store's diff for this pull request. The command reports a pending jump that could not land.
 func (m *Model) SetFiles(f store.Files) tea.Cmd {
 	m.files = f
-	m.diff.blocks = nil
+	m.diff.invalidate()
 	m.syncRows()
 
 	m.cursor = min(m.cursor, max(0, len(m.rows)-1))
@@ -303,7 +307,8 @@ func (m *Model) SetDetail(d store.Detail) tea.Cmd {
 		m.reviewKept = reviewDraft{}
 	}
 	m.detail = d
-	m.diff.blocks = nil
+	m.comments = commentCards{}
+	m.diff.invalidate()
 	m.page.ok = false
 	if d.Loaded {
 		m.pr = d.Detail.PullRequest
@@ -366,6 +371,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, m.jobParsed(msg)
 	case jobRenderMsg:
 		return m, m.jobRendered(msg)
+	case diffRenderedMsg:
+		cmd := m.diffRendered(msg)
+		return m, cmd
 	case SearchSettleMsg:
 		return m, m.settleCheckSearch(msg)
 
@@ -377,7 +385,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 	case spinner.TickMsg:
 		cmd := m.spinner.Advance(msg, m.waiting())
-		m.syncContent()
+		if cmd != nil && m.spinnerVisible() {
+			m.syncContent()
+		}
 		return m, cmd
 
 	default:
@@ -425,6 +435,22 @@ func (m Model) waiting() bool {
 	return (!m.detail.Loaded && m.detail.Status == store.StatusLoading) ||
 		waitingFor(m.files) || waitingFor(m.commit.files) || waitingForJob(m.check.job) || m.commitBlank() ||
 		m.rerunBlank() || m.mentionWaiting()
+}
+
+func (m Model) spinnerVisible() bool {
+	if m.mentionWaiting() {
+		return true
+	}
+	switch m.tab {
+	case tabFiles:
+		return waitingFor(m.files)
+	case tabCommits:
+		return m.commitBlank() || waitingFor(m.commit.files)
+	case tabChecks:
+		return (!m.detail.Loaded && m.detail.Status == store.StatusLoading) || m.rerunBlank() || waitingForJob(m.check.job)
+	default:
+		return !m.detail.Loaded && m.detail.Status == store.StatusLoading
+	}
 }
 
 func (m Model) rerunBlank() bool {
@@ -776,6 +802,9 @@ func (m *Model) changeTab(delta int) tea.Cmd {
 func (m *Model) goToTab(at int) tea.Cmd {
 	m.offsets[m.tab] = m.view.YOffset()
 	m.panes[m.tab] = m.focus
+	if m.tab == tabFiles && at != tabFiles {
+		m.jump, m.diffCross = "", 0
+	}
 	m.tab = at
 
 	m.clearMention()
@@ -872,6 +901,9 @@ func (m *Model) toggleBlockFold() bool {
 	} else {
 		m.open[key] = !m.open[key]
 		m.page.ok = false
+		if key.kind == focusComment {
+			delete(m.comments.cards, key.id)
+		}
 	}
 
 	m.syncContent()
@@ -1165,10 +1197,15 @@ func (m *Model) pointFileCursor(path string) {
 }
 
 func (m *Model) syncContent() {
+	previous := m.diffWanted
+	m.diffWanted = nil
 	m.view.SoftWrap = false
 
 	if inner := m.main.InnerWidth(); inner > 0 {
 		body := "\n" + indent(m.tabBody(), m.bodyGutter()) + "\n"
+		if work := m.diffWanted; work != nil && (previous == nil || work.tab != previous.tab || work.rev != previous.rev || work.path != previous.path) {
+			m.diffTop = m.view.YOffset()
+		}
 		if body != m.shown || inner != m.shownAt {
 			m.view.SetContent(body)
 			m.shown, m.shownAt = body, inner
@@ -1211,8 +1248,11 @@ func (m Model) View() string {
 	}
 
 	mainView := m.view.View()
-	if m.tab == tabChecks {
+	switch m.tab {
+	case tabChecks:
 		mainView = m.paintCheckCursor(mainView)
+	case tabFiles:
+		mainView = m.paintDiffCursor(mainView)
 	}
 	panes := []string{m.main.
 		Index(index[paneMain]).
