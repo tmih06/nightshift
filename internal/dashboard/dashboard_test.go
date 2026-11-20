@@ -94,6 +94,26 @@ func TestTemplateColumn(t *testing.T) {
 	}
 }
 
+func TestTableHeaderCacheTracksWidthAndTheme(t *testing.T) {
+	m := baseModel()
+	m.rowCache = &rowCacheEntry{}
+	original := th
+	defer useTheme(original)
+
+	compact := m.tableHeader(68)
+	if got := m.tableHeader(100); got == compact {
+		t.Error("header did not change with table width")
+	}
+	m.tableHeader(68)
+	changed := original
+	changed.PrimaryText.Light = lipgloss.Color("#ff00ff")
+	changed.PrimaryText.Dark = lipgloss.Color("#ff00ff")
+	useTheme(changed)
+	if got := m.tableHeader(68); got == compact {
+		t.Error("header did not change with theme")
+	}
+}
+
 // The selected row carries gh-dash's selection background and no other does.
 func TestSelectedRowIsHighlighted(t *testing.T) {
 	m := baseModel()

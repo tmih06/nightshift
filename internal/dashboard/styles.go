@@ -13,8 +13,9 @@ import (
 // The sandbox tab paints from gh-dash's theme and styles, so it reads as one
 // more gh-dash view. useTheme reassigns every style; New calls it.
 var (
-	th     ghtheme.Theme
-	styles context.Styles
+	th            ghtheme.Theme
+	styles        context.Styles
+	themeRevision uint64
 
 	warmColor     color.Color
 	midGreenColor color.Color
@@ -54,6 +55,7 @@ var (
 func init() { useTheme(*ghtheme.DefaultTheme) }
 
 func useTheme(t ghtheme.Theme) {
+	themeRevision++
 	th = t
 	styles = context.InitStyles(t)
 

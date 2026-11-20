@@ -215,45 +215,26 @@ type column struct {
 	right bool
 }
 
+// tableColumns resolves the sandbox column against the inner table width.
 func tableColumns(inner int) []column {
-	if inner < 80 {
-		return []column{
-			{title: glyphSandbox, width: 4},
-			{title: "Sandbox"},
-			{title: "Template", width: clamp(inner-4-10-11-8, 8, 22)},
-			{title: "CPU", width: 10, right: true},
-			{title: "MEM", width: 11, right: true},
-		}
-	}
-	return []column{
+	cols := []column{
 		{title: glyphSandbox, width: 4},
 		{title: "Sandbox"},
 		{title: "Template", width: 22},
-		{title: glyphShell, width: 4},
-		{title: "CPU", width: 12, right: true},
-		{title: "MEM", width: 13, right: true},
-		{title: glyphClock, width: 5, right: true},
 	}
-}
-
-// columnWidths resolves the grow column against the table's inner width,
-// the table less gh-dash's one-column container padding each side.
-func columnWidths(inner int) []int {
-	cols := tableColumns(inner)
-	widths := make([]int, len(cols))
-	taken, grow := 0, -1
-	for i, c := range cols {
-		if c.width == 0 {
-			grow = i
-			continue
-		}
-		widths[i] = c.width
-		taken += c.width
+	if inner < 80 {
+		cols[2].width = clamp(inner-4-10-11-8, 8, 22)
+		cols = append(cols, column{title: "CPU", width: 10, right: true}, column{title: "MEM", width: 11, right: true})
+	} else {
+		cols = append(cols, column{title: glyphShell, width: 4}, column{title: "CPU", width: 12, right: true},
+			column{title: "MEM", width: 13, right: true}, column{title: glyphClock, width: 5, right: true})
 	}
-	if grow >= 0 {
-		widths[grow] = max(inner-taken, 8)
+	used := 0
+	for _, c := range cols {
+		used += c.width
 	}
-	return widths
+	cols[1].width = max(inner-used, 8)
+	return cols
 }
 
 func cell(style lipgloss.Style, width int, text string, right bool) string {
@@ -266,12 +247,19 @@ func cell(style lipgloss.Style, width int, text string, right bool) string {
 }
 
 func (m model) tableHeader(inner int) string {
-	widths := columnWidths(inner)
-	var b strings.Builder
-	for i, c := range tableColumns(inner) {
-		b.WriteString(cell(styles.Table.TitleCellStyle, widths[i], c.title, c.right))
+	if m.rowCache != nil && m.rowCache.headerWidth == inner && m.rowCache.headerTheme == themeRevision && m.rowCache.header != "" {
+		return m.rowCache.header
 	}
-	return " " + b.String()
+	var b strings.Builder
+	b.WriteByte(' ')
+	for _, c := range tableColumns(inner) {
+		b.WriteString(cell(styles.Table.TitleCellStyle, c.width, c.title, c.right))
+	}
+	header := b.String()
+	if m.rowCache != nil {
+		m.rowCache.headerWidth, m.rowCache.headerTheme, m.rowCache.header = inner, themeRevision, header
+	}
+	return header
 }
 
 // renderRow draws one sandbox as gh-dash draws a pull request: two lines per
@@ -282,7 +270,6 @@ func (m model) renderRow(i, inner int, selected bool) []string {
 	if selected {
 		style = styles.Table.SelectedCellStyle
 	}
-	widths := columnWidths(inner)
 	bg := func(s lipgloss.Style) lipgloss.Style {
 		if selected {
 			return s.Background(th.SelectedBackground)
@@ -335,8 +322,8 @@ func (m model) renderRow(i, inner int, selected bool) []string {
 	}
 	var top, bottom strings.Builder
 	for c, col := range tableColumns(inner) {
-		top.WriteString(cell(style, widths[c], cells[c][0], col.right))
-		bottom.WriteString(cell(style, widths[c], cells[c][1], col.right))
+		top.WriteString(cell(style, col.width, cells[c][0], col.right))
+		bottom.WriteString(cell(style, col.width, cells[c][1], col.right))
 	}
 	rule := lipgloss.NewStyle().Foreground(th.FaintBorder).Render(strings.Repeat("─", inner))
 	return []string{" " + top.String(), " " + bottom.String(), " " + rule}
@@ -384,8 +371,11 @@ type rowKey struct {
 // rowCacheEntry is shared by every copy of the model, so a View on a value
 // receiver can still fill it.
 type rowCacheEntry struct {
-	key   rowKey
-	lines []string
+	key         rowKey
+	lines       []string
+	header      string
+	headerWidth int
+	headerTheme uint64
 }
 
 // tableOffset is the first visible item, keeping the selection on screen.
