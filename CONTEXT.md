@@ -74,7 +74,8 @@ The demo runs on the kind cluster `kind-agent-sandbox` in the namespace
   box holds the keyboard; the file, commit, or check column steps with
   `ctrl+n` and `ctrl+p`. Issues stay in gh-dash's preview.
   `go run ./cmd/nightshift -pr owner/repo#123` opens straight onto one.
-  The view only receives its own messages, as its model is large to copy. It rides on `gh`'s login,
+  Large diffs are prepared in the background so file and commit navigation
+  stay responsive. The view only receives its own messages, as its model is large to copy. It rides on `gh`'s login,
   reads gh-dash's own config (`.gh-dash.yml` in the repo, `$GH_DASH_CONFIG`,
   or `~/.config/gh-dash/config.yml`), and scopes to the repository it was
   started in, as gh-dash does. A bad config stops nightshift before the TUI

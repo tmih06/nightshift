@@ -218,45 +218,37 @@ func (m *Model) updateGitHub(msg tea.Msg) tea.Cmd {
 }
 
 func (m Model) View() tea.View {
-	v := tea.NewView(m.render())
+	v := tea.NewView("")
 	v.AltScreen = true
 	v.ReportFocus = true
 	v.MouseMode = tea.MouseModeCellMotion
 	v.WindowTitle = "nightshift"
-	if m.active == TabGitHub && (m.prOpen || m.gh != nil) {
-		var c *tea.Cursor
-		if m.prOpen {
-			c = m.pr.View().Cursor
-		} else {
-			c = m.gh.View().Cursor
-		}
-		if c != nil {
-			moved := *c
-			moved.Y += barHeight
-			v.Cursor = &moved
-		}
+	if m.width <= 0 || m.height <= 0 {
+		return v
+	}
+	body := m.body()
+	v.Content = m.renderBar() + "\n" + body.Content
+	if body.Cursor != nil {
+		moved := *body.Cursor
+		moved.Y += barHeight
+		v.Cursor = &moved
 	}
 	return v
 }
 
-func (m Model) render() string {
-	if m.width <= 0 || m.height <= 0 {
-		return ""
-	}
-	return m.renderBar() + "\n" + m.body()
-}
+func (m Model) render() string { return m.View().Content }
 
-func (m Model) body() string {
+func (m Model) body() tea.View {
 	h := max(0, m.height-barHeight)
 	switch {
 	case m.active == TabSandboxes:
-		return m.sandboxes.View()
+		return tea.NewView(m.sandboxes.View())
 	case m.prOpen:
-		return m.pr.View().Content
+		return m.pr.View()
 	case m.gh != nil:
-		return m.gh.View().Content
+		return m.gh.View()
 	default:
-		return unavailable(m.theme, m.ghErr, m.width, h)
+		return tea.NewView(unavailable(m.theme, m.ghErr, m.width, h))
 	}
 }
 

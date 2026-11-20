@@ -47,6 +47,9 @@ func (m Model) conversationNote() (string, bool) {
 func (m *Model) entries() string {
 	d := m.detail.Detail
 	width := m.bodyWidth()
+	if m.comments.cards == nil || m.comments.width != width {
+		m.comments = commentCards{width: width, cards: make(map[string]cachedComment)}
+	}
 
 	var blocks []string
 	at := 0
@@ -88,10 +91,11 @@ func (m *Model) entries() string {
 		item := d.Timeline[i]
 		switch item.Kind {
 		case gh.TimelineComment:
-			if m.boxOn(focusKey{kind: focusComment, id: item.Said().ID}) {
+			key := focusKey{kind: focusComment, id: item.Said().ID}
+			if m.boxOn(key) {
 				mark()
 			}
-			pushStops(m.commentCard(item, width))
+			pushStops(m.feedComment(item, key, width))
 
 		case gh.TimelineReview:
 			if m.boxUnder(d.Threads, item.Said().ID) {
@@ -266,6 +270,31 @@ func joinBlocks(gap string, parts ...string) string {
 		}
 	}
 	return strings.Join(out, gap)
+}
+
+// Only focus and inline editing repaint otherwise unchanged timeline comments.
+// Detail updates replace this cache, and the age keeps relative timestamps live.
+type commentCards struct {
+	width int
+	cards map[string]cachedComment
+}
+
+type cachedComment struct {
+	age  string
+	card rendered
+}
+
+func (m *Model) feedComment(item gh.TimelineItem, key focusKey, width int) rendered {
+	if key.id == "" || m.lit(key) || m.boxOn(key) {
+		return m.commentCard(item, width)
+	}
+	age := comp.RelativeTime(item.CreatedAt)
+	if hit, ok := m.comments.cards[key.id]; ok && hit.age == age {
+		return hit.card
+	}
+	card := m.commentCard(item, width)
+	m.comments.cards[key.id] = cachedComment{age: age, card: card}
+	return card
 }
 
 func (m *Model) commentCard(item gh.TimelineItem, width int) rendered {
@@ -879,6 +908,9 @@ func wrap(s string, width int) string {
 }
 
 func indent(s string, by int) string {
+	if by == 0 {
+		return s
+	}
 	pad := strings.Repeat(" ", by)
 	lines := strings.Split(s, "\n")
 	for i, line := range lines {

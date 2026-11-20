@@ -26,7 +26,7 @@ func BenchmarkThePullRequestFrame(b *testing.B) {
 	m, _ := openOn(t)
 	b.ResetTimer()
 	for range b.N {
-		_ = m.render()
+		_ = m.View()
 	}
 }
 

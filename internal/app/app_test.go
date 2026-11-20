@@ -18,6 +18,7 @@ type fakePRs struct {
 	keys      []string
 	mice      []tea.Mouse
 	other     int
+	views     int
 }
 
 func (f *fakePRs) Init() tea.Cmd { return nil }
@@ -35,7 +36,13 @@ func (f *fakePRs) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return f, nil
 }
 
-func (f *fakePRs) View() tea.View  { return tea.NewView("GH-DASH BODY") }
+func (f *fakePRs) View() tea.View {
+	f.views++
+	view := tea.NewView("GH-DASH BODY")
+	view.Cursor = tea.NewCursor(3, 2)
+	return view
+}
+
 func (f *fakePRs) Capturing() bool { return f.capturing }
 
 func sized(m Model, w, h int) Model {
@@ -68,6 +75,17 @@ func press(m Model, keys ...string) Model {
 }
 
 func frame(m Model) []string { return strings.Split(ansi.Strip(m.render()), "\n") }
+
+func TestActiveTabRendersOnceWithItsCursor(t *testing.T) {
+	m, tab := newModel(t)
+	view := press(m, "tab").View()
+	if tab.views != 1 || !strings.Contains(view.Content, "GH-DASH BODY") {
+		t.Fatalf("view used %d frames from active tab", tab.views)
+	}
+	if view.Cursor == nil || view.Cursor.X != 3 || view.Cursor.Y != 2+barHeight {
+		t.Errorf("cursor = %+v, want active tab's cursor below the tab bar", view.Cursor)
+	}
+}
 
 func TestTabCyclesTheTabsBothWays(t *testing.T) {
 	m, _ := newModel(t)

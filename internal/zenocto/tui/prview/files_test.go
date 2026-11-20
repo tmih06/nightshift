@@ -420,10 +420,11 @@ func TestADiffLandingOnTheOpenTabSizesThePane(t *testing.T) {
 
 	late := press(detailed(held(sampleDetail()), 100, 24), "]", "]", "]")
 	late.SetFiles(loadedFiles(files, 0))
+	late = finishDiff(late)
 
 	early := detailed(held(sampleDetail()), 100, 24)
 	early.SetFiles(loadedFiles(files, 0))
-	early = press(early, "]", "]", "]")
+	early = finishDiff(press(early, "]", "]", "]"))
 
 	if got, want := scrollReadout(late.View()), scrollReadout(early.View()); got != want {
 		t.Errorf("the diff landing on the open tab reads %q, want %q", got, want)
@@ -1330,10 +1331,10 @@ func bigDiff(files, lines int) []gh.ChangedFile {
 func BenchmarkMoveTheCursorOnALargeDiff(b *testing.B) {
 	m := detailed(held(sampleDetail()), 200, 50)
 	m.SetFiles(loadedFiles(bigDiff(60, 200), 0))
-	m = press(m, "]", "]", "]", "1")
+	m = finishDiff(press(m, "]", "]", "]", "1"))
 
 	for b.Loop() {
-		m = press(m, "j")
+		m = finishDiff(press(m, "j"))
 	}
 }
 
@@ -1361,10 +1362,10 @@ func BenchmarkOpenDistinctDiffFiles(b *testing.B) {
 					b.StopTimer()
 					m = detailed(held(sampleDetail()), 200, 50)
 					m.SetFiles(loadedFiles(files, 0))
-					m = press(m, "]", "]", "]", "1")
+					m = finishDiff(press(m, "]", "]", "]", "1"))
 					b.StartTimer()
 				}
-				m = press(m, "j")
+				m = finishDiff(press(m, "j"))
 			}
 		})
 	}

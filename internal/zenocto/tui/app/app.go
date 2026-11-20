@@ -853,6 +853,16 @@ func (m Model) detailSettled(id string, err error) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(msg)
+	if host, ok := next.(Model); ok && host.screen == screenDetail {
+		if render := host.detail.TakeDiffRender(); render != nil {
+			return host, tea.Batch(cmd, render)
+		}
+	}
+	return next, cmd
+}
+
+func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
