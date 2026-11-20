@@ -1,9 +1,0 @@
----
-extends: default
-rules:
-  # Kubernetes manifests do not need a leading document marker.
-  document-start: disable
-  # Keep sequence items at the parent key's indent, as upstream
-  # agent-sandbox and kubectl output style do.
-  indentation:
-    indent-sequences: false

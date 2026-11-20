@@ -17,12 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Shellcheck
-        run: shellcheck demo/sbx.sh
-      - name: Yamllint
-        run: pipx run yamllint demo/
-      - name: Markdownlint
-        run: npx --yes markdownlint-cli2 "*.md" "docs/*.md"
+      - name: Lint
+        run: make lint
       - name: Actionlint
         run: bash <(curl -s https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
 
@@ -39,7 +35,7 @@ jobs:
       - name: Vet
         run: go vet ./...
       - name: Format
-        run: test -z "$(gofmt -l .)"
+        run: make fmt-check
 
   commit-convention:
     name: Commit subjects

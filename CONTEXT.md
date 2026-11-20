@@ -141,5 +141,8 @@ toolchain on demand, and the repo needs no other Go config.
 - Run `go test ./...` and `go vet ./...` to check the Go module, and
   `go run ./cmd/nightshift -once` to print one dashboard frame against the
   live cluster.
-- CI lints `*.md` and `docs/*.md` with markdownlint and checks commit
-  subjects against `AGENTS.md`.
+- Run `make lint` for shellcheck, yamllint on `demo/`, and markdownlint on
+  `*.md` and `docs/*.md`. It requires shellcheck, pipx, and npx; CI runs the
+  same target and also checks workflow files with actionlint.
+- Run `make fmt` to format Go files or `make fmt-check` to check formatting
+  without changing files. CI also checks commit subjects against `AGENTS.md`.
