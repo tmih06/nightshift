@@ -14,12 +14,12 @@ func (m model) updateKeyboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "down", "j":
 		m.moveSelection(1)
 	case "g":
-		if len(m.boxes) > 0 {
-			m.selectPod(m.boxes[0].Name)
+		if order := m.navigationIndices(); len(order) > 0 {
+			m.selectPod(m.boxes[order[0]].Name)
 		}
 	case "G":
-		if len(m.boxes) > 0 {
-			m.selectPod(m.boxes[len(m.boxes)-1].Name)
+		if order := m.navigationIndices(); len(order) > 0 {
+			m.selectPod(m.boxes[order[len(order)-1]].Name)
 		}
 	case "tab":
 		if m.isWarmSelected() {
@@ -28,7 +28,7 @@ func (m model) updateKeyboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		m.status, m.statusTTL = "", 0
 		return m, fetchCmd()
-	case "c", "C":
+	case "c":
 		m.flash("claiming from the warm pool…")
 		return m, claimCmd()
 	case "enter":
@@ -102,7 +102,7 @@ func (m model) updateInspectKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.inspectScroll = 0
 	case "G", "end":
 		m.scrollInspect(1 << 20)
-	case "c", "C":
+	case "c":
 		m.focus = focusNav
 		m.flash("claiming from the warm pool…")
 		return m, claimCmd()

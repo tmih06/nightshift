@@ -282,9 +282,9 @@ func (m model) selectedBox() *cluster.Sandbox {
 }
 
 func (m model) selectedIndex() int {
-	for i, b := range m.boxes {
-		if b.Name == m.selected {
-			return i
+	for position, index := range m.navigationIndices() {
+		if m.boxes[index].Name == m.selected {
+			return position
 		}
 	}
 	return 0
@@ -321,9 +321,16 @@ func (m *model) selectPod(name string) {
 }
 
 func (m *model) moveSelection(delta int) {
-	if len(m.boxes) == 0 {
+	order := m.navigationIndices()
+	if len(order) == 0 {
 		return
 	}
-	i := clamp(m.selectedIndex()+delta, 0, len(m.boxes)-1)
-	m.selectPod(m.boxes[i].Name)
+	current := 0
+	for position, index := range order {
+		if m.boxes[index].Name == m.selected {
+			current = position
+			break
+		}
+	}
+	m.selectPod(m.boxes[order[clamp(current+delta, 0, len(order)-1)]].Name)
 }

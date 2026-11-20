@@ -64,8 +64,8 @@ const sandboxListFixture = `{"items":[
 ]}`
 
 const podListFixture = `{"items":[
- {"metadata":{"name":"sbx-warm-1"},"spec":{"containers":[{"resources":{"limits":{"cpu":"500m","memory":"256Mi"}}}]},"status":{"phase":"Running"}},
- {"metadata":{"name":"sbx-claim-1"},"spec":{"containers":[{"resources":{"limits":{"cpu":"250m","memory":"128Mi"}}}]},"status":{"phase":"Running"}}
+ {"metadata":{"name":"sbx-warm-1"},"spec":{"nodeName":"worker-a","containers":[{"resources":{"limits":{"cpu":"500m","memory":"256Mi"}}}]},"status":{"phase":"Running"}},
+ {"metadata":{"name":"sbx-claim-1"},"spec":{"nodeName":"worker-b","containers":[{"resources":{"limits":{"cpu":"250m","memory":"128Mi"}}}]},"status":{"phase":"Running"}}
 ]}`
 
 const metricsFixture = `{"items":[
@@ -103,7 +103,7 @@ func TestBuildSandboxes(t *testing.T) {
 	if warm.Name != "sbx-warm-1" || warm.OwnerKind != "SandboxWarmPool" || warm.Owner != "agent-pool" {
 		t.Errorf("warm box = %+v", warm)
 	}
-	if warm.Phase != "Running" || warm.CPULimitMC != 500 || warm.MemLimitMiB != 256 {
+	if warm.Phase != "Running" || warm.CPULimitMC != 500 || warm.MemLimitMiB != 256 || warm.NodeName != "worker-a" {
 		t.Errorf("warm box = %+v", warm)
 	}
 	if warm.CPUUsageMC != 2 || warm.MemUsageMiB != 6 {
@@ -114,15 +114,15 @@ func TestBuildSandboxes(t *testing.T) {
 	if claim.Name != "sbx-claim-1" || claim.OwnerKind != "SandboxClaim" || claim.Owner != "my-agent" {
 		t.Errorf("claimed box = %+v", claim)
 	}
-	if claim.CPULimitMC != 250 || claim.MemLimitMiB != 128 {
-		t.Errorf("claimed box limits = %+v, want 250m and 128Mi from its own pod", claim)
+	if claim.CPULimitMC != 250 || claim.MemLimitMiB != 128 || claim.NodeName != "worker-b" {
+		t.Errorf("claimed box = %+v, want 250m and 128Mi limits plus node worker-b", claim)
 	}
 	if claim.CPUUsageMC != 0 || claim.MemUsageMiB != 0 {
 		t.Errorf("claimed box usage = %+v, want zero: no metrics entry matches", claim)
 	}
 
 	orphan := boxes[2]
-	if orphan.Name != "sbx-orphan" || orphan.Phase != "…" || orphan.CPULimitMC != 0 {
+	if orphan.Name != "sbx-orphan" || orphan.Phase != "…" || orphan.CPULimitMC != 0 || orphan.NodeName != "" {
 		t.Errorf("podless box = %+v, want unknown phase and no limits", orphan)
 	}
 }

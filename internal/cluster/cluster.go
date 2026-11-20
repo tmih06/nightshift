@@ -24,6 +24,7 @@ type Sandbox struct {
 	Name        string
 	OwnerKind   string // SandboxWarmPool or SandboxClaim
 	Owner       string
+	NodeName    string
 	Phase       string // pod phase, "…" until the pod exists
 	Created     time.Time
 	CPULimitMC  int64
@@ -82,6 +83,7 @@ type podItem struct {
 		Created string `json:"creationTimestamp"`
 	} `json:"metadata"`
 	Spec struct {
+		NodeName      string         `json:"nodeName"`
 		RestartPolicy string         `json:"restartPolicy"`
 		Containers    []podContainer `json:"containers"`
 	} `json:"spec"`
@@ -194,6 +196,7 @@ func buildSandboxes(sb sandboxList, pl podList, ml *podMetricsList) ([]Sandbox, 
 		}
 		if pp := podByName[item.Metadata.Name]; pp != nil {
 			p := &pp.item
+			b.NodeName = p.Spec.NodeName
 			b.Phase = p.Status.Phase
 			b.RestartPolicy = p.Spec.RestartPolicy
 			if isWarm {
