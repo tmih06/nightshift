@@ -37,19 +37,20 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 	case tickMsg:
 		return m, tea.Batch(fetchCmd(), tickCmd())
 	case shellTickMsg:
-		cmds := []tea.Cmd{shellTickCmd()}
-		if b := m.selectedBox(); !m.hidden && b != nil && m.sessions[b.Name] && b.Phase == "Running" {
-			cmds = append(cmds, m.captureSelected(b.Name))
-		}
-		return m, tea.Batch(cmds...)
+		return m, tea.Batch(shellTickCmd(), m.watchShell())
 	case shellMsg:
-		if msg.err != nil {
-			m.shellLines, m.shellPod = nil, ""
-			return m, nil
+		m.watchingShell = false
+		if m.selected == msg.pod {
+			if msg.err != nil {
+				m.shellLines, m.shellPod = nil, ""
+				m.shellW, m.shellH = 0, 0
+				return m, nil // retry on the next tick
+			}
+			if !m.hidden && msg.lines != nil {
+				m.shellLines, m.shellPod = msg.lines, msg.pod
+			}
 		}
-		if b := m.selectedBox(); b != nil && b.Name == msg.pod {
-			m.shellLines, m.shellPod = msg.lines, msg.pod
-		}
+		return m, m.watchShell()
 	case loadedMsg:
 		prev := m.selectedIndex()
 		m.boxes, m.pool, m.sessions = msg.boxes, msg.pool, msg.sessions
@@ -115,7 +116,7 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 			m.focus = focusShell
 			m.prefix = false
 			m.flash("bash ready — C-b q or click sidebar to leave")
-			return m, m.captureSelected(b.Name)
+			return m, m.watchShell()
 		}
 		return m, nil
 	case fullReadyMsg:
@@ -142,17 +143,7 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 			m.pending = nil
 			return m, nil
 		}
-		var cmds []tea.Cmd
-		if cmd := m.startDrain(); cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-		if b := m.selectedBox(); b != nil && m.sessions[b.Name] && b.Phase == "Running" {
-			cmds = append(cmds, m.captureSelected(b.Name))
-		}
-		if len(cmds) == 0 {
-			return m, nil
-		}
-		return m, tea.Batch(cmds...)
+		return m, m.startDrain()
 	}
 	return m, nil
 }

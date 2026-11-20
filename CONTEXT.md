@@ -102,8 +102,9 @@ The demo runs on the kind cluster `kind-agent-sandbox` in the namespace
 - A tab out of sight keeps refreshing, but the sandbox tab stops reading the
   shell's screen until it is shown again. Table rows and warm-sandbox
   documents are rendered once per change, not per frame.
-- The shell embeds the sandbox's bash through Herdr screen reads, so Herdr
-  never takes over the terminal.
+- The shell embeds the sandbox's bash through Herdr screen reads triggered by
+  shell output on the same connection that sends keystrokes. Herdr never takes
+  over the terminal.
 - Focus is in the table during navigation and in the sidebar while bash or
   the configs have it; the sidebar's heading turns green and says how to
   leave, and its rule brightens.

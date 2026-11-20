@@ -830,6 +830,15 @@ func TestShellCaptureDisplay(t *testing.T) {
 		t.Errorf("view showed a capture from a pod that is not selected")
 	}
 
+	// An idle watch keeps the previous screen and re-arms the watcher.
+	newM, cmd := newM.Update(shellMsg{pod: "agent-pool-bkl2p"})
+	if len(newM.shellLines) != 2 || cmd == nil || !newM.watchingShell {
+		t.Fatal("idle watch discarded the screen or did not re-arm")
+	}
+	if newM.watchShell() != nil {
+		t.Fatal("started a second watch while one was in flight")
+	}
+
 	// A failed capture clears the stale content.
 	newM, _ = newM.Update(shellMsg{pod: "agent-pool-bkl2p", err: errFixture})
 	if got := newM.shellLines; got != nil {
@@ -860,7 +869,7 @@ func TestShellTick(t *testing.T) {
 
 // The input queue: keystrokes typed while a drain is in flight wait
 // for it, batches keep their order, and a finished drain immediately
-// sends the rest and captures so the echo comes back fast.
+// sends the rest. The screen watcher handles echo independently.
 func TestShellInputQueue(t *testing.T) {
 	m := baseModel()
 	m.selected = "agent-pool-bkl2p"
@@ -877,7 +886,7 @@ func TestShellInputQueue(t *testing.T) {
 		t.Fatalf("pending = %v, want the queued key", newM.pending)
 	}
 
-	// The drain finishing sends the queue and captures right after.
+	// The drain finishing sends the queued keys.
 	newM, cmd = newM.Update(sentMsg{pod: "agent-pool-bkl2p", count: 3})
 	if cmd == nil {
 		t.Fatal("finished drain did not send the queued input")
@@ -902,19 +911,14 @@ func TestShellInputQueue(t *testing.T) {
 	}
 }
 
-// The shell tick and the post-send capture both size the Herdr terminal to
-// the pane, so the embedded output wraps where it is shown.
+// The shell watcher sizes Herdr to the embedded pane.
 func TestShellResizeFollowsPaneSize(t *testing.T) {
 	m := baseModel()
 	m.selected = "agent-pool-bkl2p"
 	m.sessions["agent-pool-bkl2p"] = true
 	m.focus = focusShell
 
-	_, cmd := m.updateShellKeys(tea.KeyPressMsg{Code: 'x', Text: "x"})
-	if cmd == nil {
-		t.Fatal("first key produced no drain command")
-	}
-	newM, _ := m.Update(sentMsg{pod: "agent-pool-bkl2p", count: 1})
+	newM, _ := m.Update(shellTickMsg{})
 	w, h := newM.shellW, newM.shellH
 	wantW, wantH := m.shellPaneSize()
 	if w != wantW || h != wantH {
@@ -1394,6 +1398,11 @@ func TestHiddenTabSkipsShellCapture(t *testing.T) {
 	}
 	if got.shellW != 0 {
 		t.Error("the hidden tab still captured the shell")
+	}
+	got.watchingShell = true // a watch started before switching tabs
+	got, cmd = got.Update(shellMsg{pod: got.selected, lines: []string{"hidden"}})
+	if cmd != nil || got.watchingShell || got.shellLines != nil {
+		t.Fatal("a hidden update applied a screen or restarted the watcher")
 	}
 }
 
