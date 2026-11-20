@@ -8,40 +8,31 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// The data shape of demo/warmpool.yaml, the manifest two directories up at
-// the repo's demo root, and the subset the tests pin. The file holds three
-// documents; the SandboxTemplate is the only one that defines sandbox pods,
-// through spec.podTemplate.spec.containers. Each container carries a name
-// and a resource budget of cpu and memory quantity strings, requested and
-// limited.
-type manifest struct {
-	Kind string `yaml:"kind"`
-}
-
-type sandboxTemplate struct {
+type document struct {
 	Kind     string `yaml:"kind"`
 	Metadata struct {
-		Name string `yaml:"name"`
+		Name      string `yaml:"name"`
+		Namespace string `yaml:"namespace"`
 	} `yaml:"metadata"`
 	Spec struct {
+		Replicas           int `yaml:"replicas"`
+		SandboxTemplateRef struct {
+			Name string `yaml:"name"`
+		} `yaml:"sandboxTemplateRef"`
 		PodTemplate struct {
 			Spec struct {
-				Containers []container `yaml:"containers"`
+				Containers []struct {
+					Name            string `yaml:"name"`
+					Image           string `yaml:"image"`
+					ImagePullPolicy string `yaml:"imagePullPolicy"`
+					Resources       struct {
+						Requests quantities `yaml:"requests"`
+						Limits   quantities `yaml:"limits"`
+					} `yaml:"resources"`
+				} `yaml:"containers"`
 			} `yaml:"spec"`
 		} `yaml:"podTemplate"`
 	} `yaml:"spec"`
-}
-
-type container struct {
-	Name            string    `yaml:"name"`
-	Image           string    `yaml:"image"`
-	ImagePullPolicy string    `yaml:"imagePullPolicy"`
-	Resources       resources `yaml:"resources"`
-}
-
-type resources struct {
-	Requests quantities `yaml:"requests"`
-	Limits   quantities `yaml:"limits"`
 }
 
 type quantities struct {
@@ -49,91 +40,63 @@ type quantities struct {
 	Memory string `yaml:"memory"`
 }
 
-func loadSandboxTemplate(t *testing.T) sandboxTemplate {
-	t.Helper()
+func TestWarmPools(t *testing.T) {
 	f, err := os.Open("../../demo/warmpool.yaml")
 	if err != nil {
-		t.Fatalf("open ../../demo/warmpool.yaml: %v", err)
+		t.Fatal(err)
 	}
 	defer f.Close()
-
+	pools, templates := map[string]document{}, map[string]document{}
 	dec := yaml.NewDecoder(f)
 	for {
-		var doc yaml.Node
+		var doc document
 		if err := dec.Decode(&doc); err == io.EOF {
 			break
+		} else if err != nil {
+			t.Fatal(err)
 		}
-		if err != nil {
-			t.Fatalf("decode document: %v", err)
-		}
-		var m manifest
-		if err := doc.Decode(&m); err != nil {
-			t.Fatalf("decode document kind: %v", err)
-		}
-		if m.Kind != "SandboxTemplate" {
-			continue
-		}
-		var tpl sandboxTemplate
-		if err := doc.Decode(&tpl); err != nil {
-			t.Fatalf("decode SandboxTemplate: %v", err)
-		}
-		return tpl
-	}
-	t.Fatal("no SandboxTemplate document in ../../demo/warmpool.yaml")
-	return sandboxTemplate{}
-}
-
-// Every container the template declares must be capped, so no path can add
-// an uncapped sandbox pod.
-func TestEverySandboxContainerIsCapped(t *testing.T) {
-	tpl := loadSandboxTemplate(t)
-	if len(tpl.Spec.PodTemplate.Spec.Containers) == 0 {
-		t.Fatal("SandboxTemplate declares no containers")
-	}
-	for _, c := range tpl.Spec.PodTemplate.Spec.Containers {
-		t.Run(c.Name, func(t *testing.T) {
-			if c.Resources.Requests.CPU == "" || c.Resources.Requests.Memory == "" {
-				t.Errorf("requests must set cpu and memory, got %+v", c.Resources.Requests)
+		switch doc.Kind {
+		case "SandboxWarmPool":
+			if _, ok := pools[doc.Metadata.Name]; ok {
+				t.Fatalf("duplicate pool %s", doc.Metadata.Name)
 			}
-			if c.Resources.Limits.CPU == "" || c.Resources.Limits.Memory == "" {
-				t.Errorf("limits must set cpu and memory, got %+v", c.Resources.Limits)
+			pools[doc.Metadata.Name] = doc
+		case "SandboxTemplate":
+			if _, ok := templates[doc.Metadata.Name]; ok {
+				t.Fatalf("duplicate template %s", doc.Metadata.Name)
 			}
-		})
-	}
-}
-
-// The agent sandbox budget: a bash container needs little at idle, can burst
-// to half a core and 256Mi, and cannot starve the node it shares with the
-// kind control plane.
-func TestAgentSandboxBudget(t *testing.T) {
-	tpl := loadSandboxTemplate(t)
-	var agent *container
-	for i, c := range tpl.Spec.PodTemplate.Spec.Containers {
-		if c.Name == "agent" {
-			agent = &tpl.Spec.PodTemplate.Spec.Containers[i]
-			break
+			templates[doc.Metadata.Name] = doc
 		}
 	}
-	if agent == nil {
-		t.Fatal("no container named agent in the SandboxTemplate")
+	agents := []struct{ pool, template, image string }{
+		{"pi-pool", "agent-bash-template", "pi"},
+		{"codex-pool", "codex-template", "codex"},
+		{"claude-code-pool", "claude-code-template", "claude-code"},
+		{"opencode-pool", "opencode-template", "opencode"},
 	}
-	if agent.Image != "nightshift-agent:0.1.0" || agent.ImagePullPolicy != "IfNotPresent" {
-		t.Errorf("agent image = %q, pull policy = %q; want local coding-agent image", agent.Image, agent.ImagePullPolicy)
+	if len(pools) != len(agents) || len(templates) != len(agents) {
+		t.Fatalf("got %d pools and %d templates, want %d each", len(pools), len(templates), len(agents))
 	}
-	cases := []struct {
-		what string
-		got  string
-		want string
-	}{
-		{"cpu request", agent.Resources.Requests.CPU, "100m"},
-		{"memory request", agent.Resources.Requests.Memory, "128Mi"},
-		{"cpu limit", agent.Resources.Limits.CPU, "500m"},
-		{"memory limit", agent.Resources.Limits.Memory, "256Mi"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.what, func(t *testing.T) {
-			if tc.got != tc.want {
-				t.Errorf("agent container %s = %q, want %q", tc.what, tc.got, tc.want)
+	for _, a := range agents {
+		t.Run(a.image, func(t *testing.T) {
+			p, ok := pools[a.pool]
+			if !ok || p.Metadata.Namespace != "sandbox-demo" || p.Spec.Replicas != 1 || p.Spec.SandboxTemplateRef.Name != a.template {
+				t.Errorf("pool: %+v", p)
+			}
+			tpl, ok := templates[a.template]
+			if !ok || tpl.Metadata.Namespace != "sandbox-demo" {
+				t.Fatalf("missing template %s", a.template)
+			}
+			containers := tpl.Spec.PodTemplate.Spec.Containers
+			if len(containers) != 1 {
+				t.Fatalf("got %d containers", len(containers))
+			}
+			c := containers[0]
+			if c.Name != "agent" || c.Image != "ghcr.io/tmih06/nightshift-"+a.image+":latest" || c.ImagePullPolicy != "Always" {
+				t.Errorf("container: %+v", c)
+			}
+			if c.Resources.Requests != (quantities{"100m", "128Mi"}) || c.Resources.Limits != (quantities{"500m", "256Mi"}) {
+				t.Errorf("resources: %+v", c.Resources)
 			}
 		})
 	}

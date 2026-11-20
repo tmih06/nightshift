@@ -68,7 +68,7 @@ Nightshift builds on these projects:
 
 ### Workspaces
 
-- [x] Keep a few workspaces warm so a new job starts instantly
+- [x] Keep a workspace warm for each coding agent so a new job starts instantly
 - [x] Claim a workspace for a job and throw it away when the job is done
 - [x] Restock the warm workspaces automatically
 - [x] Cap how much each workspace can use

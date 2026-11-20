@@ -3,8 +3,8 @@
 Nightshift uses [herdr-core](https://github.com/herdrdev/herdr-core) (`hc`)
 inside each claimed sandbox to keep a shell alive when the dashboard navigates
 away, exits, or loses its connection. The dashboard host needs `kubectl`, not
-`hc`. Build and load the image as described in `images/agent/README.md` before
-applying the warm pool manifest.
+`hc`. Ensure the published images are accessible as described in
+`images/agent/README.md` before applying the warm pool manifest.
 
 ## How it works
 

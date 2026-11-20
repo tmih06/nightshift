@@ -45,7 +45,7 @@ type usageHistory struct {
 
 type model struct {
 	boxes          []cluster.Sandbox
-	pool           cluster.Pool
+	pools          map[string]cluster.Pool
 	selected       string // pod name, stable across fleet resorts
 	sessions       map[string]bool
 	metricsOK      bool
@@ -120,7 +120,7 @@ type shellTickMsg struct{}
 
 type loadedMsg struct {
 	boxes     []cluster.Sandbox
-	pool      cluster.Pool
+	pools     map[string]cluster.Pool
 	sessions  map[string]bool
 	metricsOK bool
 	cgroups   map[string]cluster.CgroupSample
@@ -189,7 +189,7 @@ func shellTickCmd() tea.Cmd {
 
 func fetchCmd() tea.Cmd {
 	return func() tea.Msg {
-		boxes, pool, metricsOK, err := cluster.Fetch()
+		boxes, pools, metricsOK, err := cluster.Fetch()
 		var claimed []string
 		for _, b := range boxes {
 			if b.OwnerKind == "SandboxClaim" && b.Phase == "Running" {
@@ -205,15 +205,22 @@ func fetchCmd() tea.Cmd {
 		go func() { defer wg.Done(); sessions = session.Live(boxes) }()
 		go func() { defer wg.Done(); cgroups = cluster.ReadCgroups(claimed) }()
 		wg.Wait()
-		return loadedMsg{boxes: boxes, pool: pool, sessions: sessions, metricsOK: metricsOK, cgroups: cgroups, err: err}
+		return loadedMsg{boxes: boxes, pools: pools, sessions: sessions, metricsOK: metricsOK, cgroups: cgroups, err: err}
 	}
 }
 
-func claimCmd() tea.Cmd {
+func claimCmd(pool string) tea.Cmd {
 	return func() tea.Msg {
-		name, err := cluster.Claim()
+		name, err := cluster.Claim(pool)
 		return claimMsg{name: name, err: err}
 	}
+}
+
+func (m model) claimPool() string {
+	if b := m.selectedBox(); b != nil && b.OwnerKind == "SandboxWarmPool" {
+		return b.Owner
+	}
+	return cluster.WarmPool
 }
 
 func deleteClaimCmd(claim string) tea.Cmd {

@@ -94,7 +94,7 @@ func (m model) warmInspectLines(width int) []string {
 	if b == nil {
 		return []string{dim("nothing selected")}
 	}
-	return renderMarkdown(buildWarmMarkdown(m.pool, b), width)
+	return renderMarkdown(buildWarmMarkdown(m.pools[b.Owner], b), width)
 }
 
 func buildWarmMarkdown(p cluster.Pool, b *cluster.Sandbox) string {

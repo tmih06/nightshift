@@ -32,8 +32,8 @@ func testBoxes() []cluster.Sandbox {
 
 func baseModel() model {
 	return model{boxes: testBoxes(), selected: "agent-pool-5ss7w",
-		pool: cluster.Pool{Name: "agent-pool", Template: "agent-bash-template",
-			Ready: 2, Desired: 2, UpdateStrategy: "Recreate"},
+		pools: map[string]cluster.Pool{"agent-pool": {Name: "agent-pool", Template: "agent-bash-template",
+			Ready: 2, Desired: 2, UpdateStrategy: "Recreate"}},
 		sessions: map[string]bool{}, metricsOK: true,
 		loaded: true, width: 140, height: 30}
 }
@@ -388,20 +388,33 @@ func TestKeyboardNavigationAndActions(t *testing.T) {
 
 func TestClaimShortcuts(t *testing.T) {
 	msg := tea.KeyPressMsg{Code: 'c', Text: "c"}
-	for _, selected := range []string{"agent-pool-5ss7w", "agent-pool-bkl2p"} {
+	for _, tc := range []struct{ selected, pool string }{
+		{"agent-pool-5ss7w", "agent-pool"},
+		{"agent-pool-bkl2p", "pi-pool"},
+	} {
 		nav := baseModel()
-		nav.selected = selected
+		nav.selected = tc.selected
 		newM, cmd := nav.Update(msg)
-		if cmd == nil || !strings.Contains(newM.status, "claiming from the warm pool") {
-			t.Errorf("c on %s did not start a claim", selected)
+		if cmd == nil || !strings.Contains(newM.status, "claiming from "+tc.pool) {
+			t.Errorf("c on %s did not claim %s", tc.selected, tc.pool)
 		}
 	}
 
 	inspect := baseModel()
 	inspect.focus = focusInspect
 	newM, cmd := inspect.Update(msg)
-	if cmd == nil || newM.focus != focusNav || !strings.Contains(newM.status, "claiming from the warm pool") {
+	if cmd == nil || newM.focus != focusNav || !strings.Contains(newM.status, "claiming from agent-pool") {
 		t.Error("c in config view did not start a claim")
+	}
+
+	other := baseModel()
+	other.boxes[0].Owner = "codex-pool"
+	for _, focus := range []focusPane{focusNav, focusInspect} {
+		other.focus = focus
+		got, cmd := other.Update(msg)
+		if cmd == nil || !strings.Contains(got.status, "claiming from codex-pool") || other.claimPool() != "codex-pool" {
+			t.Errorf("c in focus %v did not select codex-pool: %q", focus, got.status)
+		}
 	}
 
 	uppercase := tea.KeyPressMsg{Code: 'C', Text: "C"}
@@ -1256,8 +1269,10 @@ func TestWarmInspectScrollableMarkdownAndYAML(t *testing.T) {
 
 	m := baseModel()
 	m.height = 16 // compact viewport so scrolling has room
-	m.pool.TemplateYAML = "apiVersion: extensions.agents.x-k8s.io/v1beta1\nkind: SandboxTemplate\nspec:\n  replicas: 2\n  enabled: true\n  image: debian:12-slim"
-	m.pool.ManifestYAML = "apiVersion: extensions.agents.x-k8s.io/v1beta1\nkind: SandboxWarmPool\nmetadata:\n  name: agent-pool"
+	p := m.pools["agent-pool"]
+	p.TemplateYAML = "apiVersion: extensions.agents.x-k8s.io/v1beta1\nkind: SandboxTemplate\nspec:\n  replicas: 2\n  enabled: true\n  image: debian:12-slim"
+	p.ManifestYAML = "apiVersion: extensions.agents.x-k8s.io/v1beta1\nkind: SandboxWarmPool\nmetadata:\n  name: agent-pool"
+	m.pools["agent-pool"] = p
 	m.boxes[0].ManifestYAML = "apiVersion: agents.x-k8s.io/v1beta1\nkind: Sandbox\nmetadata:\n  name: agent-pool-5ss7w"
 	m.boxes[0].PodYAML = "apiVersion: v1\nkind: Pod\nspec:\n  restartPolicy: OnFailure\n  containers:\n  - name: agent\n    resources:\n      limits:\n        cpu: 500m\n        memory: 256Mi"
 
