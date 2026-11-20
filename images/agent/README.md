@@ -27,9 +27,10 @@ keeps one warm pod per agent. Ensure the cluster can pull them, then apply:
 kubectl --context kind-agent-sandbox apply -f demo/warmpool.yaml
 ```
 
-On an existing demo this creates `pi-pool`; applying the manifest does not
-remove the old `agent-pool` or its warm sandbox. Existing claims are not deleted. Select a warm sandbox and
-press `c` in the dashboard to claim its pool, or use, for example,
+On an existing demo this creates `pi-template` and updates `pi-pool`; it does
+not remove the old `agent-bash-template` or `agent-pool`. Updating a pool can
+replace its warm sandbox, but existing claims are not deleted. Select a warm
+sandbox and press `c` in the dashboard to claim its pool, or use, for example,
 `POOL=codex-pool sbx`. The default `sbx` pool is Pi's `pi-pool`.
 
 The manifest uses `Always` to pull the current tag when a pod starts; already
@@ -41,7 +42,8 @@ kind, and change the corresponding template to use its local tag and
 for the node's architecture.
 
 The workspace, agent configuration, and Herdr state are ephemeral by default.
-The demo's 256Mi memory limit may need to be raised for real agent workloads.
+The demo gives OpenCode a 2Gi memory limit and the other agents 256Mi; real
+workloads may need more.
 
 ## Published images and release watcher
 

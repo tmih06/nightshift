@@ -24,8 +24,9 @@ The demo runs on the kind cluster `kind-agent-sandbox` in the namespace
 
 - `demo/` holds the Kubernetes side: `warmpool.yaml` creates the namespace
   `sandbox-demo` and four template/pool pairs, each keeping one Pi, Codex,
-  Claude Code, or OpenCode sandbox warm. Each pod is capped at 500m CPU and
-  256Mi memory. `claim.yaml` claims a Pi sandbox by default.
+  Claude Code, or OpenCode sandbox warm. Each pod is capped at 500m CPU;
+  OpenCode has a 2Gi memory limit and the others have 256Mi. `claim.yaml`
+  claims a Pi sandbox by default.
   `sbx.sh` wraps that loop in one command and is installed as `sbx` through
   a symlink in `~/.local/bin`.
 - `images/base/` defines the common sandbox tools and Herdr; `images/agent/`
@@ -85,7 +86,9 @@ The demo runs on the kind cluster `kind-agent-sandbox` in the namespace
 - The Sandboxes tab is laid out like gh-dash and painted from gh-dash's
   theme. Section tabs (All, Warm, Claimed; `h`/`l` or a click) sit over a
   table with gh-dash's header row, two lines per sandbox (node and owner,
-  then name), a session dot, CPU and memory with braille history, and age,
+  then name), its template, a session dot, CPU and memory with braille history,
+  and age (at narrower widths the session dot moves under the template and
+  age hides),
   each row ruled off and the selection highlighted. On the right, behind one
   rule, the preview sidebar heads the sandbox like a pull request, without
   gh-dash's blank rows around the title (namespace

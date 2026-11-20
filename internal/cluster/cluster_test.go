@@ -58,9 +58,9 @@ func TestMemMiB(t *testing.T) {
 }
 
 const sandboxListFixture = `{"items":[
- {"metadata":{"name":"sbx-warm-1","ownerReferences":[{"kind":"SandboxWarmPool","name":"agent-pool"}]}},
+ {"metadata":{"name":"sbx-warm-1","annotations":{"agents.x-k8s.io/sandbox-template-ref":"pi-template"},"ownerReferences":[{"kind":"SandboxWarmPool","name":"agent-pool"}]}},
  {"metadata":{"name":"sbx-orphan"}},
- {"metadata":{"name":"sbx-claim-1","ownerReferences":[{"kind":"SandboxClaim","name":"my-agent"}]}}
+ {"metadata":{"name":"sbx-claim-1","annotations":{"agents.x-k8s.io/sandbox-template-ref":"opencode-template"},"ownerReferences":[{"kind":"SandboxClaim","name":"my-agent"}]}}
 ]}`
 
 const podListFixture = `{"items":[
@@ -100,7 +100,7 @@ func TestBuildSandboxes(t *testing.T) {
 	}
 
 	warm := boxes[0]
-	if warm.Name != "sbx-warm-1" || warm.OwnerKind != "SandboxWarmPool" || warm.Owner != "agent-pool" {
+	if warm.Name != "sbx-warm-1" || warm.OwnerKind != "SandboxWarmPool" || warm.Owner != "agent-pool" || warm.Template != "pi-template" {
 		t.Errorf("warm box = %+v", warm)
 	}
 	if warm.Phase != "Running" || warm.CPULimitMC != 500 || warm.MemLimitMiB != 256 || warm.NodeName != "worker-a" {
@@ -111,7 +111,7 @@ func TestBuildSandboxes(t *testing.T) {
 	}
 
 	claim := boxes[1]
-	if claim.Name != "sbx-claim-1" || claim.OwnerKind != "SandboxClaim" || claim.Owner != "my-agent" {
+	if claim.Name != "sbx-claim-1" || claim.OwnerKind != "SandboxClaim" || claim.Owner != "my-agent" || claim.Template != "opencode-template" {
 		t.Errorf("claimed box = %+v", claim)
 	}
 	if claim.CPULimitMC != 250 || claim.MemLimitMiB != 128 || claim.NodeName != "worker-b" {

@@ -9,7 +9,7 @@ metadata:
 apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxTemplate
 metadata:
-  name: agent-bash-template
+  name: pi-template
   namespace: sandbox-demo
 spec:
   podTemplate:
@@ -38,7 +38,7 @@ spec:
     type: Recreate
   replicas: 1
   sandboxTemplateRef:
-    name: agent-bash-template
+    name: pi-template
 ---
 apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxTemplate
@@ -125,10 +125,10 @@ spec:
         resources:
           requests:
             cpu: 100m
-            memory: 128Mi
+            memory: 512Mi
           limits:
             cpu: 500m
-            memory: 256Mi
+            memory: 2Gi
 ---
 apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxWarmPool

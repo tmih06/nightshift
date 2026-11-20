@@ -26,16 +26,17 @@ flowchart LR
 
 | Agent | Pool | Template | Image |
 | --- | --- | --- | --- |
-| Pi | `pi-pool` | `agent-bash-template` | `ghcr.io/tmih06/nightshift-pi:latest` |
+| Pi | `pi-pool` | `pi-template` | `ghcr.io/tmih06/nightshift-pi:latest` |
 | Codex | `codex-pool` | `codex-template` | `ghcr.io/tmih06/nightshift-codex:latest` |
 | Claude Code | `claude-code-pool` | `claude-code-template` | `ghcr.io/tmih06/nightshift-claude-code:latest` |
 | OpenCode | `opencode-pool` | `opencode-template` | `ghcr.io/tmih06/nightshift-opencode:latest` |
 
-Pi retains the original template name. Every pod requests 100m CPU and 128Mi
-memory and is limited to 500m
-and 256Mi. Images use `Always` with mutable `latest` tags; existing pods do
-not update just because a tag changes. See `images/agent/README.md` for image
-publishing, registry access, reproducibility, and the limits of this budget.
+Every pod requests 100m CPU and is
+limited to 500m. OpenCode requests 512Mi memory and is limited to 2Gi; the
+others request 128Mi and are limited to 256Mi. Images use `Always` with mutable
+`latest` tags; existing pods do not update just because a tag changes. See
+`images/agent/README.md` for image publishing, registry access, reproducibility,
+and the limits of this budget.
 
 ## Claim cycle
 
@@ -56,9 +57,9 @@ its ephemeral workspace. Credentials must be supplied at runtime.
 
 Apply `demo/warmpool.yaml` after installing the agent-sandbox controller and
 ensuring the GHCR images are accessible. This creates `pi-pool` but does not
-remove the old `agent-pool` or its warm sandbox. Existing claims may still
-reference that old pool; do not delete them as part of migration. Review and
-remove the old pool separately after obtaining permission. Applying the
+remove the old `agent-pool` or the `agent-bash-template` template. Existing
+claims may still reference the old resources; do not delete them as part of
+migration. Review and remove old resources separately after obtaining permission. Applying the
 manifest does not remove unrelated resources or stale pools.
 
 Use k9s or kubectl to inspect `SandboxTemplate` (`sbt`), `SandboxWarmPool`
