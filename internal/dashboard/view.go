@@ -289,9 +289,9 @@ func (m model) headerInfoLines() []string {
 	case b.OwnerKind != "SandboxWarmPool":
 		badge, badgeStyle = b.OwnerKind, warnStyle
 	}
-	sess := dim("tmux off")
+	sess := dim("herdr off")
 	if m.sessions[b.Name] {
-		sess = warmStyle.Render("tmux live")
+		sess = warmStyle.Render("herdr live")
 	}
 	return []string{
 		nameStyle.Render(b.Name),

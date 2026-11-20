@@ -13,7 +13,7 @@ import (
 // a PTY or SSH splits ESC from the rest of the sequence across reads.
 var sgrMouseLeakRe = regexp.MustCompile(`^(?:\[?<\d+;\d+;\d+[Mm])+$`)
 
-var tmuxKeys = map[string]string{
+var shellKeys = map[string]string{
 	"enter":     "Enter",
 	"esc":       "Escape",
 	"up":        "Up",
@@ -76,12 +76,12 @@ func shellKeyFromMsg(msg tea.KeyMsg) (session.Key, bool) {
 	if msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace {
 		return session.Key{Text: string(msg.Runes)}, true
 	}
-	name, ok := tmuxKeyName(msg.String())
+	name, ok := shellKeyName(msg.String())
 	return session.Key{Name: name}, ok
 }
 
-func tmuxKeyName(s string) (string, bool) {
-	if name, ok := tmuxKeys[s]; ok {
+func shellKeyName(s string) (string, bool) {
+	if name, ok := shellKeys[s]; ok {
 		return name, true
 	}
 	if strings.HasPrefix(s, "ctrl+") && len(s) == 6 {

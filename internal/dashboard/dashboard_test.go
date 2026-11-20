@@ -391,7 +391,7 @@ func TestKeyboardNavigationAndActions(t *testing.T) {
 	}
 
 	// Enter on a running claimed pod returns the attach command, which
-	// the caller executes (not here: it would start a real tmux session).
+	// the caller executes (not here: it would start a real Herdr session).
 	running := baseModel()
 	running.selected = "agent-pool-bkl2p"
 	_, cmd = running.updateKeyboard(tea.KeyMsg{Type: tea.KeyEnter})
@@ -529,7 +529,7 @@ func TestViewFrame(t *testing.T) {
 		"· warm",
 		"owner agent-pool",
 		"Running",
-		"tmux live",
+		"herdr live",
 		"debian:12-slim",
 		"sleep infinity",
 		"100/500m",
@@ -569,7 +569,7 @@ func TestViewFrame(t *testing.T) {
 	// pool box instead.
 	m.selected = "agent-pool-bkl2p"
 	g := m.View()
-	for _, want := range []string{"· claimed", "my-agent", "tmux off", "2m / 500m"} {
+	for _, want := range []string{"· claimed", "my-agent", "herdr off", "2m / 500m"} {
 		if !strings.Contains(g, want) {
 			t.Errorf("claimed inspect missing %q", want)
 		}
@@ -588,7 +588,7 @@ func TestViewFrame(t *testing.T) {
 		t.Error("a warm sandbox must not show the shell pane")
 	}
 	m.selected = "agent-pool-lqbmx"
-	if g := m.View(); !strings.Contains(g, "tmux off") {
+	if g := m.View(); !strings.Contains(g, "herdr off") {
 		t.Errorf("inspect of a session-less pod = missing the off state")
 	}
 }
@@ -888,19 +888,19 @@ func TestMouseEscapeFragmentsDroppedFromShell(t *testing.T) {
 	}
 }
 
-func TestTmuxKeyName(t *testing.T) {
+func TestShellKeyName(t *testing.T) {
 	cases := map[string]string{
 		"enter": "Enter", "up": "Up", "backspace": "BSpace",
 		"ctrl+c": "C-c", "ctrl+d": "C-d", "tab": "Tab",
 	}
 	for in, want := range cases {
-		got, ok := tmuxKeyName(in)
+		got, ok := shellKeyName(in)
 		if !ok || got != want {
-			t.Errorf("tmuxKeyName(%q) = %q, %v, want %q", in, got, ok, want)
+			t.Errorf("shellKeyName(%q) = %q, %v, want %q", in, got, ok, want)
 		}
 	}
-	if _, ok := tmuxKeyName("f5"); ok {
-		t.Error("tmuxKeyName mapped an unknown key")
+	if _, ok := shellKeyName("f5"); ok {
+		t.Error("shellKeyName mapped an unknown key")
 	}
 }
 
@@ -995,7 +995,7 @@ func TestShellInputQueue(t *testing.T) {
 	}
 }
 
-// The shell tick and the post-send capture both size the tmux window to
+// The shell tick and the post-send capture both size the Herdr terminal to
 // the pane, so the embedded output wraps where it is shown.
 func TestShellResizeFollowsPaneSize(t *testing.T) {
 	m := baseModel()
@@ -1012,6 +1012,15 @@ func TestShellResizeFollowsPaneSize(t *testing.T) {
 	wantW, wantH := m.shellPaneSize()
 	if w != wantW || h != wantH {
 		t.Errorf("shell pane size = %dx%d, want %dx%d", w, h, wantW, wantH)
+	}
+}
+
+func TestSelectionResetsShellSize(t *testing.T) {
+	m := baseModel()
+	m.shellW, m.shellH = 80, 24
+	m.selectPod("another-pod")
+	if m.shellW != 0 || m.shellH != 0 {
+		t.Fatal("selection change must resize the new terminal")
 	}
 }
 
@@ -1116,7 +1125,7 @@ func TestHeaderBentoBoxes(t *testing.T) {
 	if len(info) != 4 {
 		t.Fatalf("info box has %d lines, want 4", len(info))
 	}
-	for _, want := range []string{"· warm", "owner agent-pool", "tmux live", "Running"} {
+	for _, want := range []string{"· warm", "owner agent-pool", "herdr live", "Running"} {
 		if !strings.Contains(strings.Join(info, " "), want) {
 			t.Errorf("info box missing %q", want)
 		}

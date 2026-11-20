@@ -18,8 +18,9 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: agent
-        image: debian:12-slim   # ships a real bash
-        command: ["/bin/bash", "-c", "sleep infinity"]
+        image: nightshift-agent:0.1.0   # build and load images/agent into kind first
+        imagePullPolicy: IfNotPresent
+        command: ["sleep", "infinity"]
         resources:   # cap each sandbox so bursts can't starve the node
           requests:
             cpu: 100m
