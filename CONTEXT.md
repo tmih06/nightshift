@@ -43,9 +43,15 @@ The demo runs on the kind cluster `kind-agent-sandbox` in the namespace
   `internal/ghdash/README.md` for the upstream commit and the local change.
   Go forbids importing another module's `internal` packages, which is why it
   is vendored rather than required.
+- `internal/zenocto` is the pull request view of
+  [zen-octo](https://github.com/praxis-labs-io/zen-octo) (MIT), vendored the
+  same way and repainted in gh-dash's look; see `internal/zenocto/README.md`
+  for the commit, what was left out, and the local changes.
 - `docs/` holds research notes. `docs/software-factory.md` traces the term
   "software factory" through its definitions from 1968 to 2026.
   `docs/session-manager.md` describes session behavior.
+- `.agents/skills/` holds the agent skills for this repo. `.claude/` is a
+  symlink to `.agents/`, so Claude Code reads the same skills.
 - `ARCHITECTURE.md` explains how the parts connect, with diagrams.
 
 ## The dashboard
@@ -57,7 +63,18 @@ The demo runs on the kind cluster `kind-agent-sandbox` in the namespace
   (the embedded shell, or a gh-dash search bar, prompt, or comment box) `tab`
   belongs to that tab instead.
 - The GitHub tab is gh-dash as it ships: pull requests, issues, and
-  notifications, switched with its own view keys. It rides on `gh`'s login,
+  notifications, switched with its own view keys.
+- `enter` on a pull request opens it in zen-octo's view, painted from
+  gh-dash's theme: gh-dash's preview head over Conversation, Commits, Checks,
+  and Files tabs, with a details rail. Everything zen-octo does on a pull
+  request works there: threaded replies, reactions, resolving, inline review
+  comments, reviews, labels, reviewers, assignees, base branch, state, job
+  logs and reruns, and merging. `esc` or `q` goes back to gh-dash; `?`
+  lists the keys. `tab` still switches nightshift's tabs, unless a form or
+  box holds the keyboard; the file, commit, or check column steps with
+  `ctrl+n` and `ctrl+p`. Issues stay in gh-dash's preview.
+  `go run ./cmd/nightshift -pr owner/repo#123` opens straight onto one.
+  The view only receives its own messages, as its model is large to copy. It rides on `gh`'s login,
   reads gh-dash's own config (`.gh-dash.yml` in the repo, `$GH_DASH_CONFIG`,
   or `~/.config/gh-dash/config.yml`), and scopes to the repository it was
   started in, as gh-dash does. A bad config stops nightshift before the TUI
@@ -109,6 +126,8 @@ toolchain on demand, and the repo needs no other Go config.
 
 - Run the program with `go run ./cmd/nightshift`.
 - Print one frame of the sandbox tab with `go run ./cmd/nightshift -once`.
+- Open on one pull request with
+  `go run ./cmd/nightshift -pr owner/repo#123` (or its URL).
 - Build with `go build -o <path> ./cmd/nightshift` to keep the binary out of
   the repo.
 

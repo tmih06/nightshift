@@ -2,7 +2,8 @@
 // watch and drive the agent-sandbox fleet, and a GitHub tab that is
 // gh-dash.
 //
-// go run ./cmd/nightshift opens the TUI; -once prints one sandbox frame.
+// go run ./cmd/nightshift opens the TUI; -once prints one sandbox frame;
+// -pr owner/repo#123 (or a pull request URL) opens on that pull request.
 package main
 
 import (
@@ -24,6 +25,7 @@ import (
 	"github.com/tmih06/nightshift/internal/ghdash/git"
 	ghtui "github.com/tmih06/nightshift/internal/ghdash/tui"
 	ghtheme "github.com/tmih06/nightshift/internal/ghdash/tui/theme"
+	zgh "github.com/tmih06/nightshift/internal/zenocto/gh"
 )
 
 func main() {
@@ -31,13 +33,26 @@ func main() {
 		fmt.Println(app.Once(120, 32))
 		return
 	}
-	if err := run(); err != nil {
+	var openPR string
+	if len(os.Args) > 2 && os.Args[1] == "-pr" {
+		openPR = os.Args[2]
+	}
+	if err := run(openPR); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
+func run(openPR string) error {
+	var start *zgh.PRRef
+	if openPR != "" {
+		ref, err := zgh.ParsePRRef(openPR)
+		if err != nil {
+			return err
+		}
+		start = &ref
+	}
+
 	// gh-dash logs to stderr, which would draw over the TUI. NIGHTSHIFT_DEBUG
 	// sends it to a file instead.
 	log.SetOutput(io.Discard)
@@ -69,7 +84,11 @@ func run() error {
 	zone.NewGlobal()
 	dash := ghtui.NewModel(location, ghtui.Repositories{GitRepo: gitRepo, GHRepo: &ghRepo})
 
-	_, err = tea.NewProgram(app.New(theme, app.NewGhDash(&dash), nil)).Run()
+	root := app.New(theme, app.NewGhDash(&dash), nil)
+	if start != nil {
+		root = root.StartOn(*start)
+	}
+	_, err = tea.NewProgram(root).Run()
 	return err
 }
 

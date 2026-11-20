@@ -12,3 +12,5 @@ modified files stating that you changed the files.
 Third-party vendored components:
 - internal/ghdash: gh-dash (https://github.com/dlvhdr/gh-dash),
   MIT License, Copyright (c) 2025 Dolev Hadar (internal/ghdash/LICENSE.txt).
+- internal/zenocto: zen-octo (https://github.com/praxis-labs-io/zen-octo),
+  MIT License, Copyright (c) 2026 Drew White (internal/zenocto/LICENSE).

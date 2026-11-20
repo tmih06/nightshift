@@ -16,6 +16,12 @@ Local changes, kept small so an upstream sync stays a copy and a rewrite:
   bar, prompt, or comment box needs `tab`.
 - `tui/common/styles.go`: `RenderPreviewTitle` drops the blank rows above
   and below the preview title.
+- `tui/components/footer/footer.go`, `tui/ui.go`: the footer's donate button
+  and its click handler are removed. To support gh-dash, see
+  [its sponsors page](https://github.com/sponsors/dlvhdr).
+- `tui/ui.go`, `tui/nightshift.go`: `enter` on a pull request row sends
+  `OpenPullRequestMsg`, and nightshift opens that pull request in zen-octo's
+  view (`internal/zenocto`). gh-dash binds nothing to `enter` there.
 
 To sync, copy upstream `internal/` over this directory, rerun the import
-rewrite and `gofmt -w`, and reapply the change above.
+rewrite and `gofmt -w`, and reapply the changes above.

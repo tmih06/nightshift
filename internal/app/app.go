@@ -5,6 +5,7 @@ package app
 
 import (
 	"fmt"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -13,6 +14,8 @@ import (
 	ghtui "github.com/tmih06/nightshift/internal/ghdash/tui"
 	"github.com/tmih06/nightshift/internal/ghdash/tui/context"
 	ghtheme "github.com/tmih06/nightshift/internal/ghdash/tui/theme"
+	zgh "github.com/tmih06/nightshift/internal/zenocto/gh"
+	zapp "github.com/tmih06/nightshift/internal/zenocto/tui/app"
 )
 
 // Tab names one page behind the tab bar.
@@ -49,6 +52,21 @@ type Model struct {
 	gh    GitHub
 	ghErr error
 
+	// pr is zen-octo's pull request view, made on the first enter on a pull
+	// request and kept; prOpen is whether it covers gh-dash right now.
+	pr          *zapp.Model
+	prOpen      bool
+	prClient    PullRequests
+	newPRClient func() (PullRequests, error)
+
+	// notice is a one-line message in the bar: opening, or why it failed.
+	notice    string
+	noticeBad bool
+	noticeAt  time.Time
+
+	// start is the pull request -pr asked for, opened once the screen is up.
+	start *ghtui.OpenPullRequestMsg
+
 	width  int
 	height int
 }
@@ -62,6 +80,13 @@ func New(theme ghtheme.Theme, gh GitHub, ghErr error) Model {
 		sandboxes: dashboard.New(theme),
 		gh:        gh,
 		ghErr:     ghErr,
+		newPRClient: func() (PullRequests, error) {
+			c, err := zgh.New()
+			if err != nil {
+				return nil, err
+			}
+			return c, nil
+		},
 	}
 }
 
@@ -72,6 +97,10 @@ func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{m.sandboxes.Init()}
 	if m.gh != nil {
 		cmds = append(cmds, m.gh.Init())
+	}
+	if m.start != nil {
+		open := *m.start
+		cmds = append(cmds, func() tea.Msg { return open })
 	}
 	return tea.Batch(cmds...)
 }
@@ -96,6 +125,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.PasteMsg:
 		return m.toActive(msg)
 
+	case ghtui.OpenPullRequestMsg:
+		return m.openPR(msg)
+
+	case prFoundMsg:
+		return m.prFound(msg)
+
+	case zapp.ClosedMsg:
+		m.prOpen = false
+		return m, nil
+
+	case noticeExpiredMsg:
+		if msg.at.Equal(m.noticeAt) {
+			m.notice = ""
+		}
+		return m, nil
+
 	case tea.MouseMsg:
 		mouse := msg.Mouse()
 		if mouse.Y < barHeight {
@@ -118,6 +163,9 @@ func (m Model) capturing() bool {
 	case TabSandboxes:
 		return m.sandboxes.Capturing()
 	case TabGitHub:
+		if m.prOpen {
+			return m.pr.Capturing()
+		}
 		return m.gh != nil && m.gh.Capturing()
 	}
 	return false
@@ -135,6 +183,9 @@ func (m Model) toActive(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case TabSandboxes:
 		m.sandboxes, cmd = m.sandboxes.Update(msg)
 	case TabGitHub:
+		if m.prOpen {
+			return m, m.updatePR(msg)
+		}
 		if m.gh == nil {
 			if key, ok := msg.(tea.KeyPressMsg); ok && (key.String() == "q" || key.String() == "ctrl+c") {
 				return m, tea.Quit
@@ -153,7 +204,7 @@ func (m Model) broadcast(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, sandboxCmd
 	}
 	prCmd = m.updateGitHub(msg)
-	return m, tea.Batch(sandboxCmd, prCmd)
+	return m, tea.Batch(sandboxCmd, prCmd, m.updatePR(msg))
 }
 
 // updateGitHub keeps gh-dash's pointer model; it updates in place, as it does
@@ -172,8 +223,14 @@ func (m Model) View() tea.View {
 	v.ReportFocus = true
 	v.MouseMode = tea.MouseModeCellMotion
 	v.WindowTitle = "nightshift"
-	if m.active == TabGitHub && m.gh != nil {
-		if c := m.gh.View().Cursor; c != nil {
+	if m.active == TabGitHub && (m.prOpen || m.gh != nil) {
+		var c *tea.Cursor
+		if m.prOpen {
+			c = m.pr.View().Cursor
+		} else {
+			c = m.gh.View().Cursor
+		}
+		if c != nil {
 			moved := *c
 			moved.Y += barHeight
 			v.Cursor = &moved
@@ -194,6 +251,8 @@ func (m Model) body() string {
 	switch {
 	case m.active == TabSandboxes:
 		return m.sandboxes.View()
+	case m.prOpen:
+		return m.pr.View().Content
 	case m.gh != nil:
 		return m.gh.View().Content
 	default:
