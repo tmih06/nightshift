@@ -84,6 +84,8 @@ Nightshift builds on these projects:
       dashboard
 - [x] Claim and destroy workspaces from the dashboard
 - [x] Read, discuss, review, and merge pull requests from the dashboard
+- [x] Pick up a pull request in a fresh workspace with one key, and keep its
+      work after the workspace is gone
 - [x] Switch between workspaces and pull requests with tabs
 
 ### The factory

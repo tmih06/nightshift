@@ -440,6 +440,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, func() tea.Msg { return open }
 
+			case key.Matches(msg, keys.PRKeys.Sandbox) && currRowData != nil && !reflect.ValueOf(currRowData).IsNil():
+				// nightshift: S checks the pull request out in a new sandbox.
+				open := SandboxPullRequestMsg{
+					Repo:   currRowData.GetRepoNameWithOwner(),
+					Number: currRowData.GetNumber(),
+					URL:    currRowData.GetUrl(),
+				}
+				if pr, ok := currRowData.(*prrow.Data); ok && pr.Primary != nil {
+					open.Branch = pr.Primary.HeadRefName
+				}
+				return m, func() tea.Msg { return open }
+
 			case key.Matches(msg, keys.PRKeys.PrevSidebarTab),
 				key.Matches(msg, keys.PRKeys.NextSidebarTab):
 				var scmds []tea.Cmd
