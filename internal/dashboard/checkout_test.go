@@ -556,3 +556,78 @@ func TestFocusPodSwitchesSectionSelectsAndAttaches(t *testing.T) {
 		t.Fatalf("warm pod: selected=%q section=%d focus=%v cmd=%v", next.selected, next.section, next.focus, cmd != nil)
 	}
 }
+
+func TestHarnessForPoolResolvesAllHarnesses(t *testing.T) {
+	cases := []struct {
+		pool    cluster.Pool
+		wantCmd string
+		wantLbl string
+	}{
+		{cluster.Pool{Name: "claude-code-pool", Template: "claude-code-template"}, "claude", "Claude Code"},
+		{cluster.Pool{Name: "codex-pool", Template: "codex-template"}, "codex", "Codex"},
+		{cluster.Pool{Name: "opencode-pool", Template: "opencode-template"}, "opencode", "OpenCode"},
+		{cluster.Pool{Name: "pi-pool", Template: "pi-template"}, "pi", "Pi"},
+		{cluster.Pool{Name: "custom-pool", TemplateYAML: "image: ghcr.io/tmih06/nightshift-pi:latest"}, "pi", "Pi"},
+		{cluster.Pool{Name: "api-pool", Template: "api-template"}, "", "api-template"},
+	}
+	for _, tc := range cases {
+		h := HarnessForPool(tc.pool)
+		if h.Command != tc.wantCmd || h.Label != tc.wantLbl {
+			t.Errorf("HarnessForPool(%q) = (%q, %q), want (%q, %q)", tc.pool.Name, h.Command, h.Label, tc.wantCmd, tc.wantLbl)
+		}
+		if len(h.Models) == 0 {
+			t.Errorf("HarnessForPool(%q) returned no model options", tc.pool.Name)
+		}
+	}
+}
+
+func TestCheckoutLaunchesHarnessWithSelectedModel(t *testing.T) {
+	co := Checkout{
+		Repo:    "acme/rocket",
+		Number:  7,
+		Branch:  "fix-auth",
+		Harness: "codex",
+		Model:   "gpt-5.3-codex",
+	}
+	if got := co.ShellLine(); got != "cd /home/node/workspace/rocket && git status -sb && codex --model gpt-5.3-codex" {
+		t.Errorf("ShellLine() = %q", got)
+	}
+
+	// Default model omits --model flag.
+	coDefault := Checkout{Repo: "acme/rocket", Number: 7, Harness: "claude"}
+	if got := coDefault.ShellLine(); got != "cd /home/node/workspace/rocket && git status -sb && claude" {
+		t.Errorf("default ShellLine() = %q", got)
+	}
+
+	// Model ID with special characters is shell-quoted.
+	coQuoted := Checkout{Repo: "acme/rocket", Number: 7, Harness: "pi", Model: "a b;rm"}
+	if got := coQuoted.ShellLine(); !strings.HasSuffix(got, " && pi --model 'a b;rm'") {
+		t.Errorf("quoted ShellLine() = %q", got)
+	}
+
+	// Pipeline types the launch line and reports harness+model on the shell step.
+	f := &fakeOps{}
+	var evs []checkoutEvent
+	runCheckout(f.ops(), co, "codex-template", func(ev checkoutEvent) { evs = append(evs, ev) })
+	wantLastCall := "type cd /home/node/workspace/rocket && git status -sb && codex --model gpt-5.3-codex"
+	if got := f.calls[len(f.calls)-1]; got != wantLastCall {
+		t.Errorf("last call = %q, want %q", got, wantLastCall)
+	}
+	foundStart := false
+	for _, ev := range evs {
+		if ev.step == stepShell && strings.Contains(ev.detail, "starting codex (gpt-5.3-codex)") {
+			foundStart = true
+		}
+	}
+	if !foundStart {
+		t.Errorf("stepShell detail did not name harness+model: %+v", evs)
+	}
+
+	// Checkout card displays the selected harness and model.
+	m := baseModel()
+	m.pools["codex-pool"] = cluster.Pool{Name: "codex-pool", Template: "codex-template"}
+	m, _ = m.CheckOut("codex-pool", co)
+	if view := m.plainView(); !strings.Contains(view, "on codex-template · codex (gpt-5.3-codex)") {
+		t.Errorf("checkout card missing harness/model:\n%s", view)
+	}
+}

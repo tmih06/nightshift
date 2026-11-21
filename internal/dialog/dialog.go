@@ -4,6 +4,7 @@
 package dialog
 
 import (
+	"image/color"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -35,6 +36,7 @@ type Menu struct {
 	Options      []Option
 	Cursor       int
 	Hint         string
+	Dimmed       bool
 }
 
 // Move steps the cursor by delta, wrapping round.
@@ -76,8 +78,19 @@ func (p Placed) OptionAt(x, y int) (int, bool) {
 	return i, p.Inside(x, y) && i >= 0 && i < p.options
 }
 
-// Place lays m out in the middle of a width×height area.
-func (m Menu) Place(th ghtheme.Theme, width, height int) Placed {
+// At returns a copy of p positioned at x, y, shifting its option and field
+// coordinates to match.
+func (p Placed) At(x, y int) Placed {
+	dy := y - p.Y
+	p.X = x
+	p.Y = y
+	p.optionTop += dy
+	p.fieldY += dy
+	return p
+}
+
+// Render builds m's framed box clamped to maxWidth columns, positioned at (0, 0).
+func (m Menu) Render(th ghtheme.Theme, maxWidth int) Placed {
 	inner := lipgloss.Width(m.Title)
 	for _, s := range append(append([]string{m.Hint, m.OptionsLabel}, m.Lines...), optionTexts(m.Options)...) {
 		inner = max(inner, lipgloss.Width(s))
@@ -85,10 +98,14 @@ func (m Menu) Place(th ghtheme.Theme, width, height int) Placed {
 	if m.Field != nil {
 		inner = max(inner, 44, lipgloss.Width(m.Field.Label), lipgloss.Width(m.Field.View), lipgloss.Width(m.Field.Err))
 	}
-	inner = min(inner, max(1, width-4))
+	inner = min(inner, max(1, maxWidth-4))
 
 	plain := lipgloss.NewStyle()
-	lines := []string{Line(plain.Foreground(th.PrimaryText).Bold(true), m.Title, inner)}
+	titleColor := th.PrimaryText
+	if m.Dimmed {
+		titleColor = th.SecondaryText
+	}
+	lines := []string{Line(plain.Foreground(titleColor).Bold(true), m.Title, inner)}
 	for _, l := range m.Lines {
 		lines = append(lines, Line(plain.Foreground(th.FaintText), l, inner))
 	}
@@ -97,7 +114,7 @@ func (m Menu) Place(th ghtheme.Theme, width, height int) Placed {
 	fieldRow := 0
 	if m.Field != nil {
 		labelStyle := plain.Foreground(th.FaintText)
-		if m.Field.Focused {
+		if m.Field.Focused && !m.Dimmed {
 			labelStyle = plain.Foreground(th.SuccessText).Bold(true)
 		}
 		lines = append(lines, Line(labelStyle, m.Field.Label, inner))
@@ -110,7 +127,7 @@ func (m Menu) Place(th ghtheme.Theme, width, height int) Placed {
 	}
 	if m.OptionsLabel != "" {
 		labelStyle := plain.Foreground(th.FaintText)
-		if m.Field == nil || !m.Field.Focused {
+		if !m.Dimmed && (m.Field == nil || !m.Field.Focused) {
 			labelStyle = plain.Foreground(th.SuccessText).Bold(true)
 		}
 		lines = append(lines, Line(labelStyle, m.OptionsLabel, inner))
@@ -119,31 +136,44 @@ func (m Menu) Place(th ghtheme.Theme, width, height int) Placed {
 	optRow := len(lines)
 	for i, o := range m.Options {
 		s := plain.Foreground(th.PrimaryText)
+		if m.Dimmed {
+			s = plain.Foreground(th.SecondaryText)
+		}
 		if o.Danger {
 			s = s.Foreground(th.ErrorText)
 		}
 		if i == m.Cursor {
 			s = s.Background(th.SelectedBackground).Bold(true)
+			if m.Dimmed && !o.Danger {
+				s = s.Foreground(th.PrimaryText)
+			}
 		}
 		lines = append(lines, Line(s, o.Text, inner))
 	}
 	if m.Hint != "" {
 		lines = append(lines, "", Line(plain.Foreground(th.FaintText), m.Hint, inner))
 	}
-	box := Box(th, lines)
+	borderColor := color.Color(th.SecondaryBorder)
+	if m.Dimmed {
+		borderColor = th.PrimaryBorder
+	}
+	box := BoxWithBorder(borderColor, lines)
 	w, h := lipgloss.Width(box), lipgloss.Height(box)
-	x, y := max(0, (width-w)/2), max(0, (height-h)/2)
 	return Placed{
 		Box:       box,
-		X:         x,
-		Y:         y,
 		W:         w,
 		H:         h,
-		optionTop: y + 1 + optRow,
+		optionTop: 1 + optRow,
 		options:   len(m.Options),
 		hasField:  m.Field != nil,
-		fieldY:    y + 1 + fieldRow,
+		fieldY:    1 + fieldRow,
 	}
+}
+
+// Place lays m out in the middle of a width×height area.
+func (m Menu) Place(th ghtheme.Theme, width, height int) Placed {
+	p := m.Render(th, width)
+	return p.At(max(0, (width-p.W)/2), max(0, (height-p.H)/2))
 }
 
 func optionTexts(opts []Option) []string {
@@ -161,9 +191,14 @@ func Line(style lipgloss.Style, text string, width int) string {
 
 // Box frames lines as gh-dash frames its popups.
 func Box(th ghtheme.Theme, lines []string) string {
+	return BoxWithBorder(th.SecondaryBorder, lines)
+}
+
+// BoxWithBorder frames lines in a rounded box with the given border color.
+func BoxWithBorder(border color.Color, lines []string) string {
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(th.SecondaryBorder).
+		BorderForeground(border).
 		Padding(0, 1).
 		Render(strings.Join(lines, "\n"))
 }
@@ -171,11 +206,23 @@ func Box(th ghtheme.Theme, lines []string) string {
 // Overlay draws box over base at x, y, first padding base to height rows so
 // the frame keeps its size whatever is under the box.
 func Overlay(base, box string, x, y, height int) string {
+	return OverlayLayers(base, height, lipgloss.NewLayer(box).X(x).Y(y).Z(1))
+}
+
+// OverlayLayers composites one or more positioned layers over base, first
+// padding base to height rows so the frame keeps its size.
+func OverlayLayers(base string, height int, layers ...*lipgloss.Layer) string {
+	if height > 0 && lipgloss.Width(base) == 0 {
+		// lipgloss.Compositor ignores zero-width rectangles when unioning bounds;
+		// anchor (0, 0) with a single space so layers positioned at x>0, y>0 are
+		// not shifted or clipped when base is blank.
+		base = " " + base
+	}
 	if missing := height - lipgloss.Height(base); missing > 0 {
 		base += strings.Repeat("\n", missing)
 	}
-	return lipgloss.NewCompositor(
-		lipgloss.NewLayer(base),
-		lipgloss.NewLayer(box).X(x).Y(y).Z(1),
-	).Render()
+	all := make([]*lipgloss.Layer, 0, 1+len(layers))
+	all = append(all, lipgloss.NewLayer(base))
+	all = append(all, layers...)
+	return lipgloss.NewCompositor(all...).Render()
 }

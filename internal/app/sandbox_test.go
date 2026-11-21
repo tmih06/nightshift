@@ -88,25 +88,130 @@ func TestThePickerHoldsTheKeyboard(t *testing.T) {
 	}
 }
 
-func TestPickingAPoolStartsTheCheckoutOnTheSandboxTab(t *testing.T) {
+func TestPickingAPoolOpensModelSubmenuAndEnterStartsCheckout(t *testing.T) {
 	m, _ := openPicker(t)
 	m = press(m, "j", "k") // codex-pool
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
+	if cmd != nil {
+		t.Fatal("opening the model submenu should not start checkout yet")
+	}
+	if m.picker == nil || !m.picker.modelOpen || m.picker.harness.Command != "codex" {
+		t.Fatalf("picker = %+v, want open codex model submenu", m.picker)
+	}
+
+	// Verify submenu forks to the right of the parent pool dialog and stays in bounds.
+	parent := m.pickerPlaced()
+	sub, hasSub := m.pickerSubPlaced()
+	if !hasSub {
+		t.Fatal("expected model submenu bounds")
+	}
+	if sub.X < parent.X+parent.W {
+		t.Errorf("submenu X=%d overlaps parent right edge %d", sub.X, parent.X+parent.W)
+	}
+	if sub.X+sub.W > m.width {
+		t.Errorf("submenu right edge %d exceeds width %d", sub.X+sub.W, m.width)
+	}
+	f := frame(m)
+	if len(f) != 40 {
+		t.Errorf("frame is %d rows, want 40", len(f))
+	}
+	for i, row := range f {
+		if w := ansi.StringWidth(row); w > 120 {
+			t.Errorf("row %d is %d wide", i, w)
+		}
+	}
+	body := strings.Join(f, "\n")
+	for _, want := range []string{"Codex", "Model", "gpt-5.3-codex", "gpt-5.2-codex", "├─┤"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("submenu view lacks %q:\n%s", want, body)
+		}
+	}
+
+	// Move down to second model (gpt-5.2-codex) with j, then press enter to start.
+	m = press(m, "j")
+	next, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
 	if cmd == nil {
-		t.Fatal("picking a pool returned no command")
+		t.Fatal("picking a model returned no command")
 	}
 	if m.picker != nil || m.active != TabSandboxes {
 		t.Fatalf("picker=%v active=%d, want it closed on the sandbox tab", m.picker != nil, m.active)
 	}
-	if body := strings.Join(frame(m), "\n"); !strings.Contains(body, "on codex-template") {
-		t.Errorf("the sandbox tab does not say what it starts:\n%s", body)
+	if body := strings.Join(frame(m), "\n"); !strings.Contains(body, "on codex-template · codex (gpt-5.2-codex)") {
+		t.Errorf("the sandbox tab does not show template, harness, and model:\n%s", body)
+	}
+}
+
+func TestSubmenuNavigationWithArrowsAndHJKL(t *testing.T) {
+	m, _ := openPicker(t)
+	// l / right opens submenu for codex-pool.
+	m = press(m, "l")
+	if m.picker == nil || !m.picker.modelOpen || m.picker.harness.Command != "codex" {
+		t.Fatalf("l did not open codex submenu: %+v", m.picker)
+	}
+	// j / down and k / up move through models.
+	m = press(m, "j")
+	if m.picker.modelCursor != 1 {
+		t.Fatalf("modelCursor after j = %d, want 1", m.picker.modelCursor)
+	}
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	m = next.(Model)
+	if m.picker.modelCursor != 0 {
+		t.Fatalf("modelCursor after up = %d, want 0", m.picker.modelCursor)
+	}
+	// h / left closes submenu back to pool list (keeping picker open).
+	m = press(m, "h")
+	if m.picker == nil || m.picker.modelOpen {
+		t.Fatalf("h should close submenu and stay in pool picker: %+v", m.picker)
+	}
+	// Move to pi-pool with down arrow, open with right arrow.
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	m = next.(Model)
+	if m.picker == nil || !m.picker.modelOpen || m.picker.harness.Command != "pi" {
+		t.Fatalf("right did not open pi submenu: %+v", m.picker)
+	}
+	// esc closes submenu first; second esc closes the whole picker.
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = next.(Model)
+	if m.picker == nil || m.picker.modelOpen {
+		t.Fatalf("first esc should close submenu only: %+v", m.picker)
+	}
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = next.(Model)
+	if m.picker != nil {
+		t.Fatal("second esc did not close picker")
+	}
+}
+
+func TestSubmenuFitsOnNarrowTerminal(t *testing.T) {
+	m, _ := openPicker(t)
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 68, Height: 24})
+	m = next.(Model)
+	m = press(m, "l")
+	if m.picker == nil || !m.picker.modelOpen {
+		t.Fatal("submenu did not open on narrow terminal")
+	}
+	f := frame(m)
+	if len(f) != 24 {
+		t.Errorf("frame height = %d, want 24", len(f))
+	}
+	for i, row := range f {
+		if w := ansi.StringWidth(row); w > 68 {
+			t.Errorf("narrow row %d is %d wide (> 68)", i, w)
+		}
+	}
+	if body := strings.Join(f, "\n"); !strings.Contains(body, "gpt-5.3-codex") {
+		t.Errorf("narrow terminal submenu missing model option:\n%s", body)
 	}
 }
 
 func TestTheBarFollowsTheCheckoutFromTheGitHubTab(t *testing.T) {
 	m, _ := openPicker(t)
-	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // open model submenu
+	next, _ = next.(Model).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = press(next.(Model), "tab")
 	if m.active != TabGitHub {
 		t.Fatal("tab did not go back to GitHub")
@@ -116,32 +221,48 @@ func TestTheBarFollowsTheCheckoutFromTheGitHubTab(t *testing.T) {
 	}
 }
 
-func TestANumberPicksItsPool(t *testing.T) {
+func TestANumberPicksItsPoolThenModel(t *testing.T) {
 	m, _ := openPicker(t)
-	next, cmd := m.Update(key("2"))
+	next, cmd := m.Update(key("2")) // pi-pool -> opens Pi model submenu
+	m = next.(Model)
+	if cmd != nil || m.picker == nil || !m.picker.modelOpen || m.picker.harness.Command != "pi" {
+		t.Fatalf("2 did not open pi model submenu: cmd=%v picker=%+v", cmd != nil, m.picker)
+	}
+	next, cmd = m.Update(key("2")) // 2nd Pi model: anthropic/claude-opus
 	m = next.(Model)
 	if cmd == nil || m.active != TabSandboxes {
-		t.Fatal("2 did not claim")
+		t.Fatal("model digit did not start checkout")
 	}
-	if body := strings.Join(frame(m), "\n"); !strings.Contains(body, "on pi-template") {
-		t.Errorf("2 claimed the wrong pool:\n%s", body)
+	if body := strings.Join(frame(m), "\n"); !strings.Contains(body, "on pi-template · pi (anthropic/claude-opus)") {
+		t.Errorf("2->2 claimed the wrong pool/model:\n%s", body)
 	}
 }
 
-func TestAClickOnARowPicksItAndOneOutsideCancels(t *testing.T) {
+func TestAClickOnARowOpensSubmenuAndClickingModelStarts(t *testing.T) {
 	m, _ := openPicker(t)
 	p := m.pickerPlaced()
 	next, _ := m.Update(tea.MouseClickMsg{X: 0, Y: barHeight, Button: tea.MouseLeft})
 	if next.(Model).picker != nil {
 		t.Error("a click outside left the picker open")
 	}
+	// Click on pool row 1 (pi-pool) opens Pi model submenu.
 	next, cmd := m.Update(tea.MouseClickMsg{X: p.X + 4, Y: barHeight + p.OptionY(1), Button: tea.MouseLeft})
 	m = next.(Model)
-	if cmd == nil || m.active != TabSandboxes {
-		t.Fatal("a click on a pool did not claim it")
+	if cmd != nil || m.picker == nil || !m.picker.modelOpen || m.picker.harness.Command != "pi" {
+		t.Fatalf("a click on a pool did not open its model submenu: cmd=%v picker=%+v", cmd != nil, m.picker)
 	}
-	if body := strings.Join(frame(m), "\n"); !strings.Contains(body, "on pi-template") {
-		t.Errorf("the click claimed the wrong pool:\n%s", body)
+	// Click on model row 0 inside submenu starts checkout.
+	sub, ok := m.pickerSubPlaced()
+	if !ok {
+		t.Fatal("submenu not placed")
+	}
+	next, cmd = m.Update(tea.MouseClickMsg{X: sub.X + 4, Y: barHeight + sub.OptionY(0), Button: tea.MouseLeft})
+	m = next.(Model)
+	if cmd == nil || m.active != TabSandboxes {
+		t.Fatal("a click on a model did not start checkout")
+	}
+	if body := strings.Join(frame(m), "\n"); !strings.Contains(body, "on pi-template · pi (anthropic/claude-sonnet)") {
+		t.Errorf("the click claimed the wrong pool/model:\n%s", body)
 	}
 }
 
@@ -254,7 +375,7 @@ func TestIssuePickerEditsBranchPicksPoolAndValidates(t *testing.T) {
 		t.Errorf("dialog lacks validation error:\n%s", body)
 	}
 
-	// Replace with a valid branch, tab to pool list, press 2 to pick pi-pool.
+	// Replace with a valid branch, tab to pool list, press 2 to open pi-pool's model submenu, then enter to start.
 	next, _ = m.Update(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
 	m = next.(Model)
 	next, _ = m.Update(tea.PasteMsg{Content: "feat/issue-42"})
@@ -265,10 +386,15 @@ func TestIssuePickerEditsBranchPicksPoolAndValidates(t *testing.T) {
 	}
 	next, cmd = m.Update(key("2"))
 	m = next.(Model)
-	if cmd == nil || m.picker != nil || m.active != TabSandboxes {
-		t.Fatalf("picking pool 2 failed: cmd=%v picker=%v active=%d", cmd != nil, m.picker != nil, m.active)
+	if cmd != nil || m.picker == nil || !m.picker.modelOpen || m.picker.harness.Command != "pi" {
+		t.Fatalf("picking pool 2 did not open pi model submenu: cmd=%v picker=%+v", cmd != nil, m.picker)
 	}
-	if body := strings.Join(frame(m), "\n"); !strings.Contains(body, "Checking out acme/rocket#42") || !strings.Contains(body, "on pi-template") {
+	next, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	if cmd == nil || m.picker != nil || m.active != TabSandboxes {
+		t.Fatalf("confirming model failed: cmd=%v picker=%v active=%d", cmd != nil, m.picker != nil, m.active)
+	}
+	if body := strings.Join(frame(m), "\n"); !strings.Contains(body, "Checking out acme/rocket#42") || !strings.Contains(body, "on pi-template · pi (anthropic/claude-sonnet)") {
 		t.Errorf("sandbox tab did not start issue checkout:\n%s", body)
 	}
 }
@@ -288,14 +414,23 @@ func TestIssuePickerMouseFocusesBranchAndPicksPool(t *testing.T) {
 		t.Fatalf("click on branch did not focus it: picker=%v focusBranch=%v", m.picker != nil, m.picker != nil && m.picker.focusBranch)
 	}
 
-	// Click on pool row starts checkout.
+	// Click on pool row opens its model submenu; clicking a model starts checkout.
 	next, cmd = m.Update(tea.MouseClickMsg{X: p.X + 4, Y: barHeight + p.OptionY(1), Button: tea.MouseLeft})
 	m = next.(Model)
-	if cmd == nil || m.picker != nil || m.active != TabSandboxes {
-		t.Fatalf("click on pool did not start checkout: cmd=%v active=%d", cmd != nil, m.active)
+	if cmd != nil || m.picker == nil || !m.picker.modelOpen {
+		t.Fatalf("click on pool did not open model submenu: cmd=%v picker=%+v", cmd != nil, m.picker)
 	}
-	if body := strings.Join(frame(m), "\n"); !strings.Contains(body, "on pi-template") {
-		t.Errorf("click picked wrong pool:\n%s", body)
+	sub, ok := m.pickerSubPlaced()
+	if !ok {
+		t.Fatal("expected model submenu bounds")
+	}
+	next, cmd = m.Update(tea.MouseClickMsg{X: sub.X + 4, Y: barHeight + sub.OptionY(0), Button: tea.MouseLeft})
+	m = next.(Model)
+	if cmd == nil || m.picker != nil || m.active != TabSandboxes {
+		t.Fatalf("click on model did not start checkout: cmd=%v active=%d", cmd != nil, m.active)
+	}
+	if body := strings.Join(frame(m), "\n"); !strings.Contains(body, "on pi-template · pi (anthropic/claude-sonnet)") {
+		t.Errorf("click picked wrong pool/model:\n%s", body)
 	}
 }
 
@@ -450,11 +585,20 @@ func TestRepoPickerEditsValidatesMouseAndStartsCheckout(t *testing.T) {
 	}
 	next, cmd = m.Update(tea.MouseClickMsg{X: p.X + 4, Y: barHeight + p.OptionY(1), Button: tea.MouseLeft})
 	m = next.(Model)
+	if cmd != nil || m.picker == nil || !m.picker.modelOpen {
+		t.Fatalf("click on pool did not open model submenu: cmd=%v picker=%+v", cmd != nil, m.picker)
+	}
+	sub, ok := m.pickerSubPlaced()
+	if !ok {
+		t.Fatal("expected model submenu bounds")
+	}
+	next, cmd = m.Update(tea.MouseClickMsg{X: sub.X + 4, Y: barHeight + sub.OptionY(0), Button: tea.MouseLeft})
+	m = next.(Model)
 	if cmd == nil || m.picker != nil || m.active != TabSandboxes {
-		t.Fatalf("click on pool did not start repo checkout: cmd=%v picker=%v active=%d", cmd != nil, m.picker != nil, m.active)
+		t.Fatalf("click on model did not start repo checkout: cmd=%v picker=%v active=%d", cmd != nil, m.picker != nil, m.active)
 	}
 	body := strings.Join(frame(m), "\n")
-	if !strings.Contains(body, "Checking out acme/rocket@release/v2") || !strings.Contains(body, "on pi-template") {
+	if !strings.Contains(body, "Checking out acme/rocket@release/v2") || !strings.Contains(body, "on pi-template · pi (anthropic/claude-sonnet)") {
 		t.Errorf("sandbox tab did not start repo checkout:\n%s", body)
 	}
 }

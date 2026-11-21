@@ -37,10 +37,12 @@ const (
 // Checkout is a pull request, issue, or repository branch to keep on its own
 // volume and work on in a sandbox that mounts it.
 type Checkout struct {
-	Repo   string // owner/name
-	Number int
-	Branch string // head branch for a PR (empty -> pr-<n>), issue branch (empty -> issue-<n>), or repo branch (empty -> main)
-	Kind   CheckoutKind
+	Repo    string // owner/name
+	Number  int
+	Branch  string // head branch for a PR (empty -> pr-<n>), issue branch (empty -> issue-<n>), or repo branch (empty -> main)
+	Kind    CheckoutKind
+	Harness string // coding agent CLI command to launch (e.g. "claude", "codex", "pi", "opencode"); empty leaves bash open
+	Model   string // model ID passed to --model; empty uses the harness default
 }
 
 func (c Checkout) String() string {
@@ -157,13 +159,32 @@ func (c Checkout) ShellLine() string {
 
 // shellLine is what the sandbox's bash is given. When an issue or repository
 // checkout reuses a kept volume, it also checks out (or creates) the requested
-// branch without resetting any existing local branch.
+// branch without resetting any existing local branch. When a coding agent
+// harness was selected, it launches the harness (with the chosen model, if any)
+// directly inside the repository directory.
 func (c Checkout) shellLine(cloned bool) string {
+	var line string
 	if (c.Kind == CheckoutIssue || c.Kind == CheckoutRepo) && cloned {
 		b := shellQuote(c.branch())
-		return "cd " + shellQuote(c.MountPath()) + " && (git checkout " + b + " 2>/dev/null || git checkout -b " + b + ") && git status -sb"
+		line = "cd " + shellQuote(c.MountPath()) + " && (git checkout " + b + " 2>/dev/null || git checkout -b " + b + ") && git status -sb"
+	} else {
+		line = "cd " + shellQuote(c.MountPath()) + " && git status -sb"
 	}
-	return "cd " + shellQuote(c.MountPath()) + " && git status -sb"
+	if cmd := LaunchCommand(c.Harness, c.Model); cmd != "" {
+		line += " && " + cmd
+	}
+	return line
+}
+
+func (c Checkout) harnessSummary() string {
+	h := strings.TrimSpace(c.Harness)
+	if h == "" {
+		return ""
+	}
+	if m := strings.TrimSpace(c.Model); m != "" {
+		return h + " (" + m + ")"
+	}
+	return h
 }
 
 var shellSafe = regexp.MustCompile(`^[A-Za-z0-9_./:@%+=,-]+$`)
@@ -326,7 +347,11 @@ func runCheckout(ops checkoutOps, c Checkout, template string, emit func(checkou
 	}
 	say(checkoutEvent{step: stepSandbox, pod: name, finished: true, detail: name})
 
-	say(checkoutEvent{step: stepShell, pod: name, detail: "starting bash"})
+	shellDetail := "starting bash"
+	if summary := c.harnessSummary(); summary != "" {
+		shellDetail = "starting " + summary
+	}
+	say(checkoutEvent{step: stepShell, pod: name, detail: shellDetail})
 	if err := ops.ensure(name); err != nil {
 		fail(stepShell, err)
 		return
@@ -486,9 +511,14 @@ func (m model) checkoutCard(now time.Time) string {
 	inner := min(cardInner, max(10, m.width-6))
 	plain := lipgloss.NewStyle()
 	faint := plain.Foreground(th.FaintText)
+	sub := "on " + r.template
+	if summary := r.co.harnessSummary(); summary != "" {
+		sub += " · " + summary
+	}
+	sub += " · " + elapsed(now.Sub(r.began))
 	lines := []string{
 		dialog.Line(plain.Foreground(th.PrimaryText).Bold(true), "Checking out "+r.co.String(), inner),
-		dialog.Line(faint, "on "+r.template+" · "+elapsed(now.Sub(r.began)), inner),
+		dialog.Line(faint, sub, inner),
 		"",
 	}
 	const label = 9
@@ -549,6 +579,10 @@ func (m model) focusCheckout(pod string, c Checkout) (Model, tea.Cmd) {
 	}
 	m.focus = focusShell
 	m.prefix = false
-	m.flash(c.String() + " is in " + c.MountPath() + " — C-b q leaves bash")
+	if summary := c.harnessSummary(); summary != "" {
+		m.flash(c.String() + " is in " + c.MountPath() + " · " + summary + " — C-b q leaves shell")
+	} else {
+		m.flash(c.String() + " is in " + c.MountPath() + " — C-b q leaves bash")
+	}
 	return m, tea.Batch(fetchCmd(), m.watchShell())
 }
