@@ -19,10 +19,13 @@ func TestCloneScriptClonesTheHeadIntoTheVolume(t *testing.T) {
 	got := rocket.CloneScript()
 	for _, want := range []string{
 		"set -euo pipefail\n",
-		"\nrm -rf repo\n",
-		"\ngit clone --progress https://github.com/acme/rocket.git repo 2>&1 | lines\n",
+		"http.version GIT_CONFIG_VALUE_0=HTTP/1.1",
+		"http.lowSpeedLimit GIT_CONFIG_VALUE_1=1024",
+		"http.lowSpeedTime GIT_CONFIG_VALUE_2=20",
+		"rm -rf repo\n",
+		"git clone --progress https://github.com/acme/rocket.git repo 2>&1 | lines",
 		"\ncd repo\n",
-		"\ngit fetch --progress origin pull/7/head 2>&1 | lines\n",
+		"git fetch --progress origin pull/7/head 2>&1 | lines",
 		"\ngit checkout -B fix-auth FETCH_HEAD",
 		`tr '\r' '\n'`,
 	} {
@@ -56,8 +59,9 @@ func TestIssueCloneScriptChecksOutTheRequestedBranch(t *testing.T) {
 	got := issue.CloneScript()
 	for _, want := range []string{
 		"set -euo pipefail\n",
-		"\nrm -rf repo\n",
-		"\ngit clone --progress https://github.com/acme/rocket.git repo 2>&1 | lines\n",
+		"http.version GIT_CONFIG_VALUE_0=HTTP/1.1",
+		"rm -rf repo\n",
+		"git clone --progress https://github.com/acme/rocket.git repo 2>&1 | lines",
 		"\ncd repo\n",
 		"if git show-ref --verify --quiet refs/remotes/origin/feat/dark-mode; then git checkout -B feat/dark-mode --track refs/remotes/origin/feat/dark-mode; else git checkout -B feat/dark-mode; fi",
 	} {

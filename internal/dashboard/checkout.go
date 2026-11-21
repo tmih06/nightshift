@@ -63,17 +63,27 @@ func (c Checkout) branch() string {
 // unfinished clone left, clones over https into cluster.VolumeRepoDir, and
 // checks out either the pull request's head ref (which works for forks too and
 // needs no gh in the image) or the chosen branch for an issue (tracking
-// origin/<branch> if it already exists, or creating it from HEAD). git's
-// progress is carriage returns on one line, which the container log would hold
-// back until the line ends, so it is turned into lines, unbuffered, for the
-// dashboard to follow.
+// origin/<branch> if it already exists, or creating it from HEAD). It pins
+// HTTP/1.1 with a low-speed timeout and retries transient stalls so a hung
+// GitHub stream does not sit decaying for minutes. git's progress is carriage
+// returns on one line, which the container log would hold back until the line
+// ends, so it is turned into lines, unbuffered, for the dashboard to follow.
 func (c Checkout) CloneScript() string {
 	dir := cluster.VolumeRepoDir
 	lines := []string{
 		"set -euo pipefail",
 		`lines() { if command -v stdbuf >/dev/null; then stdbuf -o0 tr '\r' '\n'; else tr '\r' '\n'; fi; }`,
-		"rm -rf " + dir,
-		"git clone --progress " + shellQuote("https://github.com/"+c.Repo+".git") + " " + dir + " 2>&1 | lines",
+		"export GIT_CONFIG_COUNT=3",
+		"export GIT_CONFIG_KEY_0=http.version GIT_CONFIG_VALUE_0=HTTP/1.1",
+		"export GIT_CONFIG_KEY_1=http.lowSpeedLimit GIT_CONFIG_VALUE_1=1024",
+		"export GIT_CONFIG_KEY_2=http.lowSpeedTime GIT_CONFIG_VALUE_2=20",
+		"for i in 1 2 3; do",
+		"  rm -rf " + dir,
+		"  if git clone --progress " + shellQuote("https://github.com/"+c.Repo+".git") + " " + dir + " 2>&1 | lines; then break; fi",
+		`  [ "$i" -lt 3 ] || exit 1`,
+		`  echo "clone stalled, retrying ($((i+1))/3)..."`,
+		"  sleep 2",
+		"done",
 		"cd " + dir,
 	}
 	if c.Issue {
@@ -84,7 +94,12 @@ func (c Checkout) CloneScript() string {
 		)
 	} else {
 		lines = append(lines,
-			fmt.Sprintf("git fetch --progress origin pull/%d/head 2>&1 | lines", c.Number),
+			"for i in 1 2 3; do",
+			fmt.Sprintf("  if git fetch --progress origin pull/%d/head 2>&1 | lines; then break; fi", c.Number),
+			`  [ "$i" -lt 3 ] || exit 1`,
+			`  echo "fetch stalled, retrying ($((i+1))/3)..."`,
+			"  sleep 2",
+			"done",
 			"git checkout -B "+shellQuote(c.branch())+" FETCH_HEAD",
 		)
 	}
