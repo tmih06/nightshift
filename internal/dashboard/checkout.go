@@ -25,18 +25,24 @@ const (
 	podTimeout   = 3 * time.Minute
 )
 
-// Checkout is a pull request to keep on its own volume and work on in a
-// sandbox that mounts it.
+// Checkout is a pull request or issue to keep on its own volume and work on in
+// a sandbox that mounts it.
 type Checkout struct {
 	Repo   string // owner/name
 	Number int
-	Branch string // the head branch; empty checks out pr-<number>
+	Branch string // head branch for a PR (empty -> pr-<n>), or chosen branch for an issue (empty -> issue-<n>)
+	Issue  bool
 }
 
 func (c Checkout) String() string { return fmt.Sprintf("%s#%d", c.Repo, c.Number) }
 
-// Volume is the volume that keeps the pull request.
-func (c Checkout) Volume() string { return cluster.VolumeName(c.Repo, c.Number) }
+// Volume is the volume that keeps the pull request or issue.
+func (c Checkout) Volume() string {
+	if c.Issue {
+		return cluster.IssueVolumeName(c.Repo, c.Number)
+	}
+	return cluster.VolumeName(c.Repo, c.Number)
+}
 
 // MountPath is where the volume sits in the sandbox.
 func (c Checkout) MountPath() string {
@@ -44,34 +50,61 @@ func (c Checkout) MountPath() string {
 }
 
 func (c Checkout) branch() string {
-	if c.Branch == "" {
-		return fmt.Sprintf("pr-%d", c.Number)
+	if c.Branch != "" {
+		return c.Branch
 	}
-	return c.Branch
+	if c.Issue {
+		return fmt.Sprintf("issue-%d", c.Number)
+	}
+	return fmt.Sprintf("pr-%d", c.Number)
 }
 
 // CloneScript runs at the volume's root in the clone Job. It drops what an
 // unfinished clone left, clones over https into cluster.VolumeRepoDir, and
-// fetches the pull request's head ref, which works for forks too and needs
-// no gh in the image. git's progress is carriage returns on one line, which
-// the container log would hold back until the line ends, so it is turned
-// into lines, unbuffered, for the dashboard to follow.
+// checks out either the pull request's head ref (which works for forks too and
+// needs no gh in the image) or the chosen branch for an issue (tracking
+// origin/<branch> if it already exists, or creating it from HEAD). git's
+// progress is carriage returns on one line, which the container log would hold
+// back until the line ends, so it is turned into lines, unbuffered, for the
+// dashboard to follow.
 func (c Checkout) CloneScript() string {
 	dir := cluster.VolumeRepoDir
-	return strings.Join([]string{
+	lines := []string{
 		"set -euo pipefail",
 		`lines() { if command -v stdbuf >/dev/null; then stdbuf -o0 tr '\r' '\n'; else tr '\r' '\n'; fi; }`,
 		"rm -rf " + dir,
 		"git clone --progress " + shellQuote("https://github.com/"+c.Repo+".git") + " " + dir + " 2>&1 | lines",
 		"cd " + dir,
-		fmt.Sprintf("git fetch --progress origin pull/%d/head 2>&1 | lines", c.Number),
-		"git checkout -B " + shellQuote(c.branch()) + " FETCH_HEAD",
-	}, "\n")
+	}
+	if c.Issue {
+		b := shellQuote(c.branch())
+		ref := shellQuote("refs/remotes/origin/" + c.branch())
+		lines = append(lines,
+			"if git show-ref --verify --quiet "+ref+"; then git checkout -B "+b+" --track "+ref+"; else git checkout -B "+b+"; fi",
+		)
+	} else {
+		lines = append(lines,
+			fmt.Sprintf("git fetch --progress origin pull/%d/head 2>&1 | lines", c.Number),
+			"git checkout -B "+shellQuote(c.branch())+" FETCH_HEAD",
+		)
+	}
+	return strings.Join(lines, "\n")
 }
 
-// ShellLine is what the sandbox's bash is given: into the clone, and where
-// it stands.
+// ShellLine is what the sandbox's bash is given after a fresh clone: into the
+// clone, and where it stands.
 func (c Checkout) ShellLine() string {
+	return c.shellLine(false)
+}
+
+// shellLine is what the sandbox's bash is given. When an issue reuses a kept
+// volume, it also checks out (or creates) the requested branch without
+// resetting any existing local branch.
+func (c Checkout) shellLine(cloned bool) string {
+	if c.Issue && cloned {
+		b := shellQuote(c.branch())
+		return "cd " + shellQuote(c.MountPath()) + " && (git checkout " + b + " 2>/dev/null || git checkout -b " + b + ") && git status -sb"
+	}
 	return "cd " + shellQuote(c.MountPath()) + " && git status -sb"
 }
 
@@ -187,7 +220,7 @@ func runCheckout(ops checkoutOps, c Checkout, template string, emit func(checkou
 	exists, cloned, err := ops.volumeState(vol)
 	if err == nil && !exists {
 		say(checkoutEvent{step: stepVolume, detail: "creating " + vol})
-		err = ops.createVolume(vol, cluster.VolumeFor{Repo: c.Repo, Number: c.Number, Branch: c.Branch})
+		err = ops.createVolume(vol, cluster.VolumeFor{Repo: c.Repo, Number: c.Number, Branch: c.branch(), Issue: c.Issue})
 	}
 	if err != nil {
 		fail(stepVolume, err)
@@ -240,7 +273,7 @@ func runCheckout(ops checkoutOps, c Checkout, template string, emit func(checkou
 		fail(stepShell, err)
 		return
 	}
-	if err := ops.send(name, []session.Key{{Text: c.ShellLine()}, {Name: "Enter"}}); err != nil {
+	if err := ops.send(name, []session.Key{{Text: c.shellLine(cloned)}, {Name: "Enter"}}); err != nil {
 		fail(stepShell, fmt.Errorf("could not type into bash: %w", err))
 		return
 	}

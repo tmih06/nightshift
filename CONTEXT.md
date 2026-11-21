@@ -83,25 +83,31 @@ The demo runs on the kind cluster `kind-agent-sandbox` in the namespace
   or `~/.config/gh-dash/config.yml`), and scopes to the repository it was
   started in, as gh-dash does. A bad config stops nightshift before the TUI
   opens. gh-dash's log is discarded unless `NIGHTSHIFT_DEBUG` names a file.
-- `S` on a pull request row checks it out on its own volume in a new
-  sandbox. A dialog over gh-dash names the volume and lists the pools with
-  their templates; `↑`/`↓` or a number picks the agent, `enter` or a click
-  starts it, and `esc` cancels. The volume is a PersistentVolumeClaim named
-  `pr-<owner>-<repo>-<n>`. The first time, a Job on the agent's image clones
-  the repository over https into it and checks out the pull request's head
-  ref, named after its head branch (or `pr-<n>`). Then a Sandbox starts from
-  the pool's template with the clone mounted at `~/workspace/<repo>`, and the
-  Sandboxes tab opens with its shell focused there. A running pod cannot take
-  a new volume, so this sandbox starts cold rather than from the warm pool.
-  While it runs, a card in the Sandboxes tab's bottom right follows the
-  volume, clone, sandbox, and shell steps. It shows git's phase with a bar,
-  size, and speed, read from the clone Job's log, the pod's state while its
-  image pulls, and each step's time. The tab bar carries the same in one line
-  while the GitHub tab is open. One checkout runs at a time. Nothing owns the
-  volume: `x` on the sandbox opens a dialog to keep the volume (the default)
-  or destroy it too, and `S` on the same pull request later mounts a kept
-  volume with its work, or returns to the sandbox already on it. The image carries no `gh` and no credentials, so the clone
-  only reaches public repositories.
+- `S` on a pull request or issue row checks it out on its own volume in a new
+  sandbox. On a pull request, a dialog over gh-dash names the volume and lists
+  the pools with their templates; `↑`/`↓` or a number picks the agent, `enter`
+  or a click starts it, and `esc` cancels. On an issue, the same dialog also
+  includes a branch name input (defaulting to `issue-<n>`, `tab` switches
+  between branch and pool, `↑`/`↓` still steps through pools while typing). The
+  volume is a PersistentVolumeClaim named `pr-<owner>-<repo>-<n>` for a pull
+  request or `issue-<owner>-<repo>-<n>` for an issue. The first time, a Job on
+  the agent's image clones the repository over https into it and checks out
+  either the pull request's head ref (named after its head branch, or `pr-<n>`)
+  or the chosen issue branch (tracking `origin/<branch>` if it exists remotely,
+  otherwise creating it from HEAD). Then a Sandbox starts from the pool's
+  template with the clone mounted at `~/workspace/<repo>`, and the Sandboxes
+  tab opens with its shell focused there. A running pod cannot take a new
+  volume, so this sandbox starts cold rather than from the warm pool. While it
+  runs, a card in the Sandboxes tab's bottom right follows the volume, clone,
+  sandbox, and shell steps. It shows git's phase with a bar, size, and speed,
+  read from the clone Job's log, the pod's state while its image pulls, and each
+  step's time. The tab bar carries the same in one line while the GitHub tab is
+  open. One checkout runs at a time. Nothing owns the volume: `x` on the
+  sandbox opens a dialog to keep the volume (the default) or destroy it too,
+  and `S` on the same pull request or issue later mounts a kept volume with its
+  work (switching to the requested branch on an issue), or returns to the
+  sandbox already on it. The image carries no `gh` and no credentials, so the
+  clone only reaches public repositories.
 - The Sandboxes tab is laid out like gh-dash and painted from gh-dash's
   theme. Section tabs (All, Warm, Claimed; `h`/`l` or a click) sit over a
   table with gh-dash's header row, two lines per sandbox (node and owner,

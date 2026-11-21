@@ -20,6 +20,16 @@ func TestVolumeNamesAreValidAndStable(t *testing.T) {
 	if VolumeName("a/b", 1) == VolumeName("a/b", 2) {
 		t.Error("two pull requests share a volume")
 	}
+	if got := IssueVolumeName("acme/rocket", 42); got != "issue-acme-rocket-42" {
+		t.Errorf("issue short = %s", got)
+	}
+	if IssueVolumeName("acme/rocket", 7) == VolumeName("acme/rocket", 7) {
+		t.Error("issue and pull request share a volume")
+	}
+	longIssue := IssueVolumeName("some-very-long-organisation-name/an-even-longer-repository-name-here", 12345)
+	if len(longIssue) > 63 || !strings.HasSuffix(longIssue, "-12345") || !strings.HasPrefix(longIssue, "issue-") {
+		t.Errorf("long issue = %s (%d)", longIssue, len(longIssue))
+	}
 }
 
 func decode(t *testing.T, raw []byte) map[string]any {
@@ -95,6 +105,15 @@ func TestVolumeManifestIsUnowned(t *testing.T) {
 	}
 	if dig(m, "metadata", "annotations", repoAnnotation) != "acme/rocket" || dig(m, "metadata", "annotations", prAnnotation) != "7" {
 		t.Errorf("annotations = %v", dig(m, "metadata", "annotations"))
+	}
+	im := decode(t, volumeManifest("issue-acme-rocket-42", VolumeFor{Repo: "acme/rocket", Number: 42, Branch: "fix-login", Issue: true}))
+	if _, owned := dig(im, "metadata").(map[string]any)["ownerReferences"]; owned {
+		t.Error("the issue volume has an owner, so it would not outlive it")
+	}
+	if dig(im, "metadata", "annotations", repoAnnotation) != "acme/rocket" ||
+		dig(im, "metadata", "annotations", issueAnnotation) != "42" ||
+		dig(im, "metadata", "annotations", branchAnnotation) != "fix-login" {
+		t.Errorf("issue annotations = %v", dig(im, "metadata", "annotations"))
 	}
 }
 

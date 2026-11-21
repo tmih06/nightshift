@@ -15,6 +15,7 @@ type IssueKeyMap struct {
 	Unassign             key.Binding
 	Comment              key.Binding
 	Checkout             key.Binding
+	Sandbox              key.Binding
 	Close                key.Binding
 	Reopen               key.Binding
 	ToggleSmartFiltering key.Binding
@@ -42,6 +43,10 @@ var IssueKeys = IssueKeyMap{
 		key.WithKeys("C"),
 		key.WithHelp("C", "checkout"),
 	),
+	Sandbox: key.NewBinding(
+		key.WithKeys("S"),
+		key.WithHelp("S", "checkout in sandbox"),
+	),
 	Close: key.NewBinding(
 		key.WithKeys("x"),
 		key.WithHelp("x", "close"),
@@ -67,6 +72,7 @@ func IssueFullHelp() []key.Binding {
 		IssueKeys.Unassign,
 		IssueKeys.Comment,
 		IssueKeys.Checkout,
+		IssueKeys.Sandbox,
 		IssueKeys.Close,
 		IssueKeys.Reopen,
 		IssueKeys.ToggleSmartFiltering,
@@ -111,6 +117,8 @@ func rebindIssueKeys(keys []config.Keybinding) error {
 			key = &IssueKeys.Comment
 		case "checkout":
 			key = &IssueKeys.Checkout
+		case "sandbox":
+			key = &IssueKeys.Sandbox
 		case "close":
 			key = &IssueKeys.Close
 		case "reopen":

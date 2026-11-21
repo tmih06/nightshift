@@ -18,13 +18,23 @@ type Option struct {
 	Danger bool
 }
 
+// Field is an optional single-line text input drawn above the menu's options.
+type Field struct {
+	Label   string
+	View    string // rendered input line; may contain ANSI styling
+	Focused bool
+	Err     string
+}
+
 // Menu is a dialog that asks for one of its options.
 type Menu struct {
-	Title   string
-	Lines   []string
-	Options []Option
-	Cursor  int
-	Hint    string
+	Title        string
+	Lines        []string
+	Field        *Field
+	OptionsLabel string
+	Options      []Option
+	Cursor       int
+	Hint         string
 }
 
 // Move steps the cursor by delta, wrapping round.
@@ -40,11 +50,21 @@ type Placed struct {
 	X, Y, W, H int
 	optionTop  int
 	options    int
+	hasField   bool
+	fieldY     int
 }
 
 // Inside is whether x, y falls on the box.
 func (p Placed) Inside(x, y int) bool {
 	return x >= p.X && x < p.X+p.W && y >= p.Y && y < p.Y+p.H
+}
+
+// FieldY is the row of the menu's text field.
+func (p Placed) FieldY() int { return p.fieldY }
+
+// OnField is whether x, y falls on the menu's text field.
+func (p Placed) OnField(x, y int) bool {
+	return p.hasField && p.Inside(x, y) && y == p.fieldY
 }
 
 // OptionY is the row of option i.
@@ -59,8 +79,11 @@ func (p Placed) OptionAt(x, y int) (int, bool) {
 // Place lays m out in the middle of a width×height area.
 func (m Menu) Place(th ghtheme.Theme, width, height int) Placed {
 	inner := lipgloss.Width(m.Title)
-	for _, s := range append(append([]string{m.Hint}, m.Lines...), optionTexts(m.Options)...) {
+	for _, s := range append(append([]string{m.Hint, m.OptionsLabel}, m.Lines...), optionTexts(m.Options)...) {
 		inner = max(inner, lipgloss.Width(s))
+	}
+	if m.Field != nil {
+		inner = max(inner, 44, lipgloss.Width(m.Field.Label), lipgloss.Width(m.Field.View), lipgloss.Width(m.Field.Err))
 	}
 	inner = min(inner, max(1, width-4))
 
@@ -70,6 +93,30 @@ func (m Menu) Place(th ghtheme.Theme, width, height int) Placed {
 		lines = append(lines, Line(plain.Foreground(th.FaintText), l, inner))
 	}
 	lines = append(lines, "")
+
+	fieldRow := 0
+	if m.Field != nil {
+		labelStyle := plain.Foreground(th.FaintText)
+		if m.Field.Focused {
+			labelStyle = plain.Foreground(th.SuccessText).Bold(true)
+		}
+		lines = append(lines, Line(labelStyle, m.Field.Label, inner))
+		fieldRow = len(lines)
+		lines = append(lines, Line(plain, m.Field.View, inner))
+		if m.Field.Err != "" {
+			lines = append(lines, Line(plain.Foreground(th.ErrorText), m.Field.Err, inner))
+		}
+		lines = append(lines, "")
+	}
+	if m.OptionsLabel != "" {
+		labelStyle := plain.Foreground(th.FaintText)
+		if m.Field == nil || !m.Field.Focused {
+			labelStyle = plain.Foreground(th.SuccessText).Bold(true)
+		}
+		lines = append(lines, Line(labelStyle, m.OptionsLabel, inner))
+	}
+
+	optRow := len(lines)
 	for i, o := range m.Options {
 		s := plain.Foreground(th.PrimaryText)
 		if o.Danger {
@@ -86,7 +133,17 @@ func (m Menu) Place(th ghtheme.Theme, width, height int) Placed {
 	box := Box(th, lines)
 	w, h := lipgloss.Width(box), lipgloss.Height(box)
 	x, y := max(0, (width-w)/2), max(0, (height-h)/2)
-	return Placed{Box: box, X: x, Y: y, W: w, H: h, optionTop: y + 1 + 1 + len(m.Lines) + 1, options: len(m.Options)}
+	return Placed{
+		Box:       box,
+		X:         x,
+		Y:         y,
+		W:         w,
+		H:         h,
+		optionTop: y + 1 + optRow,
+		options:   len(m.Options),
+		hasField:  m.Field != nil,
+		fieldY:    y + 1 + fieldRow,
+	}
 }
 
 func optionTexts(opts []Option) []string {

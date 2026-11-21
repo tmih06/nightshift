@@ -50,15 +50,16 @@ available sandbox in the chosen pool, not necessarily the exact selected pod.
 The controller replenishes that pool. Deleting a claim destroys its sandbox
 and pod because its shutdown policy is `Delete`.
 
-## Pull request volumes
+## Pull request and issue volumes
 
-`S` on a pull request in the GitHub tab gives it a volume that outlives any
-sandbox. gh-dash sends the pull request to the root model, which asks for a
-pool in a dialog and hands the checkout to the sandbox tab.
+`S` on a pull request or issue in the GitHub tab gives it a volume that
+outlives any sandbox. gh-dash sends the pull request or issue to the root model,
+which asks for a pool (and a branch name for an issue) in a dialog and hands
+the checkout to the sandbox tab.
 
 ```mermaid
 flowchart LR
-  PR[Pull request] -->|S, pick a pool| Volume[PVC pr-owner-repo-n]
+  Item[Pull request or issue] -->|S, pick pool and branch| Volume[PVC pr- or issue-owner-repo-n]
   Job[Clone Job on the agent image] -->|first time: clone and check out| Volume
   Template[Pool's SandboxTemplate] --> Sandbox[Sandbox with the volume mounted]
   Volume -->|mounted at ~/workspace/repo| Sandbox
@@ -82,8 +83,9 @@ runs. The whole checkout runs as one background step that reports each
 stage to the sandbox tab.
 
 Destroying that sandbox asks whether the volume goes too. Keeping it deletes
-the Sandbox and its pod only. Picking the same pull request again mounts the
-kept volume without cloning, or returns to the sandbox already on it.
+the Sandbox and its pod only. Picking the same pull request or issue again
+mounts the kept volume without cloning (switching to the requested branch for
+an issue), or returns to the sandbox already on it.
 Dropping it also deletes the PersistentVolumeClaim, which Kubernetes removes
 once the pod is gone. A clone that did not finish is redone from
 scratch. The demo's `standard` class is local-path, so a volume lives on

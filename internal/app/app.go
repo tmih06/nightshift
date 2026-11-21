@@ -131,7 +131,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.PasteMsg:
 		if m.picker != nil {
-			return m, nil
+			return m.updatePickerPaste(msg)
 		}
 		return m.toActive(msg)
 
@@ -140,6 +140,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ghtui.SandboxPullRequestMsg:
 		return m.openPicker(msg)
+
+	case ghtui.SandboxIssueMsg:
+		return m.openIssuePicker(msg)
 
 	case prFoundMsg:
 		return m.prFound(msg)

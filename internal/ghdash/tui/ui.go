@@ -525,6 +525,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case m.ctx.View == config.IssuesView:
 			switch {
+			case key.Matches(msg, keys.IssueKeys.Sandbox) && currRowData != nil && !reflect.ValueOf(currRowData).IsNil():
+				// nightshift: S checks out a branch for the issue in a new sandbox.
+				open := SandboxIssueMsg{
+					Repo:   currRowData.GetRepoNameWithOwner(),
+					Number: currRowData.GetNumber(),
+					URL:    currRowData.GetUrl(),
+				}
+				if issue, ok := currRowData.(*data.IssueData); ok {
+					open.Title = issue.Title
+				}
+				return m, func() tea.Msg { return open }
+
 			case key.Matches(msg, m.keys.OpenGithub):
 				cmds = append(cmds, m.openBrowser())
 

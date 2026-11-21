@@ -48,6 +48,70 @@ func TestCloneScriptQuotesBranchNames(t *testing.T) {
 	}
 }
 
+func TestIssueCloneScriptChecksOutTheRequestedBranch(t *testing.T) {
+	issue := Checkout{Repo: "acme/rocket", Number: 42, Branch: "feat/dark-mode", Issue: true}
+	if got := issue.Volume(); got != "issue-acme-rocket-42" {
+		t.Errorf("volume = %q", got)
+	}
+	got := issue.CloneScript()
+	for _, want := range []string{
+		"set -euo pipefail\n",
+		"\nrm -rf repo\n",
+		"\ngit clone --progress https://github.com/acme/rocket.git repo 2>&1 | lines\n",
+		"\ncd repo\n",
+		"if git show-ref --verify --quiet refs/remotes/origin/feat/dark-mode; then git checkout -B feat/dark-mode --track refs/remotes/origin/feat/dark-mode; else git checkout -B feat/dark-mode; fi",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("script lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "pull/") {
+		t.Errorf("issue script fetches a pull request ref:\n%s", got)
+	}
+	defaultIssue := Checkout{Repo: "acme/rocket", Number: 42, Issue: true}
+	if s := defaultIssue.CloneScript(); !strings.Contains(s, "git checkout -B issue-42;") {
+		t.Errorf("default branch script:\n%s", s)
+	}
+	if s := (Checkout{Repo: "acme/rocket", Number: 42, Branch: "it's;$(rm)", Issue: true}).CloneScript(); !strings.Contains(s, `'it'\''s;$(rm)'`) {
+		t.Errorf("issue branch not quoted:\n%s", s)
+	}
+}
+
+func TestIssueCheckoutClonesFreshAndSwitchesBranchOnKeptVolume(t *testing.T) {
+	issue := Checkout{Repo: "acme/rocket", Number: 42, Branch: "feat/login", Issue: true}
+
+	fresh := &fakeOps{}
+	var evs []checkoutEvent
+	runCheckout(fresh.ops(), issue, "pi-template", func(ev checkoutEvent) { evs = append(evs, ev) })
+	wantFresh := []string{
+		"state",
+		"create issue-acme-rocket-42 acme/rocket",
+		"template pi-template",
+		"clone issue-acme-rocket-42 img",
+		"sandbox pi-template issue-acme-rocket-42 /home/node/workspace/rocket",
+		"wait pi-pr-1",
+		"bash pi-pr-1",
+		"type cd /home/node/workspace/rocket && git status -sb",
+	}
+	if strings.Join(fresh.calls, "\n") != strings.Join(wantFresh, "\n") {
+		t.Errorf("fresh calls:\n%s", strings.Join(fresh.calls, "\n"))
+	}
+	if !evs[len(evs)-1].done {
+		t.Errorf("fresh checkout did not finish: %+v", evs[len(evs)-1])
+	}
+
+	kept := &fakeOps{exists: true, cloned: true}
+	evs = nil
+	runCheckout(kept.ops(), issue, "pi-template", func(ev checkoutEvent) { evs = append(evs, ev) })
+	wantLine := "type cd /home/node/workspace/rocket && (git checkout feat/login 2>/dev/null || git checkout -b feat/login) && git status -sb"
+	if got := kept.calls[len(kept.calls)-1]; got != wantLine {
+		t.Errorf("kept shell command = %q, want %q", got, wantLine)
+	}
+	if !evs[len(evs)-1].done {
+		t.Errorf("kept checkout did not finish: %+v", evs[len(evs)-1])
+	}
+}
+
 func TestGitProgressIsRead(t *testing.T) {
 	phase, pct, rest, ok := parseProgress("Receiving objects:  49% (48647/99278), 34.21 MiB | 10.97 MiB/s")
 	if !ok || phase != "Receiving objects" || pct != 49 || rest != "34.21 MiB | 10.97 MiB/s" {

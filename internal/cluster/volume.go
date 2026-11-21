@@ -20,6 +20,7 @@ const (
 	clonedAnnotation = "nightshift.dev/cloned"
 	repoAnnotation   = "nightshift.dev/repo"
 	prAnnotation     = "nightshift.dev/pull-request"
+	issueAnnotation  = "nightshift.dev/issue"
 	branchAnnotation = "nightshift.dev/branch"
 	templateRefKey   = "agents.x-k8s.io/sandbox-template-ref"
 
@@ -35,8 +36,18 @@ const (
 // VolumeName is the volume that keeps repo's pull request number:
 // pr-<owner>-<name>-<number>, cut to a valid Kubernetes name.
 func VolumeName(repo string, number int) string {
+	return volumeName("pr", repo, number)
+}
+
+// IssueVolumeName is the volume that keeps repo's issue number:
+// issue-<owner>-<name>-<number>, cut to a valid Kubernetes name.
+func IssueVolumeName(repo string, number int) string {
+	return volumeName("issue", repo, number)
+}
+
+func volumeName(prefix, repo string, number int) string {
 	suffix := fmt.Sprintf("-%d", number)
-	name := "pr-" + dnsLabel(strings.ReplaceAll(repo, "/", "-"))
+	name := prefix + "-" + dnsLabel(strings.ReplaceAll(repo, "/", "-"))
 	if len(name)+len(suffix) > 63 {
 		sum := sha256.Sum256([]byte(repo))
 		hash := fmt.Sprintf("-%x", sum[:3])
@@ -76,20 +87,25 @@ func VolumeState(name string) (exists, cloned bool, err error) {
 	return true, pvc.Metadata.Annotations[clonedAnnotation] != "", nil
 }
 
-// VolumeFor records which pull request a volume keeps.
+// VolumeFor records which pull request or issue a volume keeps.
 type VolumeFor struct {
 	Repo   string
 	Number int
 	Branch string
+	Issue  bool
 }
 
 // CreateVolume creates the volume, or leaves it be if it exists.
-func CreateVolume(name string, pr VolumeFor) error {
-	_, err := runKubectl(volumeManifest(name, pr), "apply", "-f", "-")
+func CreateVolume(name string, target VolumeFor) error {
+	_, err := runKubectl(volumeManifest(name, target), "apply", "-f", "-")
 	return err
 }
 
-func volumeManifest(name string, pr VolumeFor) []byte {
+func volumeManifest(name string, target VolumeFor) []byte {
+	numKey := prAnnotation
+	if target.Issue {
+		numKey = issueAnnotation
+	}
 	return mustJSON(map[string]any{
 		"apiVersion": "v1",
 		"kind":       "PersistentVolumeClaim",
@@ -98,9 +114,9 @@ func volumeManifest(name string, pr VolumeFor) []byte {
 			"namespace": Namespace,
 			"labels":    map[string]string{VolumeLabel: name},
 			"annotations": map[string]string{
-				repoAnnotation:   pr.Repo,
-				prAnnotation:     fmt.Sprint(pr.Number),
-				branchAnnotation: pr.Branch,
+				repoAnnotation:   target.Repo,
+				numKey:           fmt.Sprint(target.Number),
+				branchAnnotation: target.Branch,
 			},
 		},
 		"spec": map[string]any{

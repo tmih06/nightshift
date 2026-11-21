@@ -22,10 +22,10 @@ Local changes, kept small so an upstream sync stays a copy and a rewrite:
 - `tui/ui.go`, `tui/nightshift.go`: `enter` on a pull request row sends
   `OpenPullRequestMsg`, and nightshift opens that pull request in zen-octo's
   view (`internal/zenocto`). gh-dash binds nothing to `enter` there.
-- `tui/keys/prKeys.go`, `tui/ui.go`, `tui/nightshift.go`: `S` on a pull
-  request row (the `sandbox` builtin, rebindable) sends
-  `SandboxPullRequestMsg`, and nightshift checks the pull request out in a
-  new sandbox.
+- `tui/keys/prKeys.go`, `tui/keys/issueKeys.go`, `tui/ui.go`, `tui/nightshift.go`:
+  `S` (the `sandbox` builtin, rebindable) sends `SandboxPullRequestMsg` on a
+  pull request row or `SandboxIssueMsg` on an issue row, and nightshift checks
+  it out in a new sandbox.
 
 To sync, copy upstream `internal/` over this directory, rerun the import
 rewrite and `gofmt -w`, and reapply the changes above.

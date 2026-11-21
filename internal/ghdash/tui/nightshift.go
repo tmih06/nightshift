@@ -18,3 +18,13 @@ type SandboxPullRequestMsg struct {
 	URL    string
 	Branch string // the head branch; empty when gh-dash does not know it
 }
+
+// SandboxIssueMsg asks the host to check out a branch for an issue in a new
+// sandbox. nightshift sends it from S on an issue row, asks for a warm pool
+// and branch name, and checks that branch out in the sandbox's shell.
+type SandboxIssueMsg struct {
+	Repo   string // owner/name
+	Number int
+	URL    string
+	Title  string
+}
