@@ -34,6 +34,7 @@ type Terminal struct {
 	Command   string
 	Title     string
 	Status    string
+	CWD       string
 	CreatedMS uint64
 }
 
@@ -497,10 +498,12 @@ type wireTerminal struct {
 	Argv       []string          `json:"argv"`
 	Title      string            `json:"title"`
 	State      string            `json:"state"`
+	CWD        string            `json:"cwd"`
 	Labels     map[string]string `json:"labels"`
 	CreatedMS  uint64            `json:"created_ms"`
 	Foreground *struct {
 		Name string `json:"name"`
+		CWD  string `json:"cwd"`
 	} `json:"foreground"`
 	Status *struct {
 		State string `json:"state"`
@@ -521,10 +524,46 @@ func (w wireTerminal) toTerminal() Terminal {
 	} else if len(w.Argv) > 0 && w.Argv[0] != "" {
 		t.Command = path.Base(w.Argv[0])
 	}
+	if w.Foreground != nil && w.Foreground.CWD != "" {
+		t.CWD = w.Foreground.CWD
+	} else {
+		t.CWD = w.CWD
+	}
 	if w.Status != nil {
 		t.Status = w.Status.State
 	}
 	return t
+}
+
+func (c *podConn) terminalCWD(term string) string {
+	if term == "" {
+		return ""
+	}
+	var wt wireTerminal
+	if err := c.call("terminal.get", map[string]any{"terminal": term}, &wt); err != nil {
+		return ""
+	}
+	return wt.toTerminal().CWD
+}
+
+func (c *podConn) create(pod, name, cwd string) (Terminal, error) {
+	params := map[string]any{
+		"argv":      []string{"bash"},
+		"no_parent": true,
+		"rm":        true,
+		"labels":    map[string]string{podLabel: pod},
+	}
+	if name != "" {
+		params["name"] = name
+	}
+	if cwd != "" {
+		params["cwd"] = cwd
+	}
+	var wt wireTerminal
+	if err := c.call("terminal.run", params, &wt); err != nil {
+		return Terminal{}, err
+	}
+	return wt.toTerminal(), nil
 }
 
 // List returns every live Herdr terminal inside pod, ordered by creation time.
@@ -558,24 +597,30 @@ func List(pod string) ([]Terminal, error) {
 // Create starts a new detached bash terminal inside pod. Pass an empty name
 // to let Herdr assign a unique address (t1, t2, ...).
 func Create(pod, name string) (Terminal, error) {
+	return CreateIn(pod, name, "")
+}
+
+// CreateIn starts a new detached bash terminal inside pod in cwd when non-empty.
+func CreateIn(pod, name, cwd string) (Terminal, error) {
 	c, err := getPodConn(pod)
 	if err != nil {
 		return Terminal{}, err
 	}
-	params := map[string]any{
-		"argv":      []string{"bash"},
-		"no_parent": true,
-		"rm":        true,
-		"labels":    map[string]string{podLabel: pod},
-	}
-	if name != "" {
-		params["name"] = name
-	}
-	var wt wireTerminal
-	if err := c.call("terminal.run", params, &wt); err != nil {
+	return c.create(pod, name, cwd)
+}
+
+// CreateFrom starts a new detached bash terminal inside pod in the live
+// working directory of fromTerm when available.
+func CreateFrom(pod, name, fromTerm string) (Terminal, error) {
+	c, err := getPodConn(pod)
+	if err != nil {
 		return Terminal{}, err
 	}
-	return wt.toTerminal(), nil
+	var cwd string
+	if fromTerm != "" {
+		cwd = c.terminalCWD(fromTerm)
+	}
+	return c.create(pod, name, cwd)
 }
 
 // Kill terminates a single Herdr terminal inside pod. Terminals started with

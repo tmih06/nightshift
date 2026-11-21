@@ -97,7 +97,7 @@ func (m model) clickWindowBar(x, y int, button tea.MouseButton) (model, tea.Cmd,
 			}
 			m.prefix = false
 			m.flash("opening new window…")
-			return m, createWindowCmd(b.Name), true
+			return m, createWindowCmd(b.Name, m.activeTerm(b.Name)), true
 		case winActionClose:
 			if button != tea.MouseLeft {
 				return m, nil, false

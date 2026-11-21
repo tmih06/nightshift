@@ -156,15 +156,28 @@ func TestViewerProcess(t *testing.T) {
 	}
 	_, _ = fmt.Fprintln(os.Stdout, `{"jsonrpc":"2.0","id":1,"result":{}}`)
 
+	type fakeFG struct {
+		Name string `json:"name,omitempty"`
+		CWD  string `json:"cwd,omitempty"`
+	}
 	type fakeTerm struct {
-		Address   string   `json:"address"`
-		Name      string   `json:"name,omitempty"`
-		Argv      []string `json:"argv"`
-		State     string   `json:"state"`
-		CreatedMS uint64   `json:"created_ms"`
+		Address    string   `json:"address"`
+		Name       string   `json:"name,omitempty"`
+		Argv       []string `json:"argv"`
+		State      string   `json:"state"`
+		CWD        string   `json:"cwd,omitempty"`
+		Foreground *fakeFG  `json:"foreground,omitempty"`
+		CreatedMS  uint64   `json:"created_ms"`
 	}
 	terms := map[string]fakeTerm{
-		"t1": {Address: "t1", Argv: []string{"bash"}, State: "live", CreatedMS: 1},
+		"t1": {
+			Address:    "t1",
+			Argv:       []string{"bash"},
+			State:      "live",
+			CWD:        "/home/agent",
+			Foreground: &fakeFG{Name: "bash", CWD: "/home/agent/workspace/demo"},
+			CreatedMS:  1,
+		},
 	}
 	nextTerm := 2
 	nextChan := uint32(1)
@@ -196,14 +209,35 @@ func TestViewerProcess(t *testing.T) {
 					list = append(list, ft)
 				}
 				sendRPC(req.ID, map[string]any{"terminals": list, "hidden_finished": 0, "machines": []any{}})
+			case "terminal.get":
+				var p struct {
+					Terminal string `json:"terminal"`
+				}
+				_ = json.Unmarshal(req.Params, &p)
+				ft, ok := terms[p.Terminal]
+				if !ok {
+					b, _ := json.Marshal(map[string]any{
+						"jsonrpc": "2.0",
+						"id":      req.ID,
+						"error": map[string]any{
+							"code":    -32000,
+							"message": p.Terminal + " not found",
+							"data":    map[string]any{"kind": "not_found"},
+						},
+					})
+					_ = writeFrame(os.Stdout, 0, 0, b)
+					continue
+				}
+				sendRPC(req.ID, ft)
 			case "terminal.run":
 				var p struct {
 					Name string `json:"name"`
+					CWD  string `json:"cwd"`
 				}
 				_ = json.Unmarshal(req.Params, &p)
 				addr := fmt.Sprintf("t%d", nextTerm)
 				nextTerm++
-				ft := fakeTerm{Address: addr, Name: p.Name, Argv: []string{"bash"}, State: "live", CreatedMS: uint64(nextTerm)}
+				ft := fakeTerm{Address: addr, Name: p.Name, Argv: []string{"bash"}, State: "live", CWD: p.CWD, CreatedMS: uint64(nextTerm)}
 				terms[addr] = ft
 				sendRPC(req.ID, ft)
 			case "terminal.kill":
@@ -355,6 +389,46 @@ func TestViewerStream(t *testing.T) {
 	}
 }
 
+func TestCreateFromInheritsActiveCWD(t *testing.T) {
+	dir := t.TempDir()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stub := fmt.Sprintf("#!/bin/sh\nexec %q -test.run=^TestViewerProcess$\n", exe)
+	if err := os.WriteFile(filepath.Join(dir, "kubectl"), []byte(stub), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("NIGHTSHIFT_FAKE_VIEWER", "1")
+	pod := "cwd-test"
+	t.Cleanup(func() { ClosePod(pod) })
+
+	inherited, err := CreateFrom(pod, "", "t1")
+	if err != nil {
+		t.Fatalf("CreateFrom(t1) error: %v", err)
+	}
+	if inherited.CWD != "/home/agent/workspace/demo" {
+		t.Fatalf("CreateFrom(t1).CWD = %q, want /home/agent/workspace/demo", inherited.CWD)
+	}
+
+	fallback, err := CreateFrom(pod, "", "missing")
+	if err != nil {
+		t.Fatalf("CreateFrom(missing) should fall back gracefully: %v", err)
+	}
+	if fallback.CWD != "" {
+		t.Fatalf("CreateFrom(missing).CWD = %q, want empty", fallback.CWD)
+	}
+
+	explicit, err := CreateIn(pod, "custom", "/tmp")
+	if err != nil {
+		t.Fatalf("CreateIn(/tmp) error: %v", err)
+	}
+	if explicit.CWD != "/tmp" || explicit.Label() != "custom" {
+		t.Fatalf("CreateIn(/tmp) = %+v", explicit)
+	}
+}
+
 // This integration test uses an isolated Herdr core and a fake kubectl, so it
 // tests the real protocol without creating or modifying cluster resources.
 func TestHerdrSession(t *testing.T) {
@@ -440,6 +514,56 @@ func TestHerdrSession(t *testing.T) {
 			t.Fatalf("resize not applied: %q, %v", lines, err)
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+	// CreateFrom should open a new window in the active window's live cwd.
+	sub := filepath.Join(dir, "sub")
+	if err := os.MkdirAll(sub, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if resolved, err := filepath.EvalSymlinks(sub); err == nil {
+		sub = resolved
+	}
+	if err := SendBatch(pod, "", []Key{{Text: fmt.Sprintf("cd %q && printf NIGHTSHIFT_CD_OK", sub)}, {Name: "Enter"}}); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	for {
+		lines, err := WatchScreen(pod, "", 80, 24, false, 100*time.Millisecond)
+		if err == nil && strings.Contains(strings.Join(lines, "\n"), "NIGHTSHIFT_CD_OK") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("cd not completed: %q, %v", lines, err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	terms, err := List(pod)
+	if err != nil || len(terms) == 0 {
+		t.Fatalf("List before CreateFrom = %v, %v", terms, err)
+	}
+	w2, err := CreateFrom(pod, "", terms[0].Address)
+	if err != nil {
+		t.Fatalf("CreateFrom failed: %v", err)
+	}
+	if _, err := WatchScreen(pod, w2.Address, 80, 24, true, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := SendBatch(pod, w2.Address, []Key{{Text: `printf 'NIGHTSHIFT_PWD=%s\n' "$PWD"`}, {Name: "Enter"}}); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	for {
+		lines, err := WatchScreen(pod, w2.Address, 80, 24, false, 100*time.Millisecond)
+		if err == nil && strings.Contains(strings.Join(lines, "\n"), "NIGHTSHIFT_PWD="+sub) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("new window did not inherit cwd %q: %q, %v", sub, lines, err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if err := Kill(pod, w2.Address); err != nil {
+		t.Fatalf("Kill(%s) failed: %v", w2.Address, err)
 	}
 	if err := SendBatch(pod, "", []Key{{Text: "exit"}, {Name: "Enter"}}); err != nil {
 		t.Fatal(err)

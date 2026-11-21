@@ -64,7 +64,7 @@ func (m model) handlePrefixKey(msg tea.KeyPressMsg) (model, tea.Cmd) {
 			return m, nil
 		}
 		m.flash("opening new window…")
-		return m, createWindowCmd(b.Name)
+		return m, createWindowCmd(b.Name, m.activeTerm(b.Name))
 	case "n", "l", "right":
 		return m, m.stepWindow(1)
 	case "p", "h", "left":

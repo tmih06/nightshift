@@ -321,9 +321,9 @@ func fullCmd(pod, term string) tea.Cmd {
 	}
 }
 
-func createWindowCmd(pod string) tea.Cmd {
+func createWindowCmd(pod, fromTerm string) tea.Cmd {
 	return func() tea.Msg {
-		term, err := session.Create(pod, "")
+		term, err := session.CreateFrom(pod, "", fromTerm)
 		return windowCreatedMsg{pod: pod, term: term, err: err}
 	}
 }

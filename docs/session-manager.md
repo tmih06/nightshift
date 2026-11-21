@@ -11,9 +11,9 @@ away, exits, or loses its connection. The dashboard host needs `kubectl`, not
 For each claimed pod, Nightshift maintains one persistent framed
 `kubectl exec -i <pod> -- hc connect` connection to the pod's Herdr core. Warm
 pool pods never open a connection or start Herdr. Channel `0` speaks Herdr's
-JSON-RPC 2.0 API (`terminal.list`, `terminal.run`, `terminal.kill`,
-`terminal.attach`), and additional channels multiplex attached terminal streams
-over that same connection.
+JSON-RPC 2.0 API (`terminal.list`, `terminal.get`, `terminal.run`,
+`terminal.kill`, `terminal.attach`), and additional channels multiplex attached
+terminal streams over that same connection.
 
 Claiming a pod ensures at least one detached Herdr terminal running bash
 **inside the pod** (`no_parent: true`, `rm: true`, without Herdr's `keep`: when
@@ -32,10 +32,11 @@ closes the `hc connect` tunnel, not the terminals inside the pod.
 ### Navigating windows
 
 - **Mouse:** click any window tab to switch to it and focus the shell, click `+`
-  to open a new bash window, click `×` to close the active window, or
-  middle-click any tab to close it.
+  to open a new bash window in the active window's current working directory,
+  click `×` to close the active window, or middle-click any tab to close it.
 - **Keyboard (`Ctrl-b` prefix while shell has focus):**
-  - `C-b c` opens a new bash window
+  - `C-b c` opens a new bash window in the active window's current working
+    directory
   - `C-b n` / `C-b l` / `C-b →` and `C-b p` / `C-b h` / `C-b ←` cycle windows
   - `C-b 1`..`9` jumps directly to window 1..9
   - `C-b x` (or `C-b &`) closes the active window
