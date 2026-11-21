@@ -142,15 +142,22 @@ The demo runs on the kind cluster `kind-agent-sandbox` in the namespace
   shell's screen until it is shown again. Its viewer still processes output so
   the screen stays current. Table rows and warm-sandbox documents are rendered
   once per change, not per frame.
-- The shell embeds the sandbox's bash through a Herdr attach stream and a local
-  terminal emulator, preserving colors and styles. The same connection sends
-  keystrokes; Herdr never takes over the terminal.
+- The shell embeds each sandbox's terminals over one persistent framed Herdr
+  `hc connect` connection per pod and a local terminal emulator per attached
+  window, preserving colors and styles. Right below the `● herdr live` row, a
+  Herdr-style window tab bar lists every live terminal in the pod (including
+  sub-terminals spawned inside the pod via `hc run`) with `+` to open a new
+  window and `×` to close the active one. Clicking a tab switches windows and
+  focuses the shell; middle-clicking a tab closes it; `C-b` prefix chords
+  (`C-b c` new, `C-b n`/`p`/`h`/`l`/`1-9` switch, `C-b x` close, `C-b F`
+  fullscreen, `C-b C-b` literal, `C-b q`/`d` leave) provide full keyboard
+  control. Herdr never takes over the terminal unless `F` or `C-b F` is used.
 - Focus is in the table during navigation and in the sidebar while bash or
   the configs have it; the sidebar's heading turns green and says how to
   leave, and its rule brightens.
-- While the shell holds focus no input escapes: scrolling and clicks stay in
-  the shell, only the splitter drag still works, and C-b then q is the only
-  way out. A click in the table always returns to navigation.
+- While the shell holds focus no keyboard input escapes: scrolling stays in the
+  shell, clicks on the window tab bar and splitter drag still work, and `C-b q`
+  (or `C-b d`) leaves focus. A click in the table always returns to navigation.
 - `c` claims from the selected warm sandbox's pool (or `pi-pool` when no
   warm sandbox is selected) and pre-creates its bash, staying in navigation
   until `enter` attaches. `enter` or a click on a warm sandbox's sidebar

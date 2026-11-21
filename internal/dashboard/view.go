@@ -59,21 +59,29 @@ type layout struct {
 	stacked        bool
 }
 
+func (m model) infoRowCount() int {
+	if b := m.selectedBox(); b != nil && b.Claimed() && b.Volume != "" {
+		return infoRows + 1
+	}
+	return infoRows
+}
+
 func (m model) layout() layout {
 	l := layout{bodyTop: tabsH}
 	l.bodyH = max(m.height-tabsH-m.footerHeight(), 4)
+	rows := m.infoRowCount()
 	if m.width < stackedBelow {
 		l.stacked = true
 		l.tableW, l.sideW = m.width, m.width
-		l.tableH = clamp(m.tableHeight, tableHeaderH+itemH, max(l.bodyH-infoRows-4, tableHeaderH+itemH))
+		l.tableH = clamp(m.tableHeight, tableHeaderH+itemH, max(l.bodyH-rows-4, tableHeaderH+itemH))
 		if m.tableHeight <= 0 {
-			l.tableH = clamp(l.bodyH*2/5, tableHeaderH+itemH, max(l.bodyH-infoRows-4, tableHeaderH+itemH))
+			l.tableH = clamp(l.bodyH*2/5, tableHeaderH+itemH, max(l.bodyH-rows-4, tableHeaderH+itemH))
 		}
 		l.sideTop = l.bodyTop + l.tableH
 		l.sideH = max(l.bodyH-l.tableH, 1)
-		l.docTop = l.sideTop + 1 + infoRows
+		l.docTop = l.sideTop + 1 + rows
 		l.docW = max(m.width-4, 1)
-		l.docH = max(l.sideH-1-infoRows, 1)
+		l.docH = max(l.sideH-1-rows, 1)
 		return l
 	}
 	side := m.sideWidth
@@ -84,9 +92,9 @@ func (m model) layout() layout {
 	l.tableW = m.width - l.sideW
 	l.tableH = l.bodyH
 	l.sideX, l.sideTop, l.sideH = l.tableW, l.bodyTop, l.bodyH
-	l.docTop = l.bodyTop + infoRows
+	l.docTop = l.bodyTop + rows
 	l.docW = max(l.sideW-4, 1)
-	l.docH = max(l.bodyH-infoRows, 1)
+	l.docH = max(l.bodyH-rows, 1)
 	return l
 }
 
@@ -277,7 +285,9 @@ func (m model) renderRow(i, inner int, selected bool) []string {
 		where += " · " + b.Owner
 	}
 	session := bg(lipgloss.NewStyle().Foreground(th.FaintText)).Render("○")
-	if m.sessions[b.Name] {
+	if wins := m.podWindows(b.Name); len(wins) > 1 {
+		session = bg(lipgloss.NewStyle().Foreground(th.SuccessText)).Render(fmt.Sprintf("●%d", len(wins)))
+	} else if len(wins) == 1 {
 		session = bg(lipgloss.NewStyle().Foreground(th.SuccessText)).Render("●")
 	}
 	h := m.hist[b.Name]
@@ -473,16 +483,20 @@ func (m model) infoLines(width int) []string {
 			}, width-1),
 		}
 	}
+	wins := m.podWindows(b.Name)
 	session := dim("○ herdr off")
-	if m.sessions[b.Name] {
+	if len(wins) > 0 {
 		session = warmStyle.Render("● herdr live")
+		if b.Claimed() && len(wins) > 1 {
+			session += dim(fmt.Sprintf(" · %d windows", len(wins)))
+		}
 	}
 
 	heading, hint := glyphConfigs+" Configs", "⏎ or click to focus"
 	focused := m.focus == focusInspect
 	if !m.isWarmSelected() {
 		heading, focused = glyphShell+" Shell", m.focus == focusShell
-		if !m.sessions[b.Name] {
+		if len(wins) == 0 {
 			hint = ""
 		}
 	}
@@ -504,7 +518,220 @@ func (m model) infoLines(width int) []string {
 	for _, f := range facts {
 		lines = append(lines, " "+f)
 	}
-	return append(lines, " "+session, "", " "+head)
+	lines = append(lines, " "+session)
+	if b.Claimed() {
+		bar, _ := m.windowTabBar(width-1, 0)
+		if bar != "" {
+			lines = append(lines, " "+bar)
+		} else {
+			lines = append(lines, "")
+		}
+	} else {
+		lines = append(lines, "")
+	}
+	return append(lines, " "+head)
+}
+
+type windowAction int
+
+const (
+	winActionSelect windowAction = iota
+	winActionNew
+	winActionClose
+)
+
+type windowTabSpan struct {
+	from, to int
+	action   windowAction
+	address  string
+	index    int
+}
+
+// windowTabRow returns the frame row of the claimed sandbox's window tab bar,
+// directly below the "● herdr live" line, or -1 if none is shown.
+func (m model) windowTabRow() int {
+	b := m.selectedBox()
+	if b == nil || !b.Claimed() {
+		return -1
+	}
+	l := m.layout()
+	// infoLines ends with [..., session, windowTabBar, heading], so the tab bar
+	// sits two rows above docTop.
+	return l.docTop - 2
+}
+
+// windowTabSpans gives screen-X clickable hit boxes for the window tab bar.
+func (m model) windowTabSpans() []windowTabSpan {
+	l := m.layout()
+	inner := l.sideW - 1
+	startX := 1 // stacked: leading " " inside infoLines
+	if !l.stacked {
+		startX = l.sideX + 2 // side-by-side: "│" border + leading " "
+	}
+	_, spans := m.windowTabBar(inner-1, startX)
+	return spans
+}
+
+func windowStatusPrefix(status string) string {
+	switch status {
+	case "working":
+		return warnStyle.Render("●") + " "
+	case "blocked":
+		return warnStyle.Render("◆") + " "
+	case "error":
+		return badStyle.Render("●") + " "
+	case "done":
+		return warmStyle.Render("✓") + " "
+	default:
+		return ""
+	}
+}
+
+// windowTabBar renders the Herdr-style window tabs and + / × controls for the
+// selected claimed sandbox, returning the styled line and hit boxes starting
+// at startX.
+func (m model) windowTabBar(width, startX int) (string, []windowTabSpan) {
+	b := m.selectedBox()
+	if b == nil || !b.Claimed() || width < 1 {
+		return "", nil
+	}
+	wins := m.podWindows(b.Name)
+	if len(wins) == 0 {
+		if b.Phase != "Running" {
+			return "", nil
+		}
+		btn := winActionStyle.Render(" + new window ")
+		w := ansi.StringWidth(btn)
+		return truncateANSI(btn, width), []windowTabSpan{{
+			from: startX, to: startX + min(w, width), action: winActionNew,
+		}}
+	}
+
+	activeIdx := m.activeWindowIndex(b.Name)
+	type tabItem struct {
+		rendered string
+		width    int
+		address  string
+		index    int
+	}
+	items := make([]tabItem, len(wins))
+	for i, w := range wins {
+		label := truncateANSI(w.Label(), 14)
+		text := fmt.Sprintf(" %d:%s ", i+1, label)
+		var rendered string
+		switch {
+		case i == activeIdx && m.focus == focusShell:
+			rendered = winFocusedStyle.Render(text)
+		case i == activeIdx:
+			rendered = winActiveStyle.Render(text)
+		default:
+			if prefix := windowStatusPrefix(w.Status); prefix != "" {
+				rendered = " " + prefix + winInactiveStyle.Render(fmt.Sprintf("%d:%s ", i+1, label))
+			} else {
+				rendered = winInactiveStyle.Render(text)
+			}
+		}
+		items[i] = tabItem{
+			rendered: rendered,
+			width:    ansi.StringWidth(rendered),
+			address:  w.Address,
+			index:    i,
+		}
+	}
+
+	addBtn := winActionStyle.Render(" + ")
+	closeBtn := winCloseStyle.Render(" × ")
+	addW := ansi.StringWidth(addBtn)
+	closeW := ansi.StringWidth(closeBtn)
+	controlsW := 1 + addW + closeW // leading space + " + " + " × "
+
+	// Fit as many tabs around activeIdx as width allows.
+	lo, hi := activeIdx, activeIdx
+	avail := max(width-controlsW, 1)
+	used := items[activeIdx].width
+	for {
+		expanded := false
+		if hi+1 < len(items) {
+			need := 1 + items[hi+1].width
+			reserve := 0
+			if lo > 0 {
+				reserve += 2
+			}
+			if hi+2 < len(items) {
+				reserve += 2
+			}
+			if used+need+reserve <= avail {
+				hi++
+				used += need
+				expanded = true
+			}
+		}
+		if lo > 0 {
+			need := 1 + items[lo-1].width
+			reserve := 0
+			if lo-1 > 0 {
+				reserve += 2
+			}
+			if hi+1 < len(items) {
+				reserve += 2
+			}
+			if used+need+reserve <= avail {
+				lo--
+				used += need
+				expanded = true
+			}
+		}
+		if !expanded {
+			break
+		}
+	}
+
+	var out strings.Builder
+	var spans []windowTabSpan
+	x := startX
+	if lo > 0 {
+		out.WriteString(dim("‹ "))
+		x += 2
+	}
+	for i := lo; i <= hi; i++ {
+		if i > lo {
+			out.WriteByte(' ')
+			x++
+		}
+		out.WriteString(items[i].rendered)
+		spans = append(spans, windowTabSpan{
+			from:    x,
+			to:      x + items[i].width,
+			action:  winActionSelect,
+			address: items[i].address,
+			index:   items[i].index,
+		})
+		x += items[i].width
+	}
+	if hi+1 < len(items) {
+		out.WriteString(dim(" ›"))
+		x += 2
+	}
+	out.WriteByte(' ')
+	x++
+	out.WriteString(addBtn)
+	spans = append(spans, windowTabSpan{from: x, to: x + addW, action: winActionNew})
+	x += addW
+	out.WriteString(closeBtn)
+	spans = append(spans, windowTabSpan{from: x, to: x + closeW, action: winActionClose})
+
+	maxX := startX + width
+	clamped := spans[:0]
+	for _, s := range spans {
+		if s.from >= maxX {
+			continue
+		}
+		if s.to > maxX {
+			s.to = maxX
+		}
+		clamped = append(clamped, s)
+	}
+	return truncateANSI(out.String(), width), clamped
 }
 
 type usageRow struct {
@@ -609,9 +836,9 @@ func (m model) shellLinesView(l layout) []string {
 	switch {
 	case b == nil:
 		return nil
-	case !m.sessions[b.Name]:
+	case !m.hasSession(b.Name):
 		return []string{dim("no session — claim with c, or enter on a claimed sandbox")}
-	case m.shellPod != b.Name:
+	case m.shellPod != b.Name || (m.shellTerm != "" && m.shellTerm != m.activeTerm(b.Name)):
 		return nil
 	}
 	content := m.shellLines
@@ -710,11 +937,11 @@ func (m model) statusLine() string {
 	var left string
 	switch {
 	case m.focus == focusShell && m.prefix:
-		left = prefixBarStyle.Render(" C-b armed · q leaves bash, any other key cancels ")
+		left = prefixBarStyle.Render(" C-b armed · c new · n/p/1-9 switch · x close · F full · q leave ")
 	case m.focus == focusShell:
 		left = shellBarStyle.Render(" BASH ") + bgc.Render(" ") +
 			renderHints([]key.Binding{keyLeaveShell}, width) +
-			bgc.Foreground(th.FaintText).Render(" · every key goes to the sandbox")
+			bgc.Foreground(th.FaintText).Render(" · C-b c new · n/p/1-9 switch · x close")
 	}
 	right := m.statusMessage()
 	if right == "" {

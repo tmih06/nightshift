@@ -48,6 +48,8 @@ type model struct {
 	pools          map[string]cluster.Pool
 	selected       string // pod name, stable across fleet resorts
 	sessions       map[string]bool
+	windows        map[string][]session.Terminal
+	activeWindow   map[string]string // pod -> active terminal address
 	metricsOK      bool
 	err            error
 	loaded         bool
@@ -72,9 +74,11 @@ type model struct {
 	inspectDocs    map[string]inspectCache // shared by every copy of the model
 	shellLines     []string
 	shellPod       string
+	shellTerm      string
 	shellW, shellH int
 	watchingShell  bool
 	pending        []session.Key
+	pendingTerm    string
 	sending        bool
 	pendingPod     string
 	// checkout is the pull request checkout in flight, shown as a card.
@@ -101,7 +105,13 @@ type Model = model
 // New returns the sandbox tab painted from gh-dash's theme t.
 func New(t ghtheme.Theme) Model {
 	useTheme(t)
-	return model{sessions: map[string]bool{}, rowCache: &rowCacheEntry{}, inspectDocs: map[string]inspectCache{}}
+	return model{
+		sessions:     map[string]bool{},
+		windows:      map[string][]session.Terminal{},
+		activeWindow: map[string]string{},
+		rowCache:     &rowCacheEntry{},
+		inspectDocs:  map[string]inspectCache{},
+	}
 }
 
 // SetHidden tells the tab whether another tab covers it.
@@ -130,6 +140,7 @@ type loadedMsg struct {
 	boxes     []cluster.Sandbox
 	pools     map[string]cluster.Pool
 	sessions  map[string]bool
+	windows   map[string][]session.Terminal
 	metricsOK bool
 	cgroups   map[string]cluster.CgroupSample
 	err       error
@@ -156,13 +167,27 @@ type deletedMsg struct {
 }
 
 type attachReadyMsg struct {
-	pod string
-	err error
+	pod   string
+	terms []session.Terminal
+	err   error
 }
 
 type fullReadyMsg struct {
-	pod string
-	err error
+	pod  string
+	term string
+	err  error
+}
+
+type windowCreatedMsg struct {
+	pod  string
+	term session.Terminal
+	err  error
+}
+
+type windowKilledMsg struct {
+	pod  string
+	term string
+	err  error
 }
 
 type resumeMsg struct {
@@ -171,12 +196,14 @@ type resumeMsg struct {
 
 type shellMsg struct {
 	pod   string
+	term  string
 	lines []string
 	err   error
 }
 
 type sentMsg struct {
 	pod   string
+	term  string
 	count int
 	err   error
 }
@@ -186,7 +213,8 @@ type sentMsg struct {
 func Owns(msg tea.Msg) bool {
 	switch msg.(type) {
 	case tickMsg, shellTickMsg, loadedMsg, claimMsg, claimAdoptedMsg, deletedMsg,
-		attachReadyMsg, fullReadyMsg, resumeMsg, shellMsg, sentMsg, checkoutMsg:
+		attachReadyMsg, fullReadyMsg, windowCreatedMsg, windowKilledMsg,
+		resumeMsg, shellMsg, sentMsg, checkoutMsg:
 		return true
 	}
 	return false
@@ -210,15 +238,29 @@ func fetchCmd() tea.Cmd {
 			}
 		}
 		var (
-			sessions map[string]bool
-			cgroups  map[string]cluster.CgroupSample
-			wg       sync.WaitGroup
+			windows map[string][]session.Terminal
+			cgroups map[string]cluster.CgroupSample
+			wg      sync.WaitGroup
 		)
 		wg.Add(2)
-		go func() { defer wg.Done(); sessions = session.Live(boxes) }()
+		go func() { defer wg.Done(); windows = session.LiveTerminals(boxes) }()
 		go func() { defer wg.Done(); cgroups = cluster.ReadCgroups(claimed) }()
 		wg.Wait()
-		return loadedMsg{boxes: boxes, pools: pools, sessions: sessions, metricsOK: metricsOK, cgroups: cgroups, err: err}
+		sessions := make(map[string]bool, len(windows))
+		for pod, terms := range windows {
+			if len(terms) > 0 {
+				sessions[pod] = true
+			}
+		}
+		return loadedMsg{
+			boxes:     boxes,
+			pools:     pools,
+			sessions:  sessions,
+			windows:   windows,
+			metricsOK: metricsOK,
+			cgroups:   cgroups,
+			err:       err,
+		}
 	}
 }
 
@@ -257,50 +299,170 @@ func waitClaimCmd(claim string) tea.Cmd {
 
 func attachCmd(pod string) tea.Cmd {
 	return func() tea.Msg {
-		return attachReadyMsg{pod: pod, err: session.Ensure(pod)}
+		if err := session.Ensure(pod); err != nil {
+			return attachReadyMsg{pod: pod, err: err}
+		}
+		terms, err := session.List(pod)
+		return attachReadyMsg{pod: pod, terms: terms, err: err}
 	}
 }
 
-func fullCmd(pod string) tea.Cmd {
+func fullCmd(pod, term string) tea.Cmd {
 	return func() tea.Msg {
-		return fullReadyMsg{pod: pod, err: session.Ensure(pod)}
+		if err := session.Ensure(pod); err != nil {
+			return fullReadyMsg{pod: pod, err: err}
+		}
+		if term == "" {
+			if terms, err := session.List(pod); err == nil && len(terms) > 0 {
+				term = terms[0].Address
+			}
+		}
+		return fullReadyMsg{pod: pod, term: term}
 	}
 }
 
-func watchShellCmd(pod string, w, h int, resize bool) tea.Cmd {
+func createWindowCmd(pod string) tea.Cmd {
 	return func() tea.Msg {
-		lines, err := session.WatchScreen(pod, w, h, resize, shellRefreshEvery)
-		return shellMsg{pod: pod, lines: lines, err: err}
+		term, err := session.Create(pod, "")
+		return windowCreatedMsg{pod: pod, term: term, err: err}
 	}
 }
 
-func drainCmd(pod string, keys []session.Key) tea.Cmd {
+func killWindowCmd(pod, term string) tea.Cmd {
 	return func() tea.Msg {
-		return sentMsg{pod: pod, count: len(keys), err: session.SendBatch(pod, keys)}
+		return windowKilledMsg{pod: pod, term: term, err: session.Kill(pod, term)}
 	}
+}
+
+func watchShellCmd(pod, term string, w, h int, resize bool) tea.Cmd {
+	return func() tea.Msg {
+		lines, err := session.WatchScreen(pod, term, w, h, resize, shellRefreshEvery)
+		return shellMsg{pod: pod, term: term, lines: lines, err: err}
+	}
+}
+
+func drainCmd(pod, term string, keys []session.Key) tea.Cmd {
+	return func() tea.Msg {
+		return sentMsg{pod: pod, term: term, count: len(keys), err: session.SendBatch(pod, term, keys)}
+	}
+}
+
+func (m model) hasSession(pod string) bool {
+	return len(m.windows[pod]) > 0 || m.sessions[pod]
+}
+
+// podWindows returns the live windows for pod. If only the boolean sessions
+// map marks pod live (as in legacy unit tests), it synthesizes one bash window.
+func (m model) podWindows(pod string) []session.Terminal {
+	if wins := m.windows[pod]; len(wins) > 0 {
+		return wins
+	}
+	if m.sessions[pod] {
+		return []session.Terminal{{Address: session.Name(pod), Command: "bash"}}
+	}
+	return nil
+}
+
+// activeTerm returns the selected Herdr terminal address for pod, falling back
+// to its first live window.
+func (m model) activeTerm(pod string) string {
+	wins := m.podWindows(pod)
+	if len(wins) == 0 {
+		return ""
+	}
+	if cur := m.activeWindow[pod]; cur != "" {
+		for _, w := range wins {
+			if w.Address == cur {
+				return cur
+			}
+		}
+	}
+	return wins[0].Address
+}
+
+func (m model) activeWindowIndex(pod string) int {
+	wins := m.podWindows(pod)
+	cur := m.activeTerm(pod)
+	for i, w := range wins {
+		if w.Address == cur {
+			return i
+		}
+	}
+	return 0
+}
+
+func (m *model) selectWindow(pod, addr string) tea.Cmd {
+	if m.activeWindow == nil {
+		m.activeWindow = map[string]string{}
+	}
+	if m.activeWindow[pod] == addr && m.shellPod == pod && m.shellTerm == addr {
+		return nil
+	}
+	m.activeWindow[pod] = addr
+	if m.selected == pod {
+		m.shellLines, m.shellPod, m.shellTerm = nil, "", ""
+		m.shellW, m.shellH = 0, 0
+		m.pending, m.pendingTerm = nil, ""
+		return m.watchShell()
+	}
+	return nil
+}
+
+func (m *model) stepWindow(delta int) tea.Cmd {
+	b := m.selectedBox()
+	if b == nil {
+		return nil
+	}
+	wins := m.podWindows(b.Name)
+	if len(wins) <= 1 {
+		return nil
+	}
+	idx := (m.activeWindowIndex(b.Name) + delta) % len(wins)
+	if idx < 0 {
+		idx += len(wins)
+	}
+	return m.selectWindow(b.Name, wins[idx].Address)
+}
+
+func (m *model) selectWindowIndex(idx int) tea.Cmd {
+	b := m.selectedBox()
+	if b == nil {
+		return nil
+	}
+	wins := m.podWindows(b.Name)
+	if idx < 0 || idx >= len(wins) {
+		return nil
+	}
+	return m.selectWindow(b.Name, wins[idx].Address)
 }
 
 func (m *model) watchShell() tea.Cmd {
 	b := m.selectedBox()
-	if m.watchingShell || m.hidden || b == nil || !m.sessions[b.Name] || b.Phase != "Running" {
+	if m.watchingShell || m.hidden || b == nil || !m.hasSession(b.Name) || b.Phase != "Running" {
 		return nil
 	}
+	term := m.activeTerm(b.Name)
 	w, h := m.shellPaneSize()
-	resize := w != m.shellW || h != m.shellH
+	resize := w != m.shellW || h != m.shellH || m.shellPod != b.Name || m.shellTerm != term
 	m.shellW, m.shellH = w, h
 	m.watchingShell = true
-	return watchShellCmd(b.Name, w, h, resize)
+	return watchShellCmd(b.Name, term, w, h, resize)
 }
 
 func (m *model) startDrain() tea.Cmd {
 	b := m.selectedBox()
-	if m.sending || len(m.pending) == 0 || b == nil || !m.sessions[b.Name] {
+	if m.sending || len(m.pending) == 0 || b == nil || !m.hasSession(b.Name) {
 		return nil
+	}
+	term := m.pendingTerm
+	if term == "" {
+		term = m.activeTerm(b.Name)
 	}
 	m.sending = true
 	keys := m.pending
 	m.pending = nil
-	return drainCmd(b.Name, keys)
+	m.pendingTerm = ""
+	return drainCmd(b.Name, term, keys)
 }
 
 // applyLive puts claimed sandboxes' own counters over metrics-server's
@@ -412,7 +574,7 @@ func (m model) isWarmSelected() bool {
 
 func (m model) canFocusShell() bool {
 	b := m.selectedBox()
-	return b != nil && b.Claimed() && m.sessions[b.Name]
+	return b != nil && b.Claimed() && m.hasSession(b.Name)
 }
 
 func (m *model) focusWarmInspect() {
@@ -425,6 +587,7 @@ func (m *model) selectPod(name string) {
 		m.selected = name
 		m.inspectScroll = 0
 		m.shellW, m.shellH = 0, 0
+		m.shellTerm = ""
 	}
 	if m.focus == focusShell && !m.canFocusShell() {
 		m.focus = focusNav

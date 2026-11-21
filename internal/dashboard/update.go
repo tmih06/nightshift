@@ -49,20 +49,55 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 		return m, tea.Batch(shellTickCmd(), m.watchShell())
 	case shellMsg:
 		m.watchingShell = false
-		if m.selected == msg.pod {
+		if m.selected == msg.pod && (msg.term == "" || msg.term == m.activeTerm(msg.pod)) {
 			if msg.err != nil {
-				m.shellLines, m.shellPod = nil, ""
+				m.shellLines, m.shellPod, m.shellTerm = nil, "", ""
 				m.shellW, m.shellH = 0, 0
 				return m, nil // retry on the next tick
 			}
 			if !m.hidden && msg.lines != nil {
-				m.shellLines, m.shellPod = msg.lines, msg.pod
+				m.shellLines, m.shellPod, m.shellTerm = msg.lines, msg.pod, msg.term
 			}
 		}
 		return m, m.watchShell()
 	case loadedMsg:
 		prev := m.selectedIndex()
-		m.boxes, m.pools, m.sessions = msg.boxes, msg.pools, msg.sessions
+		m.boxes, m.pools = msg.boxes, msg.pools
+		m.windows = msg.windows
+		if msg.sessions != nil {
+			m.sessions = msg.sessions
+		} else {
+			m.sessions = map[string]bool{}
+		}
+		for pod, terms := range m.windows {
+			if len(terms) > 0 {
+				m.sessions[pod] = true
+			}
+		}
+		if m.activeWindow == nil {
+			m.activeWindow = map[string]string{}
+		}
+		for pod, cur := range m.activeWindow {
+			wins := m.podWindows(pod)
+			if len(wins) == 0 {
+				delete(m.activeWindow, pod)
+				continue
+			}
+			found := false
+			for _, w := range wins {
+				if w.Address == cur {
+					found = true
+					break
+				}
+			}
+			if !found {
+				m.activeWindow[pod] = wins[0].Address
+				if pod == m.selected {
+					m.shellLines, m.shellTerm = nil, ""
+					m.shellW, m.shellH = 0, 0
+				}
+			}
+		}
 		m.metricsOK, m.err, m.loaded = msg.metricsOK, msg.err, true
 		m.dataRev++
 		m.updatedAt = time.Now()
@@ -84,11 +119,11 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 				m.pendingPod = ""
 				if co := m.pendingCheckout; co != nil {
 					m.pendingCheckout = nil
-					if m.sessions[b.Name] {
+					if m.hasSession(b.Name) {
 						return m.focusCheckout(b.Name, *co)
 					}
 				}
-				if m.sessions[b.Name] {
+				if m.hasSession(b.Name) {
 					m.flash("bash ready in " + b.Name + " — enter attaches")
 					return m, fetchCmd()
 				}
@@ -134,6 +169,12 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 			m.sessions = map[string]bool{}
 		}
 		m.sessions[msg.pod] = true
+		if len(msg.terms) > 0 {
+			if m.windows == nil {
+				m.windows = map[string][]session.Terminal{}
+			}
+			m.windows[msg.pod] = msg.terms
+		}
 		if b := m.selectedBox(); b != nil && b.Name == msg.pod && b.Claimed() {
 			m.focus = focusShell
 			m.prefix = false
@@ -141,14 +182,91 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 			return m, m.watchShell()
 		}
 		return m, nil
+	case windowCreatedMsg:
+		if msg.err != nil {
+			m.fail("new window failed: " + msg.err.Error())
+			return m, nil
+		}
+		if m.sessions == nil {
+			m.sessions = map[string]bool{}
+		}
+		if m.windows == nil {
+			m.windows = map[string][]session.Terminal{}
+		}
+		if m.activeWindow == nil {
+			m.activeWindow = map[string]string{}
+		}
+		m.sessions[msg.pod] = true
+		wins := append([]session.Terminal(nil), m.podWindows(msg.pod)...)
+		exists := false
+		for _, w := range wins {
+			if w.Address == msg.term.Address {
+				exists = true
+				break
+			}
+		}
+		if !exists {
+			wins = append(wins, msg.term)
+		}
+		m.windows[msg.pod] = wins
+		m.dataRev++
+		m.flash("opened window " + msg.term.Label())
+		cmd := m.selectWindow(msg.pod, msg.term.Address)
+		if b := m.selectedBox(); b != nil && b.Name == msg.pod && b.Claimed() {
+			m.focus = focusShell
+			m.prefix = false
+		}
+		return m, tea.Batch(cmd, fetchCmd())
+	case windowKilledMsg:
+		if msg.err != nil {
+			m.fail("close window failed: " + msg.err.Error())
+			return m, nil
+		}
+		wins := m.podWindows(msg.pod)
+		next := make([]session.Terminal, 0, len(wins))
+		removedIdx := 0
+		for i, w := range wins {
+			if w.Address == msg.term {
+				removedIdx = i
+				continue
+			}
+			next = append(next, w)
+		}
+		if m.windows == nil {
+			m.windows = map[string][]session.Terminal{}
+		}
+		if len(next) == 0 {
+			delete(m.windows, msg.pod)
+			delete(m.sessions, msg.pod)
+			delete(m.activeWindow, msg.pod)
+			if m.selected == msg.pod {
+				m.shellLines, m.shellPod, m.shellTerm = nil, "", ""
+				m.shellW, m.shellH = 0, 0
+				if m.focus == focusShell {
+					m.focus = focusNav
+					m.prefix = false
+				}
+			}
+			m.dataRev++
+			m.flash("closed last window in " + msg.pod)
+			return m, fetchCmd()
+		}
+		m.windows[msg.pod] = next
+		m.dataRev++
+		m.flash("closed window")
+		pick := next[clamp(removedIdx, 0, len(next)-1)].Address
+		if m.activeWindow[msg.pod] == msg.term || m.activeWindow[msg.pod] == "" {
+			return m, tea.Batch(m.selectWindow(msg.pod, pick), fetchCmd())
+		}
+		return m, fetchCmd()
 	case fullReadyMsg:
 		if msg.err != nil {
 			m.fail("session failed: " + msg.err.Error())
 			return m, nil
 		}
-		return m, tea.ExecProcess(session.Attach(msg.pod), func(err error) tea.Msg {
+		return m, tea.ExecProcess(session.Attach(msg.pod, msg.term), func(err error) tea.Msg {
 			// Fullscreen may have resized the shell behind the embedded viewer.
-			session.DisconnectViewer(msg.pod)
+			session.DisconnectViewer(msg.pod, msg.term)
 			return resumeMsg{err: err}
 		})
 	case resumeMsg:
@@ -167,6 +285,7 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 		if msg.err != nil {
 			m.fail("send failed: " + msg.err.Error())
 			m.pending = nil
+			m.pendingTerm = ""
 			return m, nil
 		}
 		return m, m.startDrain()

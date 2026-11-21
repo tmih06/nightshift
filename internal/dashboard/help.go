@@ -9,12 +9,15 @@ import (
 // The full key list that ? opens under the footer, in columns, as gh-dash
 // shows its own.
 var (
-	keyEnds     = key.NewBinding(key.WithKeys("g", "G"), key.WithHelp("g/G", "first/last"))
-	keyBash     = key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "attach bash"))
-	keyDestroy2 = key.NewBinding(key.WithKeys("x"), key.WithHelp("x x", "destroy claim"))
-	keyLeave    = key.NewBinding(key.WithKeys("ctrl+b"), key.WithHelp("C-b q", "leave bash"))
-	keyDrag     = key.NewBinding(key.WithKeys(""), key.WithHelp("drag │", "resize sidebar"))
-	keyHelp     = key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help"))
+	keyEnds      = key.NewBinding(key.WithKeys("g", "G"), key.WithHelp("g/G", "first/last"))
+	keyBash      = key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "attach bash"))
+	keyDestroy2  = key.NewBinding(key.WithKeys("x"), key.WithHelp("x x", "destroy claim"))
+	keyLeave     = key.NewBinding(key.WithKeys("ctrl+b"), key.WithHelp("C-b q", "leave bash"))
+	keyWinNew    = key.NewBinding(key.WithKeys("ctrl+b"), key.WithHelp("C-b c", "new window"))
+	keyWinSwitch = key.NewBinding(key.WithKeys("ctrl+b"), key.WithHelp("C-b n/p/1-9", "switch window"))
+	keyWinClose  = key.NewBinding(key.WithKeys("ctrl+b"), key.WithHelp("C-b x", "close window"))
+	keyDrag      = key.NewBinding(key.WithKeys(""), key.WithHelp("drag │", "resize sidebar"))
+	keyHelp      = key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help"))
 )
 
 type helpKeys struct{}
@@ -25,8 +28,8 @@ func (helpKeys) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{keyMove, keyEnds, keySection, keyDrag},
 		{keyOpen, keyClaim, keyBash, keyDestroy2, keyFull},
-		{keyScroll, keyPage, keyBack, keyLeave},
-		{keyRefresh, keyTabs, keyHelp, keyQuit},
+		{keyWinNew, keyWinSwitch, keyWinClose, keyLeave},
+		{keyScroll, keyPage, keyBack, keyRefresh, keyTabs, keyHelp, keyQuit},
 	}
 }
 

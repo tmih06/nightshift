@@ -6,12 +6,17 @@ func (m model) updateMouse(msg tea.MouseMsg) (model, tea.Cmd) {
 	mouse := msg.Mouse()
 	x, y := mouse.X, mouse.Y
 	if m.focus == focusShell && !m.dragging {
-		if click, ok := msg.(tea.MouseClickMsg); ok && click.Button == tea.MouseLeft {
-			switch {
-			case m.overDivider(x, y):
-				m.dragging = true
-			case m.inTable(x, y) || m.inTabs(y):
-				m = m.clickTable(x, y)
+		if click, ok := msg.(tea.MouseClickMsg); ok {
+			if next, cmd, handled := m.clickWindowBar(x, y, click.Button); handled {
+				return next, cmd
+			}
+			if click.Button == tea.MouseLeft {
+				switch {
+				case m.overDivider(x, y):
+					m.dragging = true
+				case m.inTable(x, y) || m.inTabs(y):
+					m = m.clickTable(x, y)
+				}
 			}
 		}
 		return m, nil
@@ -33,6 +38,9 @@ func (m model) updateMouse(msg tea.MouseMsg) (model, tea.Cmd) {
 			m.moveSelection(delta)
 		}
 	case tea.MouseClickMsg:
+		if next, cmd, handled := m.clickWindowBar(x, y, mouse.Button); handled {
+			return next, cmd
+		}
 		if mouse.Button != tea.MouseLeft {
 			return m, nil
 		}
@@ -49,6 +57,61 @@ func (m model) updateMouse(msg tea.MouseMsg) (model, tea.Cmd) {
 		m.dragging = false
 	}
 	return m, nil
+}
+
+// clickWindowBar handles clicks on the sandbox's Herdr window tab bar:
+// left-click switches windows or triggers + / ×, middle-click closes a tab.
+func (m model) clickWindowBar(x, y int, button tea.MouseButton) (model, tea.Cmd, bool) {
+	row := m.windowTabRow()
+	if row < 0 || y != row {
+		return m, nil, false
+	}
+	b := m.selectedBox()
+	if b == nil || !b.Claimed() {
+		return m, nil, false
+	}
+	for _, s := range m.windowTabSpans() {
+		if x < s.from || x >= s.to {
+			continue
+		}
+		switch s.action {
+		case winActionSelect:
+			if button == tea.MouseMiddle {
+				m.prefix = false
+				m.flash("closing window…")
+				return m, killWindowCmd(b.Name, s.address), true
+			}
+			if button != tea.MouseLeft {
+				return m, nil, false
+			}
+			m.focus = focusShell
+			m.prefix = false
+			return m, m.selectWindow(b.Name, s.address), true
+		case winActionNew:
+			if button != tea.MouseLeft {
+				return m, nil, false
+			}
+			if b.Phase != "Running" {
+				m.flash("pod is " + b.Phase + ", cannot open window")
+				return m, nil, true
+			}
+			m.prefix = false
+			m.flash("opening new window…")
+			return m, createWindowCmd(b.Name), true
+		case winActionClose:
+			if button != tea.MouseLeft {
+				return m, nil, false
+			}
+			term := m.activeTerm(b.Name)
+			if term == "" {
+				return m, nil, true
+			}
+			m.prefix = false
+			m.flash("closing window…")
+			return m, killWindowCmd(b.Name, term), true
+		}
+	}
+	return m, nil, false
 }
 
 // overDivider is whether (x, y) is on the line between the table and the

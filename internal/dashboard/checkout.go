@@ -223,7 +223,7 @@ var liveOps = checkoutOps{
 	createSandbox: cluster.CreateVolumeSandbox,
 	waitPod:       cluster.WaitForPod,
 	ensure:        session.Ensure,
-	send:          session.SendBatch,
+	send:          func(pod string, keys []session.Key) error { return session.SendBatch(pod, "", keys) },
 }
 
 // runCheckout puts c on its volume, cloning it the first time, starts a

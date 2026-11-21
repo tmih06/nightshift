@@ -793,10 +793,10 @@ func TestShellKeyRouting(t *testing.T) {
 		t.Error("C-b q did not leave the shell")
 	}
 
-	// An armed prefix with any other key cancels and swallows the key.
+	// An armed prefix with any unbound key cancels and swallows the key.
 	armed := m
 	armed.prefix = true
-	newM, cmd = armed.updateShellKeys(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	newM, cmd = armed.updateShellKeys(tea.KeyPressMsg{Code: 'z', Text: "z"})
 	if cmd != nil || newM.prefix || len(newM.pending) != 0 {
 		t.Error("an unbound prefix chord must do nothing")
 	}
@@ -1561,5 +1561,218 @@ func TestLiveUsageFromCgroups(t *testing.T) {
 	}
 	if h := m.hist[pod]; len(h.cpu) == 0 || h.cpu[len(h.cpu)-1] != 400.0/500 {
 		t.Fatalf("history did not record the live rate: %v", h.cpu)
+	}
+}
+
+func TestWindowTabBarLayoutAndMouse(t *testing.T) {
+	pod := "agent-pool-bkl2p"
+	m := baseModel()
+	m.selected = pod
+	m.sessions[pod] = true
+	m.windows = map[string][]session.Terminal{
+		pod: {
+			{Address: "t1", Command: "bash"},
+			{Address: "t2", Name: "claude", Command: "node", Status: "working"},
+			{Address: "t3", Command: "tests"},
+		},
+	}
+	m.activeWindow = map[string]string{pod: "t1"}
+
+	// Window tab bar renders directly below the "● herdr live" line.
+	rows := strings.Split(m.plainView(), "\n")
+	tabY := m.windowTabRow()
+	if tabY <= 0 || tabY >= len(rows) {
+		t.Fatalf("windowTabRow = %d out of bounds", tabY)
+	}
+	if !strings.Contains(rows[tabY-1], "● herdr live") || !strings.Contains(rows[tabY-1], "3 windows") {
+		t.Errorf("row above window tabs = %q, want ● herdr live · 3 windows", rows[tabY-1])
+	}
+	for _, want := range []string{"1:bash", "2:claude", "3:tests", "+", "×"} {
+		if !strings.Contains(rows[tabY], want) {
+			t.Errorf("window tab row %q missing %q", rows[tabY], want)
+		}
+	}
+	// Table shows multi-window count.
+	if !strings.Contains(m.plainView(), "●3") {
+		t.Errorf("table missing multi-window indicator ●3")
+	}
+
+	// Verify hit boxes align with rendered text in both side-by-side and stacked layouts,
+	// and with a volume line present.
+	for _, tc := range []struct {
+		name   string
+		width  int
+		volume string
+	}{
+		{"side-by-side", 140, ""},
+		{"side-by-side-volume", 140, "pr-owner-repo-1"},
+		{"stacked", 80, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tm := m
+			tm.width = tc.width
+			tm.boxes = append([]cluster.Sandbox(nil), m.boxes...)
+			tm.boxes[2].Volume = tc.volume
+			plainRows := strings.Split(tm.plainView(), "\n")
+			y := tm.windowTabRow()
+			if !strings.Contains(plainRows[y-1], "● herdr live") {
+				t.Fatalf("row above tabs (%d) = %q, want ● herdr live", y-1, plainRows[y-1])
+			}
+			lineRunes := []rune(plainRows[y])
+			spans := tm.windowTabSpans()
+			if len(spans) < 5 {
+				t.Fatalf("expected 5 spans (3 tabs + add + close), got %+v", spans)
+			}
+			if got := string(lineRunes[spans[1].from:spans[1].to]); !strings.Contains(got, "2:claude") {
+				t.Errorf("span[1] slice = %q, want 2:claude", got)
+			}
+			if got := strings.TrimSpace(string(lineRunes[spans[3].from:spans[3].to])); got != "+" {
+				t.Errorf("add span slice = %q, want +", got)
+			}
+			if got := strings.TrimSpace(string(lineRunes[spans[4].from:spans[4].to])); got != "×" {
+				t.Errorf("close span slice = %q, want ×", got)
+			}
+		})
+	}
+
+	// Clicking tab 2 switches active window and focuses shell.
+	spans := m.windowTabSpans()
+	next, cmd := m.updateMouse(press(spans[1].from+1, tabY))
+	if next.focus != focusShell || next.activeTerm(pod) != "t2" || cmd == nil {
+		t.Fatalf("click tab 2 = focus %v active %q cmd=%v", next.focus, next.activeTerm(pod), cmd != nil)
+	}
+
+	// Clicking tab 3 while ALREADY in focusShell switches window without losing focus.
+	next.watchingShell = false
+	next, cmd = next.updateMouse(press(spans[2].from+1, tabY))
+	if next.focus != focusShell || next.activeTerm(pod) != "t3" || cmd == nil {
+		t.Fatalf("click tab 3 in shell = focus %v active %q cmd=%v", next.focus, next.activeTerm(pod), cmd != nil)
+	}
+
+	// Clicking + triggers createWindowCmd.
+	next, cmd = next.updateMouse(press(spans[3].from+1, tabY))
+	if cmd == nil || !strings.Contains(next.status, "opening new window") {
+		t.Fatalf("click + = status %q cmd=%v", next.status, cmd != nil)
+	}
+
+	// Clicking × triggers killWindowCmd.
+	next, cmd = next.updateMouse(press(spans[4].from+1, tabY))
+	if cmd == nil || !strings.Contains(next.status, "closing window") {
+		t.Fatalf("click × = status %q cmd=%v", next.status, cmd != nil)
+	}
+
+	// Middle-clicking tab 1 triggers killWindowCmd.
+	next, cmd = next.updateMouse(tea.MouseClickMsg{X: spans[0].from + 1, Y: tabY, Button: tea.MouseMiddle})
+	if cmd == nil || !strings.Contains(next.status, "closing window") {
+		t.Fatalf("middle-click tab 1 = status %q cmd=%v", next.status, cmd != nil)
+	}
+}
+
+func TestPrefixWindowKeybindings(t *testing.T) {
+	pod := "agent-pool-bkl2p"
+	m := baseModel()
+	m.selected = pod
+	m.sessions[pod] = true
+	m.windows = map[string][]session.Terminal{
+		pod: {
+			{Address: "t1", Command: "bash"},
+			{Address: "t2", Command: "claude"},
+			{Address: "t3", Command: "tests"},
+		},
+	}
+	m.activeWindow = map[string]string{pod: "t1"}
+	m.focus = focusShell
+
+	chord := func(cur model, msg tea.KeyPressMsg) (model, tea.Cmd) {
+		cur.watchingShell = false
+		cur, _ = cur.updateShellKeys(tea.KeyPressMsg{Code: 'b', Mod: tea.ModCtrl})
+		return cur.updateShellKeys(msg)
+	}
+
+	// C-b n -> t2, C-b n -> t3, C-b n -> wraps to t1.
+	next, cmd := chord(m, tea.KeyPressMsg{Code: 'n', Text: "n"})
+	if next.activeTerm(pod) != "t2" || cmd == nil {
+		t.Fatalf("C-b n = %q cmd=%v, want t2", next.activeTerm(pod), cmd != nil)
+	}
+	next, _ = chord(next, tea.KeyPressMsg{Code: 'l', Text: "l"})
+	if next.activeTerm(pod) != "t3" {
+		t.Fatalf("C-b l = %q, want t3", next.activeTerm(pod))
+	}
+	next, _ = chord(next, tea.KeyPressMsg{Code: tea.KeyRight})
+	if next.activeTerm(pod) != "t1" {
+		t.Fatalf("C-b right wrap = %q, want t1", next.activeTerm(pod))
+	}
+
+	// C-b p wraps backward to t3.
+	next, _ = chord(next, tea.KeyPressMsg{Code: 'p', Text: "p"})
+	if next.activeTerm(pod) != "t3" {
+		t.Fatalf("C-b p wrap = %q, want t3", next.activeTerm(pod))
+	}
+
+	// C-b 2 jumps straight to t2.
+	next, _ = chord(next, tea.KeyPressMsg{Code: '2', Text: "2"})
+	if next.activeTerm(pod) != "t2" {
+		t.Fatalf("C-b 2 = %q, want t2", next.activeTerm(pod))
+	}
+
+	// C-b c creates a new window.
+	next, cmd = chord(next, tea.KeyPressMsg{Code: 'c', Text: "c"})
+	if cmd == nil || !strings.Contains(next.status, "opening new window") {
+		t.Fatalf("C-b c = %q cmd=%v", next.status, cmd != nil)
+	}
+
+	// C-b x closes the active window.
+	next, cmd = chord(next, tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if cmd == nil || !strings.Contains(next.status, "closing window") {
+		t.Fatalf("C-b x = %q cmd=%v", next.status, cmd != nil)
+	}
+
+	// C-b C-b forwards literal Ctrl-b to bash.
+	fwd := m
+	fwd.sending = true
+	fwd, _ = chord(fwd, tea.KeyPressMsg{Code: 'b', Mod: tea.ModCtrl})
+	if len(fwd.pending) != 1 || fwd.pending[0].Name != "C-b" {
+		t.Fatalf("C-b C-b pending = %+v, want C-b", fwd.pending)
+	}
+
+	// C-b F opens fullscreen attach.
+	fullM, cmd := chord(m, tea.KeyPressMsg{Code: 'F', Text: "F"})
+	if cmd == nil || fullM.focus != focusNav {
+		t.Fatalf("C-b F = focus %v cmd=%v", fullM.focus, cmd != nil)
+	}
+
+	// C-b d leaves shell like C-b q.
+	left, _ := chord(m, tea.KeyPressMsg{Code: 'd', Text: "d"})
+	if left.focus != focusNav {
+		t.Fatalf("C-b d focus = %v, want focusNav", left.focus)
+	}
+}
+
+func TestWindowLifecycleMessages(t *testing.T) {
+	pod := "agent-pool-bkl2p"
+	m := baseModel()
+	m.selected = pod
+	m.sessions[pod] = true
+	m.windows = map[string][]session.Terminal{
+		pod: {{Address: "t1", Command: "bash"}},
+	}
+	m.activeWindow = map[string]string{pod: "t1"}
+
+	// Creating a window adds it, selects it, and focuses the shell.
+	next, cmd := m.Update(windowCreatedMsg{pod: pod, term: session.Terminal{Address: "t2", Command: "bash"}})
+	if cmd == nil || next.focus != focusShell || next.activeTerm(pod) != "t2" || len(next.podWindows(pod)) != 2 {
+		t.Fatalf("after create: focus=%v active=%q wins=%d", next.focus, next.activeTerm(pod), len(next.podWindows(pod)))
+	}
+
+	// Killing t2 switches back to t1 while keeping focus.
+	next, cmd = next.Update(windowKilledMsg{pod: pod, term: "t2"})
+	if cmd == nil || next.focus != focusShell || next.activeTerm(pod) != "t1" || len(next.podWindows(pod)) != 1 {
+		t.Fatalf("after kill t2: focus=%v active=%q wins=%d", next.focus, next.activeTerm(pod), len(next.podWindows(pod)))
+	}
+
+	// Killing the last window drops back to focusNav and marks session off.
+	next, _ = next.Update(windowKilledMsg{pod: pod, term: "t1"})
+	if next.focus != focusNav || next.hasSession(pod) || len(next.podWindows(pod)) != 0 {
+		t.Fatalf("after kill last: focus=%v hasSession=%v wins=%d", next.focus, next.hasSession(pod), len(next.podWindows(pod)))
 	}
 }

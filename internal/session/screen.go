@@ -6,13 +6,14 @@ import (
 	"time"
 )
 
-// WatchScreen waits for output, then renders the viewer's terminal screen.
-// A nil screen means nothing changed before wait elapsed.
-func WatchScreen(pod string, w, h int, resize bool, wait time.Duration) ([]string, error) {
+// WatchScreen waits for output on one terminal inside pod, then renders the
+// viewer's terminal screen. A nil screen means nothing changed before wait
+// elapsed.
+func WatchScreen(pod, term string, w, h int, resize bool, wait time.Duration) ([]string, error) {
 	if w < 1 || h < 1 || w > 65535 || h > 65535 {
 		return nil, fmt.Errorf("invalid terminal size %dx%d", w, h)
 	}
-	v, err := getViewer(pod, w, h)
+	v, err := getViewer(pod, term, w, h)
 	if err != nil {
 		return nil, err
 	}

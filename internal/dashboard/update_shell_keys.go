@@ -38,11 +38,7 @@ func (m model) updateShellKeys(msg tea.KeyPressMsg) (model, tea.Cmd) {
 	}
 	if m.prefix {
 		m.prefix = false
-		if msg.String() == "q" {
-			m.focus = focusNav
-			m.status, m.statusTTL = "", 0
-		}
-		return m, nil
+		return m.handlePrefixKey(msg)
 	}
 	if msg.String() == "ctrl+b" {
 		m.prefix = true
@@ -55,6 +51,52 @@ func (m model) updateShellKeys(msg tea.KeyPressMsg) (model, tea.Cmd) {
 	return m.queueShell(key)
 }
 
+func (m model) handlePrefixKey(msg tea.KeyPressMsg) (model, tea.Cmd) {
+	s := msg.String()
+	switch s {
+	case "q", "d":
+		m.focus = focusNav
+		m.status, m.statusTTL = "", 0
+		return m, nil
+	case "c":
+		b := m.selectedBox()
+		if b == nil || b.Phase != "Running" {
+			return m, nil
+		}
+		m.flash("opening new window…")
+		return m, createWindowCmd(b.Name)
+	case "n", "l", "right":
+		return m, m.stepWindow(1)
+	case "p", "h", "left":
+		return m, m.stepWindow(-1)
+	case "x", "&":
+		b := m.selectedBox()
+		if b == nil {
+			return m, nil
+		}
+		term := m.activeTerm(b.Name)
+		if term == "" {
+			return m, nil
+		}
+		m.flash("closing window…")
+		return m, killWindowCmd(b.Name, term)
+	case "f", "F":
+		b := m.selectedBox()
+		if b == nil || b.Phase != "Running" {
+			return m, nil
+		}
+		m.focus = focusNav
+		m.flash("opening fullscreen bash, detach with Ctrl-\\")
+		return m, fullCmd(b.Name, m.activeTerm(b.Name))
+	case "ctrl+b":
+		return m.queueShell(session.Key{Name: "C-b"})
+	}
+	if len(s) == 1 && s[0] >= '1' && s[0] <= '9' {
+		return m, m.selectWindowIndex(int(s[0] - '1'))
+	}
+	return m, nil
+}
+
 func (m model) pasteIntoShell(text string) (model, tea.Cmd) {
 	if !m.canFocusShell() || text == "" {
 		return m, nil
@@ -64,6 +106,9 @@ func (m model) pasteIntoShell(text string) (model, tea.Cmd) {
 
 func (m model) queueShell(key session.Key) (model, tea.Cmd) {
 	m.pending = append(m.pending, key)
+	if b := m.selectedBox(); b != nil && m.pendingTerm == "" {
+		m.pendingTerm = m.activeTerm(b.Name)
+	}
 	if m.sending {
 		return m, nil
 	}

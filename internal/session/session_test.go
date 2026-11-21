@@ -3,6 +3,7 @@ package session
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -23,12 +24,33 @@ func TestName(t *testing.T) {
 	if got := Name(pod); len(got) > 32 || got != Name(pod) || got == Name(pod+"x") {
 		t.Fatalf("invalid or colliding name: %q", got)
 	}
+	if !isGeneratedName(Name(pod)) {
+		t.Fatalf("Name(pod) should be recognized as generated: %q", Name(pod))
+	}
+	if isGeneratedName("dev") {
+		t.Fatal("custom name must not be recognized as generated")
+	}
+}
+
+func TestTerminalLabel(t *testing.T) {
+	if got := (Terminal{Address: "t1", Name: Name("pod-a"), Command: "claude"}).Label(); got != "claude" {
+		t.Errorf("generated name label = %q, want claude", got)
+	}
+	if got := (Terminal{Address: "t2", Name: "tests", Command: "bash"}).Label(); got != "tests" {
+		t.Errorf("explicit name label = %q, want tests", got)
+	}
+	if got := (Terminal{Address: "t3"}).Label(); got != "t3" {
+		t.Errorf("bare terminal label = %q, want t3", got)
+	}
 }
 
 func TestKubectlCommand(t *testing.T) {
 	want := []string{"kubectl", "--context", "kind-agent-sandbox", "-n", "sandbox-demo", "exec", "-i", "-t", "agent-pool-5ss7w", "--", "hc", "attach", "example"}
 	if got := kubectl("agent-pool-5ss7w", true, true, "attach", "example").Args; !reflect.DeepEqual(got, want) {
 		t.Errorf("kubectl = %v, want %v", got, want)
+	}
+	if got := Attach("agent-pool-5ss7w", "t2").Args; got[len(got)-1] != "t2" {
+		t.Errorf("Attach(..., t2) = %v", got)
 	}
 }
 
@@ -42,6 +64,10 @@ func TestMissingHerdrReportsOldImage(t *testing.T) {
 	_, err := hc("old-pod", "run")
 	if err == nil || err.Error() != "hc missing in old-pod; claim a new sandbox with the updated image" {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	_, err = List("old-pod")
+	if err == nil || err.Error() != "hc missing in old-pod; claim a new sandbox with the updated image" {
+		t.Fatalf("unexpected connect error: %v", err)
 	}
 }
 
@@ -119,7 +145,7 @@ func TestSameSizeResizePreservesScrollRegion(t *testing.T) {
 	}
 }
 
-// TestViewerProcess acts as hc connect for TestViewerStream.
+// TestViewerProcess acts as a multi-terminal hc connect daemon for TestViewerStream.
 func TestViewerProcess(t *testing.T) {
 	if os.Getenv("NIGHTSHIFT_FAKE_VIEWER") != "1" {
 		return
@@ -129,19 +155,95 @@ func TestViewerProcess(t *testing.T) {
 		os.Exit(1)
 	}
 	_, _ = fmt.Fprintln(os.Stdout, `{"jsonrpc":"2.0","id":1,"result":{}}`)
-	if _, _, _, err := readFrame(r); err != nil {
-		os.Exit(1)
+
+	type fakeTerm struct {
+		Address   string   `json:"address"`
+		Name      string   `json:"name,omitempty"`
+		Argv      []string `json:"argv"`
+		State     string   `json:"state"`
+		CreatedMS uint64   `json:"created_ms"`
 	}
-	_ = writeFrame(os.Stdout, 0, 0, []byte(`{"jsonrpc":"2.0","id":2,"result":{"channel":1}}`))
-	// Include a query to exercise the emulator's reply drain.
-	_ = writeFrame(os.Stdout, 1, 0, []byte("\x1b[6n\x1b[2J\x1b[H\x1b[31mred\x1b[0m"))
+	terms := map[string]fakeTerm{
+		"t1": {Address: "t1", Argv: []string{"bash"}, State: "live", CreatedMS: 1},
+	}
+	nextTerm := 2
+	nextChan := uint32(1)
+	chanToTerm := map[uint32]string{}
+
+	sendRPC := func(id uint64, result any) {
+		b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
+		_ = writeFrame(os.Stdout, 0, 0, b)
+	}
+
 	for {
-		channel, kind, _, err := readFrame(r)
+		channel, kind, payload, err := readFrame(r)
 		if err != nil {
 			os.Exit(0)
 		}
-		if channel == 1 && kind == 0 {
-			_ = writeFrame(os.Stdout, 1, 0, []byte("\r\n\x1b[38;5;33mblue\x1b[0m"))
+		if channel == 0 && kind == 0 {
+			var req struct {
+				ID     uint64          `json:"id"`
+				Method string          `json:"method"`
+				Params json.RawMessage `json:"params"`
+			}
+			if json.Unmarshal(payload, &req) != nil {
+				continue
+			}
+			switch req.Method {
+			case "terminal.list":
+				list := make([]fakeTerm, 0, len(terms))
+				for _, ft := range terms {
+					list = append(list, ft)
+				}
+				sendRPC(req.ID, map[string]any{"terminals": list, "hidden_finished": 0, "machines": []any{}})
+			case "terminal.run":
+				var p struct {
+					Name string `json:"name"`
+				}
+				_ = json.Unmarshal(req.Params, &p)
+				addr := fmt.Sprintf("t%d", nextTerm)
+				nextTerm++
+				ft := fakeTerm{Address: addr, Name: p.Name, Argv: []string{"bash"}, State: "live", CreatedMS: uint64(nextTerm)}
+				terms[addr] = ft
+				sendRPC(req.ID, ft)
+			case "terminal.kill":
+				var p struct {
+					Terminal string `json:"terminal"`
+				}
+				_ = json.Unmarshal(req.Params, &p)
+				delete(terms, p.Terminal)
+				// Match real herdr-core 0.1.21 behavior on rm: true terminals.
+				b, _ := json.Marshal(map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"error": map[string]any{
+						"code":    -32000,
+						"message": p.Terminal + " was removed",
+						"data":    map[string]any{"kind": "not_found"},
+					},
+				})
+				_ = writeFrame(os.Stdout, 0, 0, b)
+			case "terminal.attach":
+				var p struct {
+					Terminal string `json:"terminal"`
+				}
+				_ = json.Unmarshal(req.Params, &p)
+				ch := nextChan
+				nextChan++
+				chanToTerm[ch] = p.Terminal
+				sendRPC(req.ID, map[string]any{"channel": ch})
+				// Include a query to exercise the emulator's reply drain.
+				paint := fmt.Sprintf("\x1b[6n\x1b[2J\x1b[H\x1b[31mred-%s\x1b[0m", p.Terminal)
+				_ = writeFrame(os.Stdout, ch, 0, []byte(paint))
+			}
+			continue
+		}
+		if channel > 0 && kind == 0 {
+			term := chanToTerm[channel]
+			_ = writeFrame(os.Stdout, channel, 0, []byte(fmt.Sprintf("\r\n\x1b[38;5;33mblue-%s\x1b[0m", term)))
+		}
+		if channel > 0 && kind == 2 {
+			delete(chanToTerm, channel)
 		}
 	}
 }
@@ -159,21 +261,49 @@ func TestViewerStream(t *testing.T) {
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("NIGHTSHIFT_FAKE_VIEWER", "1")
 	pod := "stream-test"
-	if _, err := WatchScreen(pod, 20, 4, true, 0); err != nil {
+	t.Cleanup(func() { ClosePod(pod) })
+
+	// List, create a second terminal, and multiplex both over one podConn.
+	terms, err := List(pod)
+	if err != nil || len(terms) != 1 || terms[0].Address != "t1" {
+		t.Fatalf("List = %v, %v", terms, err)
+	}
+	created, err := Create(pod, "agent")
+	if err != nil || created.Address != "t2" || created.Label() != "agent" {
+		t.Fatalf("Create = %+v, %v", created, err)
+	}
+	terms, err = List(pod)
+	if err != nil || len(terms) != 2 {
+		t.Fatalf("List after Create = %v, %v", terms, err)
+	}
+
+	if _, err := WatchScreen(pod, "t1", 20, 4, true, 0); err != nil {
 		t.Fatal(err)
 	}
-	viewers.Lock()
-	v := viewers.byPod[pod]
-	viewers.Unlock()
-	t.Cleanup(func() {
-		DisconnectViewer(pod)
-		<-v.done
-	})
-	waitFor := func(word string) []string {
+	if _, err := WatchScreen(pod, "t2", 20, 4, true, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	// Both viewers share the same single podConn.
+	conns.Lock()
+	c := conns.byPod[pod]
+	conns.Unlock()
+	if c == nil {
+		t.Fatal("missing shared podConn")
+	}
+	c.mu.Lock()
+	v1 := c.viewers["t1"]
+	v2 := c.viewers["t2"]
+	c.mu.Unlock()
+	if v1 == nil || v2 == nil || v1.channel == v2.channel {
+		t.Fatalf("expected two multiplexed channels on one podConn: v1=%v v2=%v", v1, v2)
+	}
+
+	waitFor := func(term, word string) []string {
 		t.Helper()
 		deadline := time.Now().Add(5 * time.Second)
 		for time.Now().Before(deadline) {
-			lines, err := WatchScreen(pod, 20, 4, false, 100*time.Millisecond)
+			lines, err := WatchScreen(pod, term, 20, 4, false, 100*time.Millisecond)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -181,31 +311,47 @@ func TestViewerStream(t *testing.T) {
 				return lines
 			}
 		}
-		t.Fatalf("screen did not contain %q", word)
+		t.Fatalf("screen(%s) did not contain %q", term, word)
 		return nil
 	}
-	lines := waitFor("red")
+	lines := waitFor("t1", "red-t1")
 	if !strings.Contains(lines[0], "\x1b[") {
 		t.Fatalf("initial paint has no color: %q", lines)
 	}
-	if err := SendBatch(pod, []Key{{Text: "x"}}); err != nil {
+	waitFor("t2", "red-t2")
+
+	if err := SendBatch(pod, "t1", []Key{{Text: "x"}}); err != nil {
 		t.Fatal(err)
 	}
-	lines = waitFor("blue")
+	lines = waitFor("t1", "blue-t1")
 	if !strings.Contains(lines[1], "\x1b[") {
 		t.Fatalf("output has no color: %q", lines)
 	}
-	DisconnectViewer(pod)
-	<-v.done
-	if _, err := WatchScreen(pod, 20, 4, true, 0); err != nil {
+
+	// Detaching one viewer keeps the shared podConn and the second viewer alive.
+	DisconnectViewer(pod, "t1")
+	<-v1.done
+	if err := SendBatch(pod, "t2", []Key{{Text: "y"}}); err != nil {
 		t.Fatal(err)
 	}
-	viewers.Lock()
-	v = viewers.byPod[pod]
-	viewers.Unlock()
-	lines = waitFor("red")
+	waitFor("t2", "blue-t2")
+
+	// Reattaching t1 gets a fresh paint over the same podConn.
+	if _, err := WatchScreen(pod, "t1", 20, 4, true, 0); err != nil {
+		t.Fatal(err)
+	}
+	lines = waitFor("t1", "red-t1")
 	if !strings.Contains(lines[0], "\x1b[") {
 		t.Fatalf("reconnected paint has no color: %q", lines)
+	}
+
+	// Killing t2 removes it from List while leaving t1 alive.
+	if err := Kill(pod, "t2"); err != nil {
+		t.Fatal(err)
+	}
+	terms, err = List(pod)
+	if err != nil || len(terms) != 1 || terms[0].Address != "t1" {
+		t.Fatalf("List after Kill = %v, %v", terms, err)
 	}
 }
 
@@ -227,8 +373,11 @@ func TestHerdrSession(t *testing.T) {
 	t.Setenv("HC_SESSION", "nightshift-test")
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 	t.Setenv("XDG_RUNTIME_DIR", dir)
-	t.Cleanup(func() { _ = exec.Command("hc", "server", "stop").Run() })
 	pod := "agent-pool-test"
+	t.Cleanup(func() {
+		ClosePod(pod)
+		_ = exec.Command("hc", "server", "stop").Run()
+	})
 	if err := Ensure(pod); err != nil {
 		t.Fatal(err)
 	}
@@ -239,15 +388,15 @@ func TestHerdrSession(t *testing.T) {
 	if !Has(pod) || !Live(boxes)[pod] {
 		t.Fatal("session not listed")
 	}
-	if _, err := WatchScreen(pod, 80, 24, true, 0); err != nil {
+	if _, err := WatchScreen(pod, "", 80, 24, true, 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := SendBatch(pod, []Key{{Text: "printf NIGHTSHIFT_%s HERDR_OK"}, {Name: "Enter"}}); err != nil {
+	if err := SendBatch(pod, "", []Key{{Text: "printf NIGHTSHIFT_%s HERDR_OK"}, {Name: "Enter"}}); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		lines, err := WatchScreen(pod, 80, 24, false, 100*time.Millisecond)
+		lines, err := WatchScreen(pod, "", 80, 24, false, 100*time.Millisecond)
 		if err == nil && strings.Contains(strings.Join(lines, "\n"), "NIGHTSHIFT_HERDR_OK") {
 			break
 		}
@@ -256,12 +405,12 @@ func TestHerdrSession(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	if err := SendBatch(pod, []Key{{Text: `printf '\033[38;2;12;34;56mNIGHTSHIFT_COLOR\033[0m\n'`}, {Name: "Enter"}}); err != nil {
+	if err := SendBatch(pod, "", []Key{{Text: `printf '\033[38;2;12;34;56mNIGHTSHIFT_COLOR\033[0m\n'`}, {Name: "Enter"}}); err != nil {
 		t.Fatal(err)
 	}
 	deadline = time.Now().Add(5 * time.Second)
 	for {
-		lines, err := WatchScreen(pod, 80, 24, false, 100*time.Millisecond)
+		lines, err := WatchScreen(pod, "", 80, 24, false, 100*time.Millisecond)
 		if err == nil && strings.Contains(strings.Join(lines, "\n"), "38;2;12;34;56mNIGHTSHIFT_COLOR") {
 			break
 		}
@@ -269,39 +418,21 @@ func TestHerdrSession(t *testing.T) {
 			t.Fatalf("color not captured: %q, %v", lines, err)
 		}
 	}
-	// Closing the dashboard's viewer must not end the shell. Reconnect and
+	// Closing the dashboard's connection must not end the shell. Reconnect and
 	// check that a later command still reaches the same running terminal.
-	viewers.Lock()
-	v := viewers.byPod[pod]
-	viewers.Unlock()
-	if err := v.in.Close(); err != nil {
-		t.Fatal(err)
-	}
-	deadline = time.Now().Add(5 * time.Second)
-	for {
-		viewers.Lock()
-		gone := viewers.byPod[pod] == nil
-		viewers.Unlock()
-		if gone {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("viewer did not disconnect")
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	ClosePod(pod)
 	if !Has(pod) {
 		t.Fatal("viewer disconnect ended the shell")
 	}
-	if _, err := WatchScreen(pod, 91, 27, true, 0); err != nil {
+	if _, err := WatchScreen(pod, "", 91, 27, true, 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := SendBatch(pod, []Key{{Text: "stty size"}, {Name: "Enter"}}); err != nil {
+	if err := SendBatch(pod, "", []Key{{Text: "stty size"}, {Name: "Enter"}}); err != nil {
 		t.Fatal(err)
 	}
 	deadline = time.Now().Add(5 * time.Second)
 	for {
-		lines, err := WatchScreen(pod, 80, 24, false, 100*time.Millisecond)
+		lines, err := WatchScreen(pod, "", 80, 24, false, 100*time.Millisecond)
 		if err == nil && strings.Contains(strings.Join(lines, "\n"), "27 91") {
 			break
 		}
@@ -310,7 +441,7 @@ func TestHerdrSession(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	if err := SendBatch(pod, []Key{{Text: "exit"}, {Name: "Enter"}}); err != nil {
+	if err := SendBatch(pod, "", []Key{{Text: "exit"}, {Name: "Enter"}}); err != nil {
 		t.Fatal(err)
 	}
 	deadline = time.Now().Add(5 * time.Second)
@@ -328,20 +459,27 @@ func TestHerdrLivePod(t *testing.T) {
 	if pod == "" {
 		t.Skip("NIGHTSHIFT_TEST_POD not set")
 	}
-	t.Cleanup(func() { _, _ = hc(pod, "kill", Name(pod)) })
+	t.Cleanup(func() {
+		if terms, err := List(pod); err == nil {
+			for _, term := range terms {
+				_ = Kill(pod, term.Address)
+			}
+		}
+		ClosePod(pod)
+	})
 	if err := Ensure(pod); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := WatchScreen(pod, 80, 24, true, 0); err != nil {
+	if _, err := WatchScreen(pod, "", 80, 24, true, 0); err != nil {
 		t.Fatal(err)
 	}
 	// Output must wake the watcher even after the input batch is long gone.
-	if err := SendBatch(pod, []Key{{Text: `export NIGHTSHIFT_RECONNECT=LIVE_OK; sleep 0.3; printf '\033[38;2;12;34;56mNIGHTSHIFT_%s\033[0m\n' LIVE_OK`}, {Name: "Enter"}}); err != nil {
+	if err := SendBatch(pod, "", []Key{{Text: `export NIGHTSHIFT_RECONNECT=LIVE_OK; sleep 0.3; printf '\033[38;2;12;34;56mNIGHTSHIFT_%s\033[0m\n' LIVE_OK`}, {Name: "Enter"}}); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		lines, err := WatchScreen(pod, 80, 24, false, 100*time.Millisecond)
+		lines, err := WatchScreen(pod, "", 80, 24, false, 100*time.Millisecond)
 		if err == nil && strings.Contains(strings.Join(lines, "\n"), "38;2;12;34;56mNIGHTSHIFT_LIVE_OK") {
 			break
 		}
@@ -350,37 +488,44 @@ func TestHerdrLivePod(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	viewers.Lock()
-	v := viewers.byPod[pod]
-	viewers.Unlock()
-	if err := v.in.Close(); err != nil {
+	// Create a second window over the same connection and verify isolation.
+	w2, err := Create(pod, "win2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := WatchScreen(pod, w2.Address, 80, 24, true, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := SendBatch(pod, w2.Address, []Key{{Text: "printf SECOND_WIN_%s OK"}, {Name: "Enter"}}); err != nil {
 		t.Fatal(err)
 	}
 	deadline = time.Now().Add(10 * time.Second)
 	for {
-		viewers.Lock()
-		gone := viewers.byPod[pod] == nil
-		viewers.Unlock()
-		if gone {
+		lines, err := WatchScreen(pod, w2.Address, 80, 24, false, 100*time.Millisecond)
+		if err == nil && strings.Contains(strings.Join(lines, "\n"), "SECOND_WIN_OK") {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("viewer did not disconnect")
+			t.Fatalf("second window output not captured: %q, %v", lines, err)
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
+	if err := Kill(pod, w2.Address); err != nil {
+		t.Fatalf("Kill(%s) failed: %v", w2.Address, err)
+	}
+	ClosePod(pod)
 	if !Has(pod) {
-		t.Fatal("shell ended when kubectl viewer disconnected")
+		t.Fatal("shell ended when kubectl connection closed")
 	}
-	if _, err := WatchScreen(pod, 80, 24, true, 0); err != nil {
+	if _, err := WatchScreen(pod, "", 80, 24, true, 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := SendBatch(pod, []Key{{Text: `printf RECONNECTED_%s "$NIGHTSHIFT_RECONNECT"`}, {Name: "Enter"}}); err != nil {
+	if err := SendBatch(pod, "", []Key{{Text: `printf RECONNECTED_%s "$NIGHTSHIFT_RECONNECT"`}, {Name: "Enter"}}); err != nil {
 		t.Fatal(err)
 	}
 	deadline = time.Now().Add(10 * time.Second)
 	for {
-		lines, err := WatchScreen(pod, 80, 24, false, 100*time.Millisecond)
+		lines, err := WatchScreen(pod, "", 80, 24, false, 100*time.Millisecond)
 		if err == nil && strings.Contains(strings.Join(lines, "\n"), "RECONNECTED_LIVE_OK") {
 			break
 		}

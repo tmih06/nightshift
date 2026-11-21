@@ -49,6 +49,12 @@ var (
 	shellBarStyle  lipgloss.Style
 	prefixBarStyle lipgloss.Style
 
+	winFocusedStyle  lipgloss.Style
+	winActiveStyle   lipgloss.Style
+	winInactiveStyle lipgloss.Style
+	winActionStyle   lipgloss.Style
+	winCloseStyle    lipgloss.Style
+
 	helpStyles help.Styles
 )
 
@@ -89,6 +95,12 @@ func useTheme(t ghtheme.Theme) {
 
 	shellBarStyle = lipgloss.NewStyle().Background(t.SuccessText).Foreground(t.InvertedText).Bold(true)
 	prefixBarStyle = lipgloss.NewStyle().Background(t.WarningText).Foreground(t.InvertedText).Bold(true)
+
+	winFocusedStyle = lipgloss.NewStyle().Background(t.SuccessText).Foreground(t.InvertedText).Bold(true)
+	winActiveStyle = lipgloss.NewStyle().Background(t.SelectedBackground).Foreground(t.PrimaryText).Bold(true)
+	winInactiveStyle = lipgloss.NewStyle().Foreground(t.SecondaryText)
+	winActionStyle = lipgloss.NewStyle().Foreground(t.PrimaryText).Bold(true)
+	winCloseStyle = lipgloss.NewStyle().Foreground(t.FaintText)
 
 	helpStyles = styles.Help.BubbleStyles
 }
