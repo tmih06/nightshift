@@ -163,7 +163,7 @@ func TestNodeTreeOrderingAndNavigation(t *testing.T) {
 func TestSectionsFilterTheTable(t *testing.T) {
 	m := baseModel()
 	tabs := ansi.Strip(m.tabsView())
-	for _, want := range []string{"All (3)", "Warm (2)", "Claimed (1)", "ns sandbox-demo", "━"} {
+	for _, want := range []string{"All (3)", "Warm (2)", "Claimed (1)", "ns nightshift", "━"} {
 		if !strings.Contains(tabs, want) {
 			t.Errorf("section tabs %q missing %q", tabs, want)
 		}
@@ -552,7 +552,7 @@ func TestViewFrame(t *testing.T) {
 	got := m.plainView()
 	for _, want := range []string{
 		"All (3)", "Warm (2)", "Claimed (1)", "Sandbox", "CPU", "MEM",
-		"sandbox-demo · agent-pool", "agent-pool-5ss7w", "Warm", "● Running", "herdr live",
+		"nightshift · agent-pool", "agent-pool-5ss7w", "Warm", "● Running", "herdr live",
 		"debian:12-slim", "cpu 100/500m", "mem 128Mi/256Mi", "Configs",
 		"agent-pool-lqbmx", "agent-pool-bkl2p", "Sandbox 1/3",
 	} {
@@ -573,7 +573,7 @@ func TestViewFrame(t *testing.T) {
 
 	m.selected = "agent-pool-bkl2p"
 	g := m.plainView()
-	for _, want := range []string{"sandbox-demo · my-agent", "Claimed", "herdr off", "2m/500m", "Shell",
+	for _, want := range []string{"nightshift · my-agent", "Claimed", "herdr off", "2m/500m", "Shell",
 		"no session — claim with c, or enter on a claimed sandbox"} {
 		if !strings.Contains(g, want) {
 			t.Errorf("claimed view missing %q", want)
@@ -612,7 +612,7 @@ func TestViewStates(t *testing.T) {
 	m.width = 80
 	l := m.layout()
 	rows := strings.Split(m.plainView(), "\n")
-	if !l.stacked || !strings.Contains(rows[l.sideTop+1], "sandbox-demo") {
+	if !l.stacked || !strings.Contains(rows[l.sideTop+1], "nightshift") {
 		t.Errorf("stacked layout did not put the preview under the table: %q", rows[l.sideTop+1])
 	}
 }
@@ -1132,7 +1132,7 @@ func TestHeaderAndRail(t *testing.T) {
 		t.Fatalf("info block is %d rows, want %d", len(info), infoRows)
 	}
 	head := ansi.Strip(strings.Join(info, "\n"))
-	for _, want := range []string{"sandbox-demo · agent-pool", "agent-pool-5ss7w", "Warm", "● Running", "node unassigned",
+	for _, want := range []string{"nightshift · agent-pool", "agent-pool-5ss7w", "Warm", "● Running", "node unassigned",
 		"debian:12-slim", "● herdr live", "Configs", "⏎ or click to focus"} {
 		if !strings.Contains(head, want) {
 			t.Errorf("info missing %q: %q", want, head)

@@ -41,7 +41,7 @@ type quantities struct {
 }
 
 func TestWarmPools(t *testing.T) {
-	f, err := os.Open("../../demo/warmpool.yaml")
+	f, err := os.Open("../../k8s/warmpool.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,11 +83,11 @@ func TestWarmPools(t *testing.T) {
 	for _, a := range agents {
 		t.Run(a.image, func(t *testing.T) {
 			p, ok := pools[a.pool]
-			if !ok || p.Metadata.Namespace != "sandbox-demo" || p.Spec.Replicas != 1 || p.Spec.SandboxTemplateRef.Name != a.template {
+			if !ok || p.Metadata.Namespace != "nightshift" || p.Spec.Replicas != 1 || p.Spec.SandboxTemplateRef.Name != a.template {
 				t.Errorf("pool: %+v", p)
 			}
 			tpl, ok := templates[a.template]
-			if !ok || tpl.Metadata.Namespace != "sandbox-demo" {
+			if !ok || tpl.Metadata.Namespace != "nightshift" {
 				t.Fatalf("missing template %s", a.template)
 			}
 			containers := tpl.Spec.PodTemplate.Spec.Containers

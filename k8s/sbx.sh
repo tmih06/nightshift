@@ -12,13 +12,13 @@
 #        pool restocks a fresh warm one. Run it twice = two different
 #        sandboxes (even in parallel: each run claims its own).
 #
-# Env overrides: CTX (default kind-agent-sandbox), NS (default sandbox-demo),
+# Env overrides: CTX (default kind-agent-sandbox), NS (default nightshift),
 #                POOL (default pi-pool; also codex-pool, claude-code-pool,
 #                opencode-pool), SBX_NO_EXEC=1 to skip the shell.
 set -euo pipefail
 
 CTX=${CTX:-kind-agent-sandbox}
-NS=${NS:-sandbox-demo}
+NS=${NS:-nightshift}
 POOL=${POOL:-pi-pool}
 NAME=claimed-sandbox-$(date +%Y%m%d%H%M%S)-$$
 KEEP=0
@@ -39,7 +39,7 @@ cleanup() {
 trap cleanup EXIT
 
 if ! "${K[@]}" get sandboxwarmpool "$POOL" >/dev/null 2>&1; then
-  echo "✗ no SandboxWarmPool '$POOL' in ns '$NS' — run: kubectl apply -f demo/warmpool.yaml" >&2
+  echo "✗ no SandboxWarmPool '$POOL' in ns '$NS' — run: kubectl apply -f k8s/warmpool.yaml" >&2
   exit 1
 fi
 

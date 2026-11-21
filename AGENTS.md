@@ -16,8 +16,9 @@ project context, the layout, and the verify commands.
   it ships a roadmap item, tick it in `README.md`.
 - Keep `README.md` free of technical detail. It speaks to people who want to
   know what Nightshift does, not how.
-- Stay inside the demo. Touch only the `kind-agent-sandbox` cluster and the
-  `sandbox-demo` namespace, and clean up any claim you create.
+- Stay scoped to Nightshift's cluster resources. Touch only the
+  `kind-agent-sandbox` cluster and Nightshift's namespaces (`nightshift` and
+  `nightshift-egress`), and clean up any claim you create.
 - Ask before anything hard to undo: deleting cluster resources you did not
   create, force-pushing, or rewriting history.
 - Keep build output, binaries, and credentials out of the repo. Never bake

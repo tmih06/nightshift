@@ -133,7 +133,7 @@ programmer, an assembler, a pipeline, or an agent.
 
 ## What this means for this repo
 
-The demo in this repo is a small software factory by the oldest definition
+Nightshift is a small software factory by the oldest definition
 and the newest. The `SandboxTemplate` is the standardized environment and
 tooling, the `SandboxWarmPool` is standing capacity, and the `SandboxClaim`
 is the work order that consumes it. Deleting the claim tears the product

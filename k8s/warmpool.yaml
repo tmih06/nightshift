@@ -1,16 +1,18 @@
 # One template and one warm standby per coding agent.
-# Claim a pool with demo/claim.yaml, sbx, or the dashboard.
+# Claim a pool with k8s/claim.yaml, sbx, or the dashboard.
 ---
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: sandbox-demo
+  name: nightshift
+  labels:
+    kubernetes.io/metadata.name: nightshift
 ---
 apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxTemplate
 metadata:
   name: pi-template
-  namespace: sandbox-demo
+  namespace: nightshift
 spec:
   podTemplate:
     spec:
@@ -32,7 +34,7 @@ apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxWarmPool
 metadata:
   name: pi-pool
-  namespace: sandbox-demo
+  namespace: nightshift
 spec:
   updateStrategy:
     type: Recreate
@@ -44,7 +46,7 @@ apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxTemplate
 metadata:
   name: codex-template
-  namespace: sandbox-demo
+  namespace: nightshift
 spec:
   podTemplate:
     spec:
@@ -66,7 +68,7 @@ apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxWarmPool
 metadata:
   name: codex-pool
-  namespace: sandbox-demo
+  namespace: nightshift
 spec:
   updateStrategy:
     type: Recreate
@@ -78,7 +80,7 @@ apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxTemplate
 metadata:
   name: claude-code-template
-  namespace: sandbox-demo
+  namespace: nightshift
 spec:
   podTemplate:
     spec:
@@ -100,7 +102,7 @@ apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxWarmPool
 metadata:
   name: claude-code-pool
-  namespace: sandbox-demo
+  namespace: nightshift
 spec:
   updateStrategy:
     type: Recreate
@@ -112,7 +114,7 @@ apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxTemplate
 metadata:
   name: opencode-template
-  namespace: sandbox-demo
+  namespace: nightshift
 spec:
   podTemplate:
     spec:
@@ -134,7 +136,7 @@ apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxWarmPool
 metadata:
   name: opencode-pool
-  namespace: sandbox-demo
+  namespace: nightshift
 spec:
   updateStrategy:
     type: Recreate

@@ -18,16 +18,16 @@ The build verifies the agent's version by running its command. Agent packages
 may execute their npm install scripts at build time. No credentials are baked
 into the images; supply provider credentials or log in at runtime.
 
-## Demo build
+## Cluster deployment
 
-The demo manifest references the four published GHCR `latest` images and
+The warm pool manifest references the four published GHCR `latest` images and
 keeps one warm pod per agent. Ensure the cluster can pull them, then apply:
 
 ```sh
-kubectl --context kind-agent-sandbox apply -f demo/warmpool.yaml
+kubectl --context kind-agent-sandbox apply -f k8s/warmpool.yaml
 ```
 
-On an existing demo this creates `pi-template` and updates `pi-pool`; it does
+On an existing cluster this creates `pi-template` and updates `pi-pool`; it does
 not remove the old `agent-bash-template` or `agent-pool`. Updating a pool can
 replace its warm sandbox, but existing claims are not deleted. Select a warm
 sandbox and press `c` in the dashboard to claim its pool, or use, for example,
@@ -42,7 +42,7 @@ kind, and change the corresponding template to use its local tag and
 for the node's architecture.
 
 The workspace, agent configuration, and Herdr state are ephemeral by default.
-The demo gives each agent a 2Gi memory limit; real
+Each agent pod defaults to a 2Gi memory limit; heavier
 workloads may need more.
 
 ## Published images and release watcher

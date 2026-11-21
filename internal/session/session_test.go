@@ -45,7 +45,7 @@ func TestTerminalLabel(t *testing.T) {
 }
 
 func TestKubectlCommand(t *testing.T) {
-	want := []string{"kubectl", "--context", "kind-agent-sandbox", "-n", "sandbox-demo", "exec", "-i", "-t", "agent-pool-5ss7w", "--", "hc", "attach", "example"}
+	want := []string{"kubectl", "--context", "kind-agent-sandbox", "-n", "nightshift", "exec", "-i", "-t", "agent-pool-5ss7w", "--", "hc", "attach", "example"}
 	if got := kubectl("agent-pool-5ss7w", true, true, "attach", "example").Args; !reflect.DeepEqual(got, want) {
 		t.Errorf("kubectl = %v, want %v", got, want)
 	}
@@ -175,7 +175,7 @@ func TestViewerProcess(t *testing.T) {
 			Argv:       []string{"bash"},
 			State:      "live",
 			CWD:        "/home/agent",
-			Foreground: &fakeFG{Name: "bash", CWD: "/home/agent/workspace/demo"},
+			Foreground: &fakeFG{Name: "bash", CWD: "/home/agent/workspace/app"},
 			CreatedMS:  1,
 		},
 	}
@@ -408,8 +408,8 @@ func TestCreateFromInheritsActiveCWD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateFrom(t1) error: %v", err)
 	}
-	if inherited.CWD != "/home/agent/workspace/demo" {
-		t.Fatalf("CreateFrom(t1).CWD = %q, want /home/agent/workspace/demo", inherited.CWD)
+	if inherited.CWD != "/home/agent/workspace/app" {
+		t.Fatalf("CreateFrom(t1).CWD = %q, want /home/agent/workspace/app", inherited.CWD)
 	}
 
 	fallback, err := CreateFrom(pod, "", "missing")

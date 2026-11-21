@@ -148,7 +148,7 @@ func TestBuildSandboxesParsesCreationTime(t *testing.T) {
 }
 
 // The claim the dashboard applies must carry the same shape as
-// demo/claim.yaml: the pool ref and Delete on shutdown.
+// k8s/claim.yaml: the pool ref and Delete on shutdown.
 func TestClaimManifest(t *testing.T) {
 	var c struct {
 		Kind     string `yaml:"kind"`
@@ -185,7 +185,7 @@ func TestCleanManifestYAML(t *testing.T) {
 		"kind": "SandboxTemplate",
 		"metadata": {
 			"name": "agent-bash-template",
-			"namespace": "sandbox-demo",
+			"namespace": "nightshift",
 			"resourceVersion": "12281",
 			"uid": "02d23c69",
 			"managedFields": [{"manager": "kubectl"}],

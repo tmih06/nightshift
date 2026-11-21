@@ -110,39 +110,39 @@ jobs:
           kubectl -n agent-sandbox-system wait --for=condition=Available deploy/agent-sandbox-controller --timeout=180s
       - name: Warm the pool
         run: |
-          kubectl apply -f demo/warmpool.yaml
+          kubectl apply -f k8s/warmpool.yaml
           for _ in $(seq 1 60); do
-            ready=$(kubectl -n sandbox-demo get sandboxwarmpool pi-pool -o jsonpath='{.status.readyReplicas}')
+            ready=$(kubectl -n nightshift get sandboxwarmpool pi-pool -o jsonpath='{.status.readyReplicas}')
             [ "$ready" = "1" ] && exit 0
             sleep 5
           done
-          kubectl -n sandbox-demo get sandboxes
+          kubectl -n nightshift get sandboxes
           exit 1
       - name: Run the claim loop twice
         run: |
-          SBX_NO_EXEC=1 ./demo/sbx.sh
-          SBX_NO_EXEC=1 ./demo/sbx.sh
+          SBX_NO_EXEC=1 ./k8s/sbx.sh
+          SBX_NO_EXEC=1 ./k8s/sbx.sh
       - name: Prove bash runs inside a claimed sandbox
         run: |
-          kubectl -n sandbox-demo apply -f demo/claim.yaml
+          kubectl -n nightshift apply -f k8s/claim.yaml
           SBX=""
           for _ in $(seq 1 30); do
-            SBX=$(kubectl -n sandbox-demo get sandboxclaim my-agent -o jsonpath='{.status.sandbox.name}')
+            SBX=$(kubectl -n nightshift get sandboxclaim my-agent -o jsonpath='{.status.sandbox.name}')
             [ -n "$SBX" ] && break
             sleep 2
           done
           if [ -z "$SBX" ]; then
-            kubectl -n sandbox-demo describe sandboxclaim my-agent
+            kubectl -n nightshift describe sandboxclaim my-agent
             exit 1
           fi
-          kubectl -n sandbox-demo exec "$SBX" -- bash -c 'echo bash-ok'
-          kubectl -n sandbox-demo delete sandboxclaim my-agent
+          kubectl -n nightshift exec "$SBX" -- bash -c 'echo bash-ok'
+          kubectl -n nightshift delete sandboxclaim my-agent
       - name: Prove the pool restocks
         run: |
           for _ in $(seq 1 60); do
-            ready=$(kubectl -n sandbox-demo get sandboxwarmpool pi-pool -o jsonpath='{.status.readyReplicas}')
+            ready=$(kubectl -n nightshift get sandboxwarmpool pi-pool -o jsonpath='{.status.readyReplicas}')
             [ "$ready" = "1" ] && exit 0
             sleep 5
           done
-          kubectl -n sandbox-demo get sandboxwarmpool pi-pool
+          kubectl -n nightshift get sandboxwarmpool pi-pool
           exit 1

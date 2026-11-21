@@ -16,7 +16,7 @@ import (
 
 const (
 	KubeContext = "kind-agent-sandbox"
-	Namespace   = "sandbox-demo"
+	Namespace   = "nightshift"
 	WarmPool    = "pi-pool"
 )
 
