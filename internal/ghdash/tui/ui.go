@@ -18,7 +18,6 @@ import (
 	log "charm.land/log/v2"
 	"github.com/atotto/clipboard"
 	"github.com/cli/go-gh/v2/pkg/repository"
-	zone "github.com/lrstanley/bubblezone/v2"
 
 	gitm "github.com/aymanbagabas/git-module"
 	"github.com/tmih06/nightshift/internal/ghdash/config"
@@ -74,6 +73,8 @@ type Model struct {
 	lastClickSection      int
 	lastClickView         config.ViewType
 	mode                  Mode
+	enrichSeq             uint64
+	enriching             map[string]bool
 }
 
 type Mode int
@@ -295,37 +296,49 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if currSection != nil {
 				prevRow := currSection.CurrRow()
 				nextRow := currSection.NextRow()
-				if prevRow != nextRow && nextRow == currSection.NumRows()-1 &&
-					m.ctx.View != config.RepoView {
-					cmds = append(cmds, currSection.FetchNextPageSectionRows()...)
+				if prevRow != nextRow {
+					if nextRow == currSection.NumRows()-1 && m.ctx.View != config.RepoView {
+						cmds = append(cmds, currSection.FetchNextPageSectionRows()...)
+					}
+					cmd = m.onViewedRowChanged()
 				}
-				cmd = m.onViewedRowChanged()
 			}
 
 		case key.Matches(msg, m.keys.Up):
 			if currSection != nil {
-				currSection.PrevRow()
-				cmd = m.onViewedRowChanged()
+				prevRow := currSection.CurrRow()
+				nextRow := currSection.PrevRow()
+				if prevRow != nextRow {
+					cmd = m.onViewedRowChanged()
+				}
 			}
 
 		case key.Matches(msg, m.keys.FirstLine):
 			if currSection != nil {
-				currSection.FirstItem()
-				cmd = m.onViewedRowChanged()
+				prevRow := currSection.CurrRow()
+				nextRow := currSection.FirstItem()
+				if prevRow != nextRow {
+					cmd = m.onViewedRowChanged()
+				}
 			}
 
 		case key.Matches(msg, m.keys.LastLine):
 			if currSection != nil {
-				if currSection.CurrRow()+1 < currSection.NumRows() {
+				prevRow := currSection.CurrRow()
+				if prevRow+1 < currSection.NumRows() {
 					cmds = append(cmds, currSection.FetchNextPageSectionRows()...)
 				}
-				currSection.LastItem()
-				cmd = m.onViewedRowChanged()
+				nextRow := currSection.LastItem()
+				if prevRow != nextRow {
+					cmd = m.onViewedRowChanged()
+				}
 			}
 
 		case key.Matches(msg, m.keys.TogglePreview):
 			m.sidebar.IsOpen = !m.sidebar.IsOpen
 			m.syncMainContentDimensions()
+			m.syncProgramContext()
+			cmds = append(cmds, m.syncSidebar())
 
 		case key.Matches(msg, m.keys.TogglePreviewPosition):
 			if m.sidebar.IsOpen {
@@ -369,6 +382,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Help):
 			m.footer.ShowAll = !m.footer.ShowAll
 			m.syncMainContentDimensions()
+			m.syncProgramContext()
 
 		case key.Matches(msg, m.keys.CopyNumber):
 			var cmd tea.Cmd
@@ -761,6 +775,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		fetchSectionsCmds := m.fetchAllViewSections()
 		m.updateTabs()
 		m.tabs.SetCurrSectionId(0)
+		m.syncProgramContext()
 
 		if m.ctx.BackgroundSource != "bubbletea" {
 			log.Debugf("Setting markdownStyle in initMsg")
@@ -812,14 +827,30 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case prview.EnrichedPrMsg:
+		if m.enriching != nil {
+			delete(m.enriching, msg.Url)
+			if msg.Data.Url != "" {
+				delete(m.enriching, msg.Data.Url)
+			}
+		}
 		if msg.Err == nil {
-			m.prView.SetEnrichedPR(msg.Data)
-			m.prs[msg.Id].(*prssection.Model).EnrichPR(msg.Data)
-			syncCmd := m.syncSidebar()
-			cmds = append(cmds, syncCmd)
+			if msg.Id >= 0 && msg.Id < len(m.prs) {
+				m.prs[msg.Id].(*prssection.Model).EnrichPR(msg.Data)
+			}
+			if m.prView.SetEnrichedPR(msg.Data) {
+				syncCmd := m.syncSidebar()
+				cmds = append(cmds, syncCmd)
+			}
 		} else {
 			log.Error("failed enriching pr", "err", msg.Err)
 		}
+		return m, tea.Batch(cmds...)
+
+	case enrichDebounceMsg:
+		if msg.seq != m.enrichSeq {
+			return m, nil
+		}
+		return m, m.startEnrichCurrRow()
 
 	case notificationPRFetchedMsg:
 		if msg.Err == nil {
@@ -885,8 +916,27 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.taskSpinner = taskSpinner
 			rTask := m.renderRunningTask()
 			m.footer.SetRightSection(rTask)
-			cmd = internalTickCmd
+			cmds = append(cmds, internalTickCmd)
 		}
+		tm, tabsCmd := m.tabs.Update(msg)
+		m.tabs = tm
+		cmds = append(cmds, tabsCmd)
+		if currSection != nil && (currSection.GetIsLoading() ||
+			currSection.IsSearchFocused() ||
+			currSection.IsPromptConfirmationFocused()) {
+			cmds = append(cmds, m.updateCurrentSection(msg))
+		}
+		if m.prView.IsTextInputBoxFocused() {
+			m.prView, prViewCmd = m.prView.Update(msg)
+			m.syncSidebar()
+			cmds = append(cmds, prViewCmd)
+		}
+		if m.issueSidebar.IsTextInputBoxFocused() {
+			m.issueSidebar, issueSidebarCmd, _ = m.issueSidebar.Update(msg)
+			m.syncSidebar()
+			cmds = append(cmds, issueSidebarCmd)
+		}
+		return m, tea.Batch(cmds...)
 
 	case constants.ClearTaskMsg:
 		m.footer.SetRightSection("")
@@ -920,6 +970,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ctx.BackgroundSource,
 		)
 		markdown.InitializeMarkdownStyle(m.ctx)
+		if m.ctx.Config != nil {
+			m.syncProgramContext()
+		}
 
 	case updateFooterMsg:
 		cmds = append(cmds, cmd, m.doUpdateFooterAtInterval())
@@ -928,11 +981,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ctx.Error = msg.Err
 	}
 
-	m.syncProgramContext()
-
 	var bsCmd tea.Cmd
-	m.branchSidebar, bsCmd = m.branchSidebar.Update(msg)
-	cmds = append(cmds, bsCmd)
+	if m.ctx.View == config.RepoView {
+		m.branchSidebar, bsCmd = m.branchSidebar.Update(msg)
+		cmds = append(cmds, bsCmd)
+	}
 
 	m.sidebar, sidebarCmd = m.sidebar.Update(msg)
 
@@ -999,17 +1052,25 @@ func (m *Model) View() tea.View {
 	var content string
 	currSection := m.getCurrSection()
 	if currSection != nil {
-		if m.ctx.PreviewPosition == "bottom" && m.sidebar.IsOpen {
+		if !m.sidebar.IsOpen {
+			content = currSection.View()
+		} else if m.ctx.PreviewPosition == "bottom" {
 			content = lipgloss.JoinVertical(
 				lipgloss.Left,
-				m.getCurrSection().View(),
+				currSection.View(),
+				m.sidebar.View(),
+			)
+		} else if m.ctx.View == config.RepoView {
+			content = lipgloss.JoinHorizontal(
+				lipgloss.Top,
+				currSection.View(),
 				m.sidebar.View(),
 			)
 		} else {
-			content = lipgloss.JoinHorizontal(
-				lipgloss.Top,
-				m.getCurrSection().View(),
+			content = joinHorizontalFixed(
+				currSection.View(),
 				m.sidebar.View(),
+				m.ctx.MainContentWidth,
 			)
 		}
 	} else {
@@ -1038,26 +1099,35 @@ func (m *Model) View() tea.View {
 		s.WriteString(m.footer.View())
 	}
 
-	layers := []*lipgloss.Layer{
-		lipgloss.NewLayer(zone.Scan(s.String())),
-	}
+	base := s.String()
 
+	var searchCmp, prCmp, issueCmp string
 	if currSection != nil {
-		searchCmp := currSection.ViewCompletions()
-		if searchCmp != "" {
-			y := common.HeaderHeight + common.SearchHeight
-			layers = append(layers, lipgloss.NewLayer(searchCmp).X(1).Y(y))
-		}
+		searchCmp = currSection.ViewCompletions()
+	}
+	prCmp = m.prView.ViewCompletions()
+	issueCmp = m.issueSidebar.ViewCompletions()
+
+	if searchCmp == "" && prCmp == "" && issueCmp == "" {
+		v.SetContent(base)
+		return v
 	}
 
-	prCmp := m.prView.ViewCompletions()
+	layers := []*lipgloss.Layer{
+		lipgloss.NewLayer(base),
+	}
+
+	if searchCmp != "" {
+		y := common.HeaderHeight + common.SearchHeight
+		layers = append(layers, lipgloss.NewLayer(searchCmp).X(1).Y(y))
+	}
+
 	previewPos := m.ctx.PreviewCursorPosition()
 	if prCmp != "" {
 		y := m.ctx.ScreenHeight - common.FooterHeight - m.prView.InputBoxLineFromBottom() - common.InputBoxHeight - 6
 		layers = append(layers, lipgloss.NewLayer(prCmp).X(previewPos.X+3).Y(y))
 	}
 
-	issueCmp := m.issueSidebar.ViewCompletions()
 	if issueCmp != "" {
 		y := m.ctx.ScreenHeight - common.FooterHeight - m.issueSidebar.InputBoxLineFromButton() - common.InputBoxHeight - 6
 		layers = append(layers, lipgloss.NewLayer(issueCmp).X(previewPos.X+3).Y(y))
@@ -1067,6 +1137,37 @@ func (m *Model) View() tea.View {
 	v.SetContent(comp.Render())
 
 	return v
+}
+
+// joinHorizontalFixed concatenates two pre-sized panes line by line without
+// re-measuring ANSI display widths of every line.
+func joinHorizontalFixed(left, right string, leftWidth int) string {
+	if right == "" {
+		return left
+	}
+	leftLines := strings.Split(left, "\n")
+	rightLines := strings.Split(right, "\n")
+	n := max(len(leftLines), len(rightLines))
+	var b strings.Builder
+	b.Grow(len(left) + len(right) + n)
+	var padLeft string
+	for i := range n {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		if i < len(leftLines) {
+			b.WriteString(leftLines[i])
+		} else if leftWidth > 0 {
+			if padLeft == "" {
+				padLeft = strings.Repeat(" ", leftWidth)
+			}
+			b.WriteString(padLeft)
+		}
+		if i < len(rightLines) {
+			b.WriteString(rightLines[i])
+		}
+	}
+	return b.String()
 }
 
 type initMsg struct {
@@ -1114,15 +1215,58 @@ func (m *Model) markNotificationAsRead(notificationId string) {
 	m.updateNotificationSections(readStateMsg)
 }
 
+const enrichDebounceDelay = 120 * time.Millisecond
+
+type enrichDebounceMsg struct {
+	seq uint64
+}
+
 func (m *Model) onViewedRowChanged() tea.Cmd {
+	return m.onViewedRowChangedWithEnrich(true)
+}
+
+func (m *Model) onViewedRowChangedImmediate() tea.Cmd {
+	return m.onViewedRowChangedWithEnrich(false)
+}
+
+func (m *Model) onViewedRowChangedWithEnrich(debounce bool) tea.Cmd {
 	m.prView.SetSummaryViewLess()
 	m.prView.GoToFirstTab()
 	sidebarCmd := m.syncSidebar()
-	enrichCmd := m.prView.EnrichCurrRow()
+	var enrichCmd tea.Cmd
+	if debounce {
+		enrichCmd = m.scheduleEnrichCurrRow()
+	} else {
+		enrichCmd = m.startEnrichCurrRow()
+	}
 	m.sidebar.ScrollToTop()
 	m.notificationView.ResetSubject()
 	keys.SetNotificationSubject(keys.NotificationSubjectNone)
 	return tea.Batch(sidebarCmd, enrichCmd)
+}
+
+func (m *Model) scheduleEnrichCurrRow() tea.Cmd {
+	m.enrichSeq++
+	url, ok := m.prView.CurrRowNeedsEnrichment()
+	if !ok || m.enriching[url] {
+		return nil
+	}
+	seq := m.enrichSeq
+	return tea.Tick(enrichDebounceDelay, func(time.Time) tea.Msg {
+		return enrichDebounceMsg{seq: seq}
+	})
+}
+
+func (m *Model) startEnrichCurrRow() tea.Cmd {
+	url, ok := m.prView.CurrRowNeedsEnrichment()
+	if !ok || m.enriching[url] {
+		return nil
+	}
+	if m.enriching == nil {
+		m.enriching = map[string]bool{}
+	}
+	m.enriching[url] = true
+	return m.prView.EnrichCurrRow()
 }
 
 func (m *Model) onWindowSizeChanged(msg tea.WindowSizeMsg) {
@@ -1136,6 +1280,7 @@ func (m *Model) onWindowSizeChanged(msg tea.WindowSizeMsg) {
 			m.positionOverride = ""
 		}
 		m.syncMainContentDimensions()
+		m.syncProgramContext()
 		m.syncSidebar()
 	}
 }
@@ -1175,7 +1320,7 @@ func (m *Model) updateSection(id int, sType string, msg tea.Msg) (cmd tea.Cmd) {
 	currSection := m.getCurrSection()
 	if currSection != nil && id == currSection.GetId() {
 		if _, ok := msg.(prssection.SectionPullRequestsFetchedMsg); ok {
-			cmd = m.onViewedRowChanged()
+			cmd = m.onViewedRowChangedImmediate()
 		}
 	}
 
@@ -1300,6 +1445,7 @@ func (m *Model) openSidebarForInput(setFunc func(bool) tea.Cmd) tea.Cmd {
 	m.sidebar.IsOpen = true
 	cmd := setFunc(true)
 	m.syncMainContentDimensions()
+	m.syncProgramContext()
 	m.syncSidebar()
 	m.sidebar.ScrollToBottom()
 	return cmd
@@ -1658,6 +1804,7 @@ func (m *Model) switchSelectedView() tea.Cmd {
 
 	m.syncMainContentDimensions()
 	m.setCurrSectionId(0)
+	m.syncProgramContext()
 
 	var cmds []tea.Cmd
 	if m.isViewSectionsStale() {
@@ -1950,6 +2097,7 @@ func (m *Model) addNewSection() {
 	}
 	m.updateTabs()
 	m.setCurrSectionId(sid)
+	m.syncProgramContext()
 }
 
 func (m *Model) removeSection() {
@@ -1976,6 +2124,7 @@ func (m *Model) removeSection() {
 	nCnt := len(m.getCurrentViewSections())
 	m.updateTabs()
 	m.setCurrSectionId(min(nCnt-1, del))
+	m.syncProgramContext()
 }
 
 func (m *Model) initSections() {

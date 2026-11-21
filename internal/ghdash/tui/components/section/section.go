@@ -303,7 +303,7 @@ func (m *BaseModel) UpdateProgramContext(ctx *context.ProgramContext) {
 	}
 	m.Table.SetDimensions(tableDimensions)
 	m.Table.UpdateProgramContext(ctx)
-	m.Table.SyncViewPortContent()
+	m.Table.EnsureLayout()
 	m.SearchBar.UpdateProgramContext(ctx)
 }
 
@@ -463,6 +463,38 @@ func (m *BaseModel) GetMainContent() string {
 
 func (m *BaseModel) View() string {
 	search := m.SearchBar.View(m.Ctx)
+	padWidth := m.Ctx.Styles.Section.ContainerPadding
+	if m.Table.Rows != nil && !m.Table.IsLoading() && len(m.Table.Rows) > 0 &&
+		m.Ctx.MainContentWidth >= 2*padWidth {
+		pad := strings.Repeat(" ", padWidth)
+		searchBox := m.Ctx.Styles.Section.ContainerStyle.
+			Width(m.Ctx.MainContentWidth).
+			Render(search)
+		tbl := m.Table.View()
+		var b strings.Builder
+		b.Grow(len(searchBox) + 1 + len(tbl) + 2*len(pad)*48)
+		b.WriteString(searchBox)
+		b.WriteByte('\n')
+		start := 0
+		for start <= len(tbl) {
+			nl := strings.IndexByte(tbl[start:], '\n')
+			var line string
+			if nl < 0 {
+				line = tbl[start:]
+				start = len(tbl) + 1
+			} else {
+				line = tbl[start : start+nl]
+				start += nl + 1
+			}
+			b.WriteString(pad)
+			b.WriteString(line)
+			b.WriteString(pad)
+			if start <= len(tbl) {
+				b.WriteByte('\n')
+			}
+		}
+		return b.String()
+	}
 	return m.Ctx.Styles.Section.ContainerStyle.
 		Width(m.Ctx.MainContentWidth).
 		Render(

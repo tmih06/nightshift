@@ -34,6 +34,14 @@ Local changes, kept small so an upstream sync stays a copy and a rewrite:
   preview tabs, and footer view-switcher/help controls; wheel scrolling over
   the table and sidebar; and dragging the sidebar divider in right or bottom
   layout.
+- `tui/ui.go`, `tui/markdown/markdownRenderer.go`, and
+  `tui/components/{carousel,cmpcontroller,issueview,listviewport,notificationssection,prssection,prview,section,sidebar,table,tabs}`:
+  keep PR list navigation fast and avoid idle/spinner CPU spikes — sync
+  program context only on layout/view/theme changes, skip unused `zone.Scan`
+  and `lipgloss.Compositor` when no completion popup is open, cache rendered
+  table rows (updating only the two affected rows on selection moves), cache
+  rendered sidebar/PR preview views and glamour markdown renderers, fast-path
+  spinner ticks, and debounce/deduplicate PR enrichment requests.
 
 To sync, copy upstream `internal/` over this directory, rerun the import
 rewrite and `gofmt -w`, and reapply the changes above.

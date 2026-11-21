@@ -374,6 +374,7 @@ func (m *Model) switchToView(view config.ViewType) tea.Cmd {
 	m.ctx.View = view
 	m.syncMainContentDimensions()
 	m.setCurrSectionId(0)
+	m.syncProgramContext()
 
 	var cmds []tea.Cmd
 	if m.isViewSectionsStale() {

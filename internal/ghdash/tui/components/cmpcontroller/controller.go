@@ -108,7 +108,9 @@ func (c *Controller) SelectStyles() context.SelectStyles {
 }
 
 func (c *Controller) SetSelectStyles(styles context.SelectStyles) {
-	c.fzfSelect.SetStyles(styles)
+	if c.fzfSelect != nil {
+		c.fzfSelect.SetStyles(styles)
+	}
 }
 
 func (c *Controller) InputStyles() inputbox.Styles {
@@ -159,7 +161,9 @@ func (c *Controller) CursorEnd() {
 func (c *Controller) UpdateProgramContext(ctx *context.ProgramContext) {
 	c.ctx = ctx
 	c.inputBox.UpdateProgramContext(ctx)
-	c.fzfSelect.UpdateProgramContext(ctx)
+	if c.fzfSelect != nil {
+		c.fzfSelect.UpdateProgramContext(ctx)
+	}
 }
 
 func (c *Controller) Exit() {

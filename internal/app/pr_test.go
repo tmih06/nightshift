@@ -178,4 +178,10 @@ func TestOnlyThePullRequestsOwnMessagesReachIt(t *testing.T) {
 	if !prWants(zapp.ClosedMsg{}) || !prWants(tea.WindowSizeMsg{}) || !prWants(tea.KeyPressMsg{}) {
 		t.Error("the pull request view would miss its own messages")
 	}
+	if !prOwns(zapp.ClosedMsg{}) {
+		t.Error("zen-octo messages should be owned by the pull request view")
+	}
+	if prOwns(unrelatedMsg{}) || prOwns(tea.WindowSizeMsg{}) {
+		t.Error("shared or gh-dash messages must not be owned by the pull request view")
+	}
 }

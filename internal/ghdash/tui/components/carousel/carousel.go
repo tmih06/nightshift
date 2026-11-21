@@ -382,6 +382,9 @@ func (m *Model) SetItems(items []string) {
 
 // SetWidth sets the width of the carousel.
 func (m *Model) SetWidth(w int) {
+	if m.width == w {
+		return
+	}
 	m.width = w
 	m.UpdateContent()
 }
@@ -419,7 +422,11 @@ func (m Model) HasLeftItems() bool {
 
 // SetCursor sets the cursor position in the carousel.
 func (m *Model) SetCursor(n int) {
-	m.cursor = clamp(n, 0, len(m.items)-1)
+	next := clamp(n, 0, len(m.items)-1)
+	if m.cursor == next && m.content != "" {
+		return
+	}
+	m.cursor = next
 	m.UpdateContent()
 }
 

@@ -32,6 +32,34 @@ var (
 	foldBodyHeight   = 8
 )
 
+type viewCacheKey struct {
+	url              string
+	isEnriched       bool
+	title            string
+	state            string
+	isDraft          bool
+	reviewDecision   string
+	mergeStateStatus string
+	mergeable        string
+	additions        int
+	deletions        int
+	numLabels        int
+	numAssignees     int
+	numComments      int
+	numReviews       int
+	numThreads       int
+	numFiles         int
+	bodyLen          int
+	createdElapsed   string
+	updatedElapsed   string
+	tab              string
+	width            int
+	summaryViewMore  bool
+	darkBg           bool
+}
+
+const maxCachedPRViews = 32
+
 type Model struct {
 	ctx             *context.ProgramContext
 	sectionId       int
@@ -40,6 +68,7 @@ type Model struct {
 	carousel        carousel.Model
 	editor          cmpcontroller.Controller
 	summaryViewMore bool
+	viewCache       map[viewCacheKey]string
 }
 
 var tabs = []string{" Overview", " Activity", " Commits", " Checks", " Files Changed"}
@@ -54,10 +83,11 @@ func NewModel(ctx *context.ProgramContext) Model {
 	cmp := cmpcontroller.New(ctx, inputbox.ModelOpts{TextArea: &ta})
 
 	return Model{
-		ctx:      ctx,
-		pr:       nil,
-		carousel: c,
-		editor:   cmp,
+		ctx:       ctx,
+		pr:        nil,
+		carousel:  c,
+		editor:    cmp,
+		viewCache: map[viewCacheKey]string{},
 	}
 }
 
@@ -127,11 +157,60 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m Model) cacheKey() (viewCacheKey, bool) {
+	if !m.hasData() || m.pr.Data.Primary == nil || m.editor.Active() || m.viewCache == nil {
+		return viewCacheKey{}, false
+	}
+	p := m.pr.Data.Primary
+	e := m.pr.Data.Enriched
+	return viewCacheKey{
+		url:              p.Url,
+		isEnriched:       m.pr.Data.IsEnriched,
+		title:            p.Title,
+		state:            p.State,
+		isDraft:          p.IsDraft,
+		reviewDecision:   p.ReviewDecision,
+		mergeStateStatus: string(p.MergeStateStatus),
+		mergeable:        p.Mergeable,
+		additions:        p.Additions,
+		deletions:        p.Deletions,
+		numLabels:        len(p.Labels.Nodes),
+		numAssignees:     len(p.Assignees.Nodes),
+		numComments:      len(e.Comments.Nodes),
+		numReviews:       len(e.Reviews.Nodes),
+		numThreads:       len(e.ReviewThreads.Nodes),
+		numFiles:         len(e.Files.Nodes),
+		bodyLen:          len(e.Body),
+		createdElapsed:   utils.TimeElapsed(p.CreatedAt),
+		updatedElapsed:   utils.TimeElapsed(p.UpdatedAt),
+		tab:              m.carousel.SelectedItem(),
+		width:            m.width,
+		summaryViewMore:  m.summaryViewMore,
+		darkBg:           m.ctx.HasDarkBackground,
+	}, true
+}
+
 func (m Model) View() string {
 	if !m.hasData() {
 		return ""
 	}
 
+	if key, ok := m.cacheKey(); ok {
+		if rendered, hit := m.viewCache[key]; hit {
+			return rendered
+		}
+		rendered := m.renderView()
+		if len(m.viewCache) >= maxCachedPRViews {
+			clear(m.viewCache)
+		}
+		m.viewCache[key] = rendered
+		return rendered
+	}
+
+	return m.renderView()
+}
+
+func (m Model) renderView() string {
 	body := strings.Builder{}
 	switch m.carousel.SelectedItem() {
 	case tabs[0]:
@@ -496,8 +575,13 @@ func (m *Model) renderAuthor() string {
 func (m *Model) renderSummary() string {
 	width := m.getIndentedContentWidth()
 	// Strip HTML comments from body and cleanup body.
-	body := htmlCommentRegex.ReplaceAllString(m.pr.Data.Enriched.Body, "")
-	body = lineCleanupRegex.ReplaceAllString(body, "")
+	body := m.pr.Data.Enriched.Body
+	if strings.Contains(body, "<!--") {
+		body = htmlCommentRegex.ReplaceAllString(body, "")
+	}
+	if strings.Contains(body, "|") {
+		body = lineCleanupRegex.ReplaceAllString(body, "")
+	}
 
 	desc := m.ctx.Styles.Common.MainTextStyle.Bold(true).Underline(true).Render(" Summary")
 	title := lipgloss.JoinVertical(
@@ -515,8 +599,7 @@ func (m *Model) renderSummary() string {
 		)
 	}
 
-	markdownRenderer := markdown.GetMarkdownRenderer(width, m.ctx)
-	rendered, err := markdownRenderer.Render(body)
+	rendered, err := markdown.Render(body, width, m.ctx)
 	if err != nil {
 		return ""
 	}
@@ -565,20 +648,31 @@ func (m *Model) SetRow(d *prrow.Data) {
 type EnrichedPrMsg struct {
 	Id   int
 	Type string
+	Url  string
 	Data data.EnrichedPullRequestData
 	Err  error
 }
 
+// CurrRowNeedsEnrichment returns the URL of the current PR if it still needs enrichment.
+func (m *Model) CurrRowNeedsEnrichment() (string, bool) {
+	if m == nil || m.pr == nil || m.pr.Data == nil || m.pr.Data.Primary == nil || m.pr.Data.IsEnriched {
+		return "", false
+	}
+	return m.pr.Data.Primary.Url, true
+}
+
 func (m *Model) EnrichCurrRow() tea.Cmd {
-	if m == nil || m.pr == nil || m.pr.Data.IsEnriched {
+	url, ok := m.CurrRowNeedsEnrichment()
+	if !ok {
 		return nil
 	}
-	url := m.pr.Data.Primary.Url
+	sectionId := m.sectionId
 	return func() tea.Msg {
 		d, err := data.FetchPullRequest(url)
 		return EnrichedPrMsg{
-			Id:   m.sectionId,
+			Id:   sectionId,
 			Type: prssection.SectionType,
+			Url:  url,
 			Data: d,
 			Err:  err,
 		}
@@ -586,6 +680,9 @@ func (m *Model) EnrichCurrRow() tea.Cmd {
 }
 
 func (m *Model) SetWidth(width int) {
+	if m.width == width {
+		return
+	}
 	m.width = width
 	m.carousel.SetWidth(width)
 	m.editor.SetWidth(
@@ -598,6 +695,9 @@ func (m *Model) IsTextInputBoxFocused() bool {
 }
 
 func (m *Model) UpdateProgramContext(ctx *context.ProgramContext) {
+	if m.ctx != nil && ctx != nil && m.ctx.Theme != ctx.Theme && m.viewCache != nil {
+		clear(m.viewCache)
+	}
 	m.ctx = ctx
 	m.editor.UpdateProgramContext(ctx)
 	m.carousel.SetStyles(
@@ -797,11 +897,13 @@ func (m *Model) SetSummaryViewLess() {
 	m.summaryViewMore = false
 }
 
-func (m *Model) SetEnrichedPR(data data.EnrichedPullRequestData) {
-	if m.pr.Data.Primary.Url == data.Url {
+func (m *Model) SetEnrichedPR(data data.EnrichedPullRequestData) bool {
+	if m.pr != nil && m.pr.Data != nil && m.pr.Data.Primary != nil && m.pr.Data.Primary.Url == data.Url {
 		m.pr.Data.Enriched = data
 		m.pr.Data.IsEnriched = true
+		return true
 	}
+	return false
 }
 
 func (m *Model) GetIsLabeling() bool {

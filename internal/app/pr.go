@@ -102,6 +102,15 @@ func (m Model) prFound(msg prFoundMsg) (Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+// prOwns is whether msg is zen-octo's own, so gh-dash need not process it.
+func prOwns(msg tea.Msg) bool {
+	t := reflect.TypeOf(msg)
+	for t != nil && t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	return t != nil && strings.HasPrefix(t.PkgPath(), "github.com/tmih06/nightshift/internal/zenocto")
+}
+
 // prWants is whether msg can matter to the pull request view: its own
 // messages, the bubbles it runs (spinners, text cursors), and the size and
 // focus of the screen. zen-octo's host is a ~95 KB value copied on every

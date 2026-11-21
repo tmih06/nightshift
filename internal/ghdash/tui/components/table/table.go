@@ -16,6 +16,25 @@ import (
 	"github.com/tmih06/nightshift/internal/ghdash/tui/context"
 )
 
+type renderCache struct {
+	layoutValid   bool
+	layoutWidth   int
+	colWidths     []int
+	header        string
+	rows          []string
+	selected      int
+	bodyValid     bool
+	body          string
+	bodyYOffset   int
+	bodyWidth     int
+	bodyHeight    int
+	bodyCurr      int
+	bodyRowCount  int
+	lastCompact   bool
+	lastSeparator bool
+	lastTheme     bool
+}
+
 type Model struct {
 	ctx            context.ProgramContext
 	Columns        []Column
@@ -27,6 +46,7 @@ type Model struct {
 	dimensions     constants.Dimensions
 	rowsViewport   listviewport.Model
 	ContentHeight  int // Optional: override content height (0 = use default from config)
+	cache          *renderCache
 }
 
 type Column struct {
@@ -82,6 +102,39 @@ func NewModel(
 			len(rows),
 			itemHeight,
 		),
+		cache: &renderCache{
+			selected:      -1,
+			lastCompact:   ctx.Config.Theme.Ui.Table.Compact,
+			lastSeparator: ctx.Config.Theme.Ui.Table.ShowSeparator,
+		},
+	}
+}
+
+func (m *Model) ensureCache() *renderCache {
+	if m.cache == nil {
+		m.cache = &renderCache{selected: -1}
+	}
+	return m.cache
+}
+
+func (m *Model) invalidateRows() {
+	c := m.ensureCache()
+	c.rows = nil
+	c.selected = -1
+	c.bodyValid = false
+}
+
+func (m *Model) invalidateSelection(prev, next int) {
+	c := m.ensureCache()
+	c.bodyValid = false
+	if prev == next {
+		return
+	}
+	if prev >= 0 && prev < len(c.rows) {
+		c.rows[prev] = ""
+	}
+	if next >= 0 && next < len(c.rows) {
+		c.rows[next] = ""
 	}
 }
 
@@ -101,7 +154,7 @@ func (m Model) View() string {
 	header := m.renderHeader()
 	body := m.renderBody()
 
-	return lipgloss.JoinVertical(lipgloss.Left, header, body)
+	return header + "\n" + body
 }
 
 func (m *Model) SetIsLoading(isLoading bool) {
@@ -109,15 +162,24 @@ func (m *Model) SetIsLoading(isLoading bool) {
 }
 
 func (m *Model) SetDimensions(dimensions constants.Dimensions) {
+	if m.dimensions == dimensions && m.ensureCache().layoutValid {
+		return
+	}
 	m.dimensions = dimensions
 	m.rowsViewport.SetDimensions(constants.Dimensions{
 		Width:  m.dimensions.Width,
 		Height: m.dimensions.Height,
 	})
+	c := m.ensureCache()
+	c.layoutValid = false
+	m.invalidateRows()
+	m.EnsureLayout()
 }
 
 func (m *Model) ResetCurrItem() {
+	prev := m.rowsViewport.GetCurrItem()
 	m.rowsViewport.ResetCurrItem()
+	m.invalidateSelection(prev, m.rowsViewport.GetCurrItem())
 }
 
 func (m *Model) GetCurrItem() int {
@@ -132,66 +194,99 @@ func (m *Model) RowAt(relY int) (int, bool) {
 }
 
 func (m *Model) SetCurrItem(idx int) int {
+	prev := m.rowsViewport.GetCurrItem()
 	currItem := m.rowsViewport.SetCurrItem(idx)
-	m.SyncViewPortContent()
+	m.invalidateSelection(prev, currItem)
 	return currItem
 }
 
 func (m *Model) PrevItem() int {
+	prev := m.rowsViewport.GetCurrItem()
 	currItem := m.rowsViewport.PrevItem()
-	m.SyncViewPortContent()
-
+	m.invalidateSelection(prev, currItem)
 	return currItem
 }
 
 func (m *Model) NextItem() int {
+	prev := m.rowsViewport.GetCurrItem()
 	currItem := m.rowsViewport.NextItem()
-	m.SyncViewPortContent()
-
+	m.invalidateSelection(prev, currItem)
 	return currItem
 }
 
 func (m *Model) FirstItem() int {
+	prev := m.rowsViewport.GetCurrItem()
 	currItem := m.rowsViewport.FirstItem()
-	m.SyncViewPortContent()
-
+	m.invalidateSelection(prev, currItem)
 	return currItem
 }
 
 func (m *Model) LastItem() int {
+	prev := m.rowsViewport.GetCurrItem()
 	currItem := m.rowsViewport.LastItem()
-	m.SyncViewPortContent()
-
+	m.invalidateSelection(prev, currItem)
 	return currItem
 }
 
-func (m *Model) cacheColumnWidths() {
-	columns := m.renderHeaderColumns()
-	for i, col := range columns {
+// EnsureLayout computes and caches visible column widths and the rendered header.
+func (m *Model) EnsureLayout() {
+	c := m.ensureCache()
+	if c.layoutValid && c.layoutWidth == m.dimensions.Width {
+		return
+	}
+	headerColumns := m.renderHeaderColumns()
+	colWidths := make([]int, len(headerColumns))
+	headerColId := 0
+	for i := range m.Columns {
 		if m.Columns[i].Hidden != nil && *m.Columns[i].Hidden {
 			continue
 		}
-		m.Columns[i].ComputedWidth = lipgloss.Width(col)
+		if headerColId < len(headerColumns) {
+			w := lipgloss.Width(headerColumns[headerColId])
+			colWidths[headerColId] = w
+			m.Columns[i].ComputedWidth = w
+			headerColId++
+		}
 	}
+	header := ansi.Truncate(
+		lipgloss.JoinHorizontal(lipgloss.Top, headerColumns...),
+		m.dimensions.Width,
+		constants.Ellipsis,
+	)
+	c.header = m.ctx.Styles.Table.HeaderStyle.
+		Width(m.dimensions.Width).
+		Height(common.TableHeaderHeight).
+		Render(header)
+	c.colWidths = colWidths
+	c.layoutWidth = m.dimensions.Width
+	c.layoutValid = true
 }
 
 func (m *Model) SyncViewPortContent() {
-	headerColumns := m.renderHeaderColumns()
-	m.cacheColumnWidths()
-	renderedRows := make([]string, 0, len(m.Rows))
-	for i := range m.Rows {
-		renderedRows = append(renderedRows, m.renderRow(i, headerColumns))
-	}
-
-	m.rowsViewport.SyncViewPort(
-		lipgloss.JoinVertical(lipgloss.Left, renderedRows...),
-	)
+	c := m.ensureCache()
+	c.layoutValid = false
+	m.invalidateRows()
+	m.EnsureLayout()
 }
 
 func (m *Model) SetRows(rows []Row) {
 	m.Rows = rows
 	m.rowsViewport.SetNumItems(len(m.Rows))
-	m.SyncViewPortContent()
+	m.EnsureLayout()
+	m.invalidateRows()
+}
+
+// UpdateRow replaces a single row and invalidates only its cached render.
+func (m *Model) UpdateRow(idx int, row Row) {
+	if idx < 0 || idx >= len(m.Rows) {
+		return
+	}
+	m.Rows[idx] = row
+	c := m.ensureCache()
+	if idx < len(c.rows) {
+		c.rows[idx] = ""
+	}
+	c.bodyValid = false
 }
 
 // SetContentHeight sets a custom content height for rows (use 0 to use default config-based height)
@@ -284,23 +379,11 @@ func (m *Model) renderHeaderColumns() []string {
 }
 
 func (m *Model) renderHeader() string {
-	headerColumns := m.renderHeaderColumns()
-	header := ansi.Truncate(
-		lipgloss.JoinHorizontal(lipgloss.Top, headerColumns...),
-		m.dimensions.Width,
-		constants.Ellipsis,
-	)
-	return m.ctx.Styles.Table.HeaderStyle.
-		Width(m.dimensions.Width).
-		Height(common.TableHeaderHeight).
-		Render(header)
+	m.EnsureLayout()
+	return m.ensureCache().header
 }
 
 func (m *Model) renderBody() string {
-	bodyStyle := lipgloss.NewStyle().
-		Height(m.dimensions.Height).
-		Width(m.dimensions.Width)
-
 	if m.isLoading {
 		return lipgloss.Place(
 			m.dimensions.Width,
@@ -312,13 +395,101 @@ func (m *Model) renderBody() string {
 	}
 
 	if len(m.Rows) == 0 && m.EmptyState != nil {
+		bodyStyle := lipgloss.NewStyle().
+			Height(m.dimensions.Height).
+			Width(m.dimensions.Width)
 		return bodyStyle.Render(*m.EmptyState)
 	}
 
-	return m.rowsViewport.View()
+	viewH := m.dimensions.Height
+	viewW := m.dimensions.Width
+	if viewH <= 0 || viewW <= 0 {
+		return ""
+	}
+
+	m.EnsureLayout()
+	c := m.ensureCache()
+	yOff := m.rowsViewport.YOffset()
+	currItem := m.rowsViewport.GetCurrItem()
+	if c.bodyValid &&
+		c.bodyYOffset == yOff &&
+		c.bodyWidth == viewW &&
+		c.bodyHeight == viewH &&
+		c.bodyCurr == currItem &&
+		c.bodyRowCount == len(m.Rows) {
+		return c.body
+	}
+
+	if len(c.rows) != len(m.Rows) {
+		c.rows = make([]string, len(m.Rows))
+		c.selected = -1
+	}
+	if c.selected != currItem {
+		if c.selected >= 0 && c.selected < len(c.rows) {
+			c.rows[c.selected] = ""
+		}
+		if currItem >= 0 && currItem < len(c.rows) {
+			c.rows[currItem] = ""
+		}
+		c.selected = currItem
+	}
+
+	itemH := max(1, m.rowsViewport.ListItemHeight)
+	firstRow := yOff / itemH
+	lastRow := min(len(m.Rows)-1, (yOff+viewH-1)/itemH)
+
+	var out strings.Builder
+	linesWritten := 0
+	skipLines := yOff - firstRow*itemH
+	blankLine := strings.Repeat(" ", viewW)
+
+	for i := firstRow; i <= lastRow && linesWritten < viewH; i++ {
+		if c.rows[i] == "" {
+			c.rows[i] = m.renderRow(i, c.colWidths)
+		}
+		rowStr := c.rows[i]
+		start := 0
+		for start <= len(rowStr) && linesWritten < viewH {
+			nl := strings.IndexByte(rowStr[start:], '\n')
+			var line string
+			if nl < 0 {
+				line = rowStr[start:]
+				start = len(rowStr) + 1
+			} else {
+				line = rowStr[start : start+nl]
+				start += nl + 1
+			}
+			if skipLines > 0 {
+				skipLines--
+				continue
+			}
+			if linesWritten > 0 {
+				out.WriteByte('\n')
+			}
+			out.WriteString(line)
+			linesWritten++
+		}
+	}
+
+	for linesWritten < viewH {
+		if linesWritten > 0 {
+			out.WriteByte('\n')
+		}
+		out.WriteString(blankLine)
+		linesWritten++
+	}
+
+	c.body = out.String()
+	c.bodyYOffset = yOff
+	c.bodyWidth = viewW
+	c.bodyHeight = viewH
+	c.bodyCurr = currItem
+	c.bodyRowCount = len(m.Rows)
+	c.bodyValid = true
+	return c.body
 }
 
-func (m *Model) renderRow(rowId int, headerColumns []string) string {
+func (m *Model) renderRow(rowId int, colWidths []int) string {
 	var style lipgloss.Style
 
 	if m.rowsViewport.GetCurrItem() == rowId {
@@ -335,7 +506,7 @@ func (m *Model) renderRow(rowId int, headerColumns []string) string {
 			continue
 		}
 
-		colWidth := lipgloss.Width(headerColumns[headerColId])
+		colWidth := colWidths[headerColId]
 		colHeight := 1
 		if m.ContentHeight > 0 {
 			// Use custom content height if set
@@ -384,13 +555,26 @@ func (m *Model) renderRow(rowId int, headerColumns []string) string {
 
 	return m.ctx.Styles.Table.RowStyle.
 		BorderBottom(m.ctx.Config.Theme.Ui.Table.ShowSeparator).
+		Width(m.dimensions.Width).
 		MaxWidth(m.dimensions.Width).
 		Render(lipgloss.JoinHorizontal(lipgloss.Top, renderedColumns...))
 }
 
 func (m *Model) UpdateProgramContext(ctx *context.ProgramContext) {
+	c := m.ensureCache()
+	compact := ctx.Config != nil && ctx.Config.Theme != nil && ctx.Config.Theme.Ui.Table.Compact
+	sep := ctx.Config != nil && ctx.Config.Theme != nil && ctx.Config.Theme.Ui.Table.ShowSeparator
+	changed := !c.lastTheme || c.lastCompact != compact || c.lastSeparator != sep ||
+		m.ctx.Theme != ctx.Theme
 	m.ctx = *ctx
 	m.rowsViewport.UpdateProgramContext(ctx)
+	if changed {
+		c.lastTheme = true
+		c.lastCompact = compact
+		c.lastSeparator = sep
+		c.layoutValid = false
+		m.invalidateRows()
+	}
 }
 
 func (m *Model) LastUpdated() time.Time {

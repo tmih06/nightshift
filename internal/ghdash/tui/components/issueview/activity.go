@@ -2,9 +2,9 @@ package issueview
 
 import (
 	"sort"
+	"strings"
 	"time"
 
-	"charm.land/glamour/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/tmih06/nightshift/internal/ghdash/data"
@@ -19,11 +19,10 @@ type RenderedActivity struct {
 
 func (m *Model) renderActivity() string {
 	width := m.getIndentedContentWidth() - 2
-	markdownRenderer := markdown.GetMarkdownRenderer(width, m.ctx)
 
 	var activity []RenderedActivity
 	for _, comment := range m.issue.Data.Comments.Nodes {
-		renderedComment, err := m.renderComment(comment, markdownRenderer)
+		renderedComment, err := m.renderComment(comment, width)
 		if err != nil {
 			continue
 		}
@@ -65,9 +64,8 @@ func renderEmptyState() string {
 
 func (m *Model) renderComment(
 	comment data.IssueComment,
-	markdownRenderer glamour.TermRenderer,
+	width int,
 ) (string, error) {
-	width := m.getIndentedContentWidth() - 2
 	header := lipgloss.NewStyle().
 		Width(width).
 		BorderStyle(lipgloss.RoundedBorder()).
@@ -81,8 +79,11 @@ func (m *Model) renderComment(
 				Render(utils.TimeElapsed(comment.UpdatedAt)),
 		))
 
-	body := lineCleanupRegex.ReplaceAllString(comment.Body, "")
-	body, err := markdownRenderer.Render(body)
+	body := comment.Body
+	if strings.Contains(body, "|") {
+		body = lineCleanupRegex.ReplaceAllString(body, "")
+	}
+	body, err := markdown.Render(body, width, m.ctx)
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,

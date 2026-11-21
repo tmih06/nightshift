@@ -18,7 +18,6 @@ import (
 	"charm.land/log/v2"
 	gitm "github.com/aymanbagabas/git-module"
 	"github.com/cli/go-gh/v2/pkg/repository"
-	zone "github.com/lrstanley/bubblezone/v2"
 
 	"github.com/tmih06/nightshift/internal/app"
 	"github.com/tmih06/nightshift/internal/ghdash/config"
@@ -81,7 +80,6 @@ func run(openPR string) error {
 	}
 	theme := ghtheme.ParseTheme(&cfg)
 
-	zone.NewGlobal()
 	dash := ghtui.NewModel(location, ghtui.Repositories{GitRepo: gitRepo, GHRepo: &ghRepo})
 
 	root := app.New(theme, app.NewGhDash(&dash), nil)

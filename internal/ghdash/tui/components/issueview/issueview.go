@@ -215,8 +215,13 @@ func (m *Model) renderAuthor() string {
 func (m *Model) renderBody() string {
 	width := m.getIndentedContentWidth()
 	// Strip HTML comments from body and cleanup body.
-	body := htmlCommentRegex.ReplaceAllString(m.issue.Data.Body, "")
-	body = lineCleanupRegex.ReplaceAllString(body, "")
+	body := m.issue.Data.Body
+	if strings.Contains(body, "<!--") {
+		body = htmlCommentRegex.ReplaceAllString(body, "")
+	}
+	if strings.Contains(body, "|") {
+		body = lineCleanupRegex.ReplaceAllString(body, "")
+	}
 
 	body = strings.TrimSpace(body)
 	if body == "" {
@@ -226,8 +231,7 @@ func (m *Model) renderBody() string {
 			Render("No description provided.")
 	}
 
-	markdownRenderer := markdown.GetMarkdownRenderer(width, m.ctx)
-	rendered, err := markdownRenderer.Render(body)
+	rendered, err := markdown.Render(body, width, m.ctx)
 	if err != nil {
 		return ""
 	}

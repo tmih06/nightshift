@@ -225,10 +225,15 @@ func (m Model) toActive(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) broadcast(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var sandboxCmd, prCmd tea.Cmd
 	m.sandboxes, sandboxCmd = m.sandboxes.Update(msg)
-	if dashboard.Owns(msg) || m.gh == nil {
+	if dashboard.Owns(msg) {
 		return m, sandboxCmd
 	}
-	prCmd = m.updateGitHub(msg)
+	if prOwns(msg) {
+		return m, tea.Batch(sandboxCmd, m.updatePR(msg))
+	}
+	if m.gh != nil {
+		prCmd = m.updateGitHub(msg)
+	}
 	return m, tea.Batch(sandboxCmd, prCmd, m.updatePR(msg))
 }
 

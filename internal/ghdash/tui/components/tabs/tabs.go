@@ -2,6 +2,7 @@ package tabs
 
 import (
 	"fmt"
+	"slices"
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
@@ -157,6 +158,10 @@ func (m *Model) UpdateTabTitles() {
 		}
 
 		titles = append(titles, title)
+	}
+
+	if slices.Equal(titles, m.carousel.Items()) {
+		return
 	}
 
 	oldCursor := m.carousel.Cursor()

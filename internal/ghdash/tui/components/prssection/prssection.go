@@ -25,8 +25,10 @@ const SectionType = "pr"
 
 type Model struct {
 	section.BaseModel
-	Prs []prrow.Data
-	cfg config.PrsSectionConfig
+	Prs            []prrow.Data
+	cfg            config.PrsSectionConfig
+	lastTableWidth int
+	lastCompact    bool
 }
 
 func NewModel(
@@ -194,7 +196,11 @@ func (m *Model) Update(msg tea.Msg) (section.Section, tea.Cmd) {
 			}
 			m.Prs[i] = currPr
 			m.SetIsLoading(false)
-			m.Table.SetRows(m.BuildRows())
+			if i < len(m.Table.Rows) {
+				m.Table.UpdateRow(i, m.buildRow(i, m.Table.GetCurrItem() == i))
+			} else {
+				m.Table.SetRows(m.BuildRows())
+			}
 			break
 		}
 
@@ -208,6 +214,7 @@ func (m *Model) Update(msg tea.Msg) (section.Section, tea.Cmd) {
 			m.TotalCount = msg.TotalCount
 			m.PageInfo = &msg.PageInfo
 			m.SetIsLoading(false)
+			m.Table.EnsureLayout()
 			m.Table.SetRows(m.BuildRows())
 			m.Table.SetLastUpdated(time.Now())
 			m.UpdateTotalItemsCount(m.TotalCount)
@@ -215,7 +222,6 @@ func (m *Model) Update(msg tea.Msg) (section.Section, tea.Cmd) {
 	}
 
 	search, searchCmd := m.SearchBar.Update(msg)
-	m.Table.SetRows(m.BuildRows())
 	m.SearchBar = search
 
 	prompt, promptCmd := m.PromptConfirmationBox.Update(msg)
@@ -225,6 +231,76 @@ func (m *Model) Update(msg tea.Msg) (section.Section, tea.Cmd) {
 	m.Table = table
 
 	return m, tea.Batch(cmd, searchCmd, promptCmd, tableCmd)
+}
+
+func (m *Model) buildRow(i int, isSelected bool) table.Row {
+	prModel := prrow.PullRequest{
+		Ctx:            m.Ctx,
+		Data:           &m.Prs[i],
+		Columns:        m.Table.Columns,
+		ShowAuthorIcon: m.ShowAuthorIcon,
+	}
+	return prModel.ToTableRow(isSelected)
+}
+
+func (m *Model) syncSelectionRow(prev, next int) {
+	if prev == next {
+		return
+	}
+	if prev >= 0 && prev < len(m.Prs) && prev < len(m.Table.Rows) {
+		m.Table.UpdateRow(prev, m.buildRow(prev, false))
+	}
+	if next >= 0 && next < len(m.Prs) && next < len(m.Table.Rows) {
+		m.Table.UpdateRow(next, m.buildRow(next, true))
+	}
+}
+
+func (m *Model) NextRow() int {
+	prev := m.Table.GetCurrItem()
+	next := m.BaseModel.NextRow()
+	m.syncSelectionRow(prev, next)
+	return next
+}
+
+func (m *Model) PrevRow() int {
+	prev := m.Table.GetCurrItem()
+	next := m.BaseModel.PrevRow()
+	m.syncSelectionRow(prev, next)
+	return next
+}
+
+func (m *Model) FirstItem() int {
+	prev := m.Table.GetCurrItem()
+	next := m.BaseModel.FirstItem()
+	m.syncSelectionRow(prev, next)
+	return next
+}
+
+func (m *Model) LastItem() int {
+	prev := m.Table.GetCurrItem()
+	next := m.BaseModel.LastItem()
+	m.syncSelectionRow(prev, next)
+	return next
+}
+
+func (m *Model) SetCurrRow(idx int) int {
+	prev := m.Table.GetCurrItem()
+	next := m.BaseModel.SetCurrRow(idx)
+	m.syncSelectionRow(prev, next)
+	return next
+}
+
+func (m *Model) UpdateProgramContext(ctx *context.ProgramContext) {
+	m.BaseModel.UpdateProgramContext(ctx)
+	w := m.GetDimensions().Width
+	compact := ctx != nil && ctx.Config != nil && ctx.Config.Theme != nil && ctx.Config.Theme.Ui.Table.Compact
+	if w != m.lastTableWidth || compact != m.lastCompact {
+		m.lastTableWidth = w
+		m.lastCompact = compact
+		if len(m.Prs) > 0 {
+			m.Table.SetRows(m.BuildRows())
+		}
+	}
 }
 
 func (m *Model) EnrichPR(data data.EnrichedPullRequestData) {

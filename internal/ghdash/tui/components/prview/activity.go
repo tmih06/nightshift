@@ -3,9 +3,9 @@ package prview
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
-	"charm.land/glamour/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/tmih06/nightshift/internal/ghdash/data"
@@ -21,7 +21,6 @@ type RenderedActivity struct {
 
 func (m *Model) renderActivity() string {
 	width := m.getIndentedContentWidth()
-	markdownRenderer := markdown.GetMarkdownRenderer(width, m.ctx)
 	bodyStyle := lipgloss.NewStyle()
 
 	var activities []RenderedActivity
@@ -54,7 +53,7 @@ func (m *Model) renderActivity() string {
 	}
 
 	for _, comment := range comments {
-		renderedComment, err := m.renderComment(comment, markdownRenderer)
+		renderedComment, err := m.renderComment(comment, width)
 		if err != nil {
 			continue
 		}
@@ -65,7 +64,7 @@ func (m *Model) renderActivity() string {
 	}
 
 	for _, review := range m.pr.Data.Enriched.Reviews.Nodes {
-		renderedReview, err := m.renderReview(review, markdownRenderer)
+		renderedReview, err := m.renderReview(review, width)
 		if err != nil {
 			continue
 		}
@@ -110,9 +109,8 @@ type comment struct {
 
 func (m *Model) renderComment(
 	comment comment,
-	markdownRenderer glamour.TermRenderer,
+	width int,
 ) (string, error) {
-	width := m.getIndentedContentWidth()
 	authorAndTime := lipgloss.NewStyle().
 		Width(width).
 		BorderStyle(lipgloss.RoundedBorder()).
@@ -140,8 +138,11 @@ func (m *Model) renderComment(
 		header = authorAndTime
 	}
 
-	body := lineCleanupRegex.ReplaceAllString(comment.Body, "")
-	body, err := markdownRenderer.Render(body)
+	body := comment.Body
+	if strings.Contains(body, "|") {
+		body = lineCleanupRegex.ReplaceAllString(body, "")
+	}
+	body, err := markdown.Render(body, width, m.ctx)
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
@@ -152,10 +153,10 @@ func (m *Model) renderComment(
 
 func (m *Model) renderReview(
 	review data.Review,
-	markdownRenderer glamour.TermRenderer,
+	width int,
 ) (string, error) {
 	header := m.renderReviewHeader(review)
-	body, err := markdownRenderer.Render(review.Body)
+	body, err := markdown.Render(review.Body, width, m.ctx)
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		header,

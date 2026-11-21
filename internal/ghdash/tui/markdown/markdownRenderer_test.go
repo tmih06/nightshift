@@ -28,3 +28,23 @@ func TestInitializeMarkdownStyleNilContext(t *testing.T) {
 
 	require.NotNil(t, markdownStyle)
 }
+
+func TestRenderCachesAndInvalidatesOnStyleChange(t *testing.T) {
+	markdownMu.Lock()
+	markdownStyle = nil
+	markdownStyleSource = ""
+	clear(rendererCache)
+	clear(bodyCache)
+	markdownMu.Unlock()
+
+	darkOut1, err := Render("## Heading\n\nSome **bold** text", 60, nil)
+	require.NoError(t, err)
+	darkOut2, err := Render("## Heading\n\nSome **bold** text", 60, nil)
+	require.NoError(t, err)
+	require.Equal(t, darkOut1, darkOut2)
+
+	markdownMu.Lock()
+	require.Len(t, bodyCache, 1)
+	require.Len(t, rendererCache, 1)
+	markdownMu.Unlock()
+}
