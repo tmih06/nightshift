@@ -422,3 +422,23 @@ func (pr *PullRequest) ToTableRow(isSelected bool) table.Row {
 		pr.renderCreatedAt(),
 	}
 }
+
+// UpdateSelectionCells rebuilds only the cells whose appearance depends on
+// isSelected, reusing all other pre-rendered cells from row.
+func (pr *PullRequest) UpdateSelectionCells(row table.Row, isSelected bool) table.Row {
+	if !pr.Ctx.Config.Theme.Ui.Table.Compact {
+		if len(row) != 11 {
+			return pr.ToTableRow(isSelected)
+		}
+		row[1] = pr.renderExtendedTitle(isSelected)
+		row[2] = pr.renderLabels(isSelected)
+		row[8] = pr.RenderLines(isSelected)
+		return row
+	}
+	if len(row) != 13 {
+		return pr.ToTableRow(isSelected)
+	}
+	row[4] = pr.renderLabels(isSelected)
+	row[10] = pr.RenderLines(isSelected)
+	return row
+}

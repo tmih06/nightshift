@@ -18,6 +18,30 @@ import (
 
 const viewSeparator = " │ "
 
+type viewCache struct {
+	valid           bool
+	view            config.ViewType
+	leftSection     string
+	rightSection    string
+	showAll         bool
+	showConfirmQuit bool
+	screenWidth     int
+	repoPath        string
+	repoUrl         string
+	user            string
+	rendered        string
+
+	switcherValid    bool
+	switcherView     config.ViewType
+	switcherRepoPath string
+	switcherRepoUrl  string
+	switcherUser     string
+	switcher         string
+	switcherWidth    int
+	helpIndicator    string
+	helpWidth        int
+}
+
 type Model struct {
 	ctx             *context.ProgramContext
 	leftSection     *string
@@ -25,6 +49,7 @@ type Model struct {
 	help            bbHelp.Model
 	ShowAll         bool
 	ShowConfirmQuit bool
+	cache           *viewCache
 }
 
 func NewModel(ctx *context.ProgramContext) Model {
@@ -38,57 +63,100 @@ func NewModel(ctx *context.ProgramContext) Model {
 		help:         help,
 		leftSection:  &l,
 		rightSection: &r,
+		cache:        &viewCache{},
 	}
 }
 
 func (m Model) View() string {
+	leftSection := ""
+	if m.leftSection != nil {
+		leftSection = *m.leftSection
+	}
+	rightSection := ""
+	if m.rightSection != nil {
+		rightSection = *m.rightSection
+	}
+	if m.cache != nil && m.cache.valid &&
+		m.cache.view == m.ctx.View &&
+		m.cache.leftSection == leftSection &&
+		m.cache.rightSection == rightSection &&
+		m.cache.showAll == m.ShowAll &&
+		m.cache.showConfirmQuit == m.ShowConfirmQuit &&
+		m.cache.screenWidth == m.ctx.ScreenWidth &&
+		m.cache.repoPath == m.ctx.RepoPath &&
+		m.cache.repoUrl == m.ctx.RepoUrl &&
+		m.cache.user == m.ctx.User {
+		return m.cache.rendered
+	}
+
 	var footer string
 
 	if m.ShowConfirmQuit {
 		footer = lipgloss.NewStyle().
 			Render("Really quit? (Press y/enter to confirm, any other key to cancel)")
 	} else {
-		helpIndicator := lipgloss.NewStyle().
-			Background(m.ctx.Theme.FaintText).
-			Foreground(m.ctx.Theme.SelectedBackground).
-			Padding(0, 1).
-			Render("? help")
-		viewSwitcher := m.renderViewSwitcher(m.ctx)
-		leftSection := ""
-		if m.leftSection != nil {
-			leftSection = *m.leftSection
+		var viewSwitcher, helpIndicator string
+		var switcherW, helpW int
+		if m.cache != nil && m.cache.switcherValid &&
+			m.cache.switcherView == m.ctx.View &&
+			m.cache.switcherRepoPath == m.ctx.RepoPath &&
+			m.cache.switcherRepoUrl == m.ctx.RepoUrl &&
+			m.cache.switcherUser == m.ctx.User {
+			viewSwitcher = m.cache.switcher
+			switcherW = m.cache.switcherWidth
+			helpIndicator = m.cache.helpIndicator
+			helpW = m.cache.helpWidth
+		} else {
+			helpIndicator = lipgloss.NewStyle().
+				Background(m.ctx.Theme.FaintText).
+				Foreground(m.ctx.Theme.SelectedBackground).
+				Padding(0, 1).
+				Render("? help")
+			helpW = lipgloss.Width(helpIndicator)
+			viewSwitcher = m.renderViewSwitcher(m.ctx)
+			switcherW = lipgloss.Width(viewSwitcher)
+			if m.cache != nil {
+				m.cache.switcherValid = true
+				m.cache.switcherView = m.ctx.View
+				m.cache.switcherRepoPath = m.ctx.RepoPath
+				m.cache.switcherRepoUrl = m.ctx.RepoUrl
+				m.cache.switcherUser = m.ctx.User
+				m.cache.switcher = viewSwitcher
+				m.cache.switcherWidth = switcherW
+				m.cache.helpIndicator = helpIndicator
+				m.cache.helpWidth = helpW
+			}
 		}
-		rightSection := ""
-		if m.rightSection != nil {
-			rightSection = *m.rightSection
-		}
+		gap := utils.Max(0, m.ctx.ScreenWidth-switcherW-lipgloss.Width(leftSection)-
+			lipgloss.Width(rightSection)-helpW)
 		spacing := lipgloss.NewStyle().
 			Background(m.ctx.Theme.SelectedBackground).
-			Render(
-				strings.Repeat(
-					" ",
-					utils.Max(0,
-						m.ctx.ScreenWidth-lipgloss.Width(
-							viewSwitcher,
-						)-lipgloss.Width(leftSection)-
-							lipgloss.Width(rightSection)-
-							lipgloss.Width(
-								helpIndicator,
-							),
-					)))
+			Render(strings.Repeat(" ", gap))
 
-		footer = m.ctx.Styles.Common.FooterStyle.
-			Render(lipgloss.JoinHorizontal(lipgloss.Top, viewSwitcher, leftSection, spacing,
-				rightSection, helpIndicator))
+		footer = viewSwitcher + leftSection + spacing + rightSection + helpIndicator
 	}
 
+	rendered := footer
 	if m.ShowAll {
 		keymap := keys.CreateKeyMapForView(m.ctx.View)
 		fullHelp := m.help.View(keymap)
-		return lipgloss.JoinVertical(lipgloss.Top, footer, fullHelp)
+		rendered = lipgloss.JoinVertical(lipgloss.Top, footer, fullHelp)
 	}
 
-	return footer
+	if m.cache != nil {
+		m.cache.valid = true
+		m.cache.view = m.ctx.View
+		m.cache.leftSection = leftSection
+		m.cache.rightSection = rightSection
+		m.cache.showAll = m.ShowAll
+		m.cache.showConfirmQuit = m.ShowConfirmQuit
+		m.cache.screenWidth = m.ctx.ScreenWidth
+		m.cache.repoPath = m.ctx.RepoPath
+		m.cache.repoUrl = m.ctx.RepoUrl
+		m.cache.user = m.ctx.User
+		m.cache.rendered = rendered
+	}
+	return rendered
 }
 
 func (m *Model) SetShowConfirmQuit(val bool) {
@@ -97,11 +165,18 @@ func (m *Model) SetShowConfirmQuit(val bool) {
 
 func (m *Model) SetWidth(width int) {
 	m.help.SetWidth(width)
+	if m.cache != nil {
+		m.cache.valid = false
+	}
 }
 
 func (m *Model) UpdateProgramContext(ctx *context.ProgramContext) {
 	m.ctx = ctx
 	m.help.Styles = ctx.Styles.Help.BubbleStyles
+	if m.cache != nil {
+		m.cache.valid = false
+		m.cache.switcherValid = false
+	}
 }
 
 func (m *Model) renderViewButton(view config.ViewType) string {

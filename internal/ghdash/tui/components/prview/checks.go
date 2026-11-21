@@ -123,7 +123,7 @@ func (m *Model) viewChecksStatus() (string, checkSectionStatus) {
 		statStrs = append(statStrs, fmt.Sprintf("%d successful", stats.succeeded))
 	}
 	if title != "" {
-		checksBar := m.viewChecksBar()
+		checksBar := m.viewChecksBarWithStats(stats)
 		checksBottom := lipgloss.JoinVertical(
 			lipgloss.Left,
 			strings.Join(statStrs, ", "),
@@ -288,8 +288,11 @@ func (m *Model) viewCheckCategory(icon, title, subtitle string, isLast bool) str
 }
 
 func (m *Model) viewChecksBar() string {
+	return m.viewChecksBarWithStats(m.getChecksStats())
+}
+
+func (m *Model) viewChecksBarWithStats(stats checksStats) string {
 	w := m.getIndentedContentWidth() - 6
-	stats := m.getChecksStats()
 	total := float64(
 		stats.failed + stats.skipped + stats.neutral + stats.succeeded + stats.inProgress + stats.awaitingApproval,
 	)

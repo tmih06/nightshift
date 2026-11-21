@@ -22,12 +22,23 @@ type SectionTab struct {
 	spinner spinner.Model
 }
 
+type viewCache struct {
+	valid         bool
+	carouselView  string
+	screenWidth   int
+	version       string
+	latestVersion string
+	newSecKey     string
+	rendered      string
+}
+
 type Model struct {
 	sections      []section.Section
 	sectionTabs   []SectionTab
 	carousel      carousel.Model
 	ctx           *context.ProgramContext
 	latestVersion string
+	cache         *viewCache
 }
 
 func NewModel(ctx *context.ProgramContext) Model {
@@ -38,6 +49,7 @@ func NewModel(ctx *context.ProgramContext) Model {
 	)
 	m := Model{
 		carousel: c,
+		cache:    &viewCache{},
 	}
 	m.UpdateProgramContext(ctx)
 
@@ -70,11 +82,30 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 func (m Model) View() string {
 	crsl := m.carousel.View()
+	newSecKey := keys.Keys.NewSection.Help().Key
+	if m.cache != nil && m.cache.valid &&
+		m.cache.carouselView == crsl &&
+		m.cache.screenWidth == m.ctx.ScreenWidth &&
+		m.cache.version == m.ctx.Version &&
+		m.cache.latestVersion == m.latestVersion &&
+		m.cache.newSecKey == newSecKey {
+		return m.cache.rendered
+	}
 	logo := m.viewLogo()
-	return m.ctx.Styles.Tabs.TabsRow.
+	rendered := m.ctx.Styles.Tabs.TabsRow.
 		Width(m.ctx.ScreenWidth).
 		Height(common.HeaderHeight).
 		Render(lipgloss.JoinHorizontal(lipgloss.Bottom, crsl, m.viewNewSectionButton(), logo))
+	if m.cache != nil {
+		m.cache.valid = true
+		m.cache.carouselView = crsl
+		m.cache.screenWidth = m.ctx.ScreenWidth
+		m.cache.version = m.ctx.Version
+		m.cache.latestVersion = m.latestVersion
+		m.cache.newSecKey = newSecKey
+		m.cache.rendered = rendered
+	}
+	return rendered
 }
 
 type latestVersionMsg struct {
@@ -123,6 +154,9 @@ func (m *Model) SetCurrSectionId(id int) {
 
 func (m *Model) UpdateProgramContext(ctx *context.ProgramContext) {
 	m.ctx = ctx
+	if m.cache != nil {
+		m.cache.valid = false
+	}
 	m.carousel.SetStyles(carousel.Styles{
 		Item:              ctx.Styles.Tabs.Tab,
 		Selected:          ctx.Styles.Tabs.ActiveTab,

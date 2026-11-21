@@ -29,60 +29,59 @@ func (m *Model) renderCommits() string {
 	heading := m.ctx.Styles.Common.MainTextStyle.MarginBottom(1).Underline(true).Render(
 		fmt.Sprintf("%s  %d commits", constants.CommitIcon, len(commits)))
 
-	rendered := make([]string, len(commits))
+	contentWidth := m.getIndentedContentWidth()
+	commitIcon := faint.Render(constants.VerticalCommitIcon)
+	pipePrefix := fainter.Render("│ ")
+	pipeSep := fainter.Render("│")
+	committedWord := faint.Render(" committed ")
+	agoWord := faint.Render(" ago")
+	dotIcon := faint.Render(constants.SmallDotIcon)
+
+	var out strings.Builder
+	out.Grow(len(heading) + len(commits)*160)
+	out.WriteString(heading)
 	for i, commit := range commits {
 		commit := commit.Commit
 		name := commit.Author.User.Login
 		if name == "" {
 			name = commit.Author.Name
 		}
-		left := fmt.Sprintf(
-			"%s %s",
-			faint.Render(constants.VerticalCommitIcon),
-			main.Render(commit.MessageHeadline),
-		)
+		left := commitIcon + " " + main.Render(commit.MessageHeadline)
 		right := faint.Render(commit.AbbreviatedOid)
 		wright := lipgloss.Width(right)
-		left = ansi.Truncate(left, max(0, m.getIndentedContentWidth()-wright-1), constants.Ellipsis)
+		left = ansi.Truncate(left, max(0, contentWidth-wright-1), constants.Ellipsis)
 		pad := fainter.Render(" " + strings.Repeat(constants.HorizontalLineIcon,
-			max(1, m.getIndentedContentWidth()-lipgloss.Width(left)-wright)-1) + " ")
+			max(1, contentWidth-lipgloss.Width(left)-wright)-1) + " ")
 
-		title := lipgloss.JoinHorizontal(lipgloss.Top, left, pad, right)
+		title := left + pad + right
 
 		statsStr := ""
 		if commit.StatusCheckRollup.Contexts.TotalCount > 0 {
 			stats := m.getStatusCheckRollupStats(commit.StatusCheckRollup)
-			statsStr = lipgloss.JoinHorizontal(lipgloss.Top,
-				" ",
-				faint.Render(constants.SmallDotIcon),
-				" ",
-				m.commitStateSign(commit.StatusCheckRollup.State),
-				" ",
+			statsStr = " " + dotIcon + " " +
+				m.commitStateSign(commit.StatusCheckRollup.State) + " " +
 				faint.Render(fmt.Sprintf("%d/%d", stats.succeeded,
-					commit.StatusCheckRollup.Contexts.TotalCount)),
-			)
+					commit.StatusCheckRollup.Contexts.TotalCount))
 		}
 
-		desc := lipgloss.JoinHorizontal(lipgloss.Top,
-			fainter.Render("│ "),
-			faint.Render(fmt.Sprintf("@%s", name)),
-			faint.Render(" committed "),
-			faint.Render(utils.TimeElapsed(commit.CommittedDate)),
-			faint.Render(" ago"),
-			statsStr,
-		)
-		rendered[i] = lipgloss.JoinVertical(lipgloss.Left, title, desc)
-	}
+		desc := pipePrefix +
+			faint.Render("@"+name) +
+			committedWord +
+			faint.Render(utils.TimeElapsed(commit.CommittedDate)) +
+			agoWord +
+			statsStr
 
-	res := heading
-	for i, r := range rendered {
-		res = lipgloss.JoinVertical(lipgloss.Left, res, r)
-		if i < len(rendered)-1 {
-			res = lipgloss.JoinVertical(lipgloss.Left, res, fainter.Render("│"))
+		out.WriteByte('\n')
+		out.WriteString(title)
+		out.WriteByte('\n')
+		out.WriteString(desc)
+		if i < len(commits)-1 {
+			out.WriteByte('\n')
+			out.WriteString(pipeSep)
 		}
 	}
 
-	return res
+	return out.String()
 }
 
 func (m *Model) commitStateSign(state checks.CommitState) string {

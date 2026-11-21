@@ -248,10 +248,22 @@ func (m *Model) syncSelectionRow(prev, next int) {
 		return
 	}
 	if prev >= 0 && prev < len(m.Prs) && prev < len(m.Table.Rows) {
-		m.Table.UpdateRow(prev, m.buildRow(prev, false))
+		prModel := prrow.PullRequest{
+			Ctx:            m.Ctx,
+			Data:           &m.Prs[prev],
+			Columns:        m.Table.Columns,
+			ShowAuthorIcon: m.ShowAuthorIcon,
+		}
+		m.Table.UpdateRow(prev, prModel.UpdateSelectionCells(m.Table.Rows[prev], false))
 	}
 	if next >= 0 && next < len(m.Prs) && next < len(m.Table.Rows) {
-		m.Table.UpdateRow(next, m.buildRow(next, true))
+		prModel := prrow.PullRequest{
+			Ctx:            m.Ctx,
+			Data:           &m.Prs[next],
+			Columns:        m.Table.Columns,
+			ShowAuthorIcon: m.ShowAuthorIcon,
+		}
+		m.Table.UpdateRow(next, prModel.UpdateSelectionCells(m.Table.Rows[next], true))
 	}
 }
 

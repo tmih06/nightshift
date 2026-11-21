@@ -221,3 +221,73 @@ func BenchmarkPRNavColdSweep(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkPRNavColdLargeBody(b *testing.B) {
+	m := newBenchPRModel(b, 1, 10, true, true)
+	sec := m.prs[0].(*prssection.Model)
+	block := "\n```go\nfunc process(items []string) int {\n\ttotal := 0\n\tfor _, item := range items {\n\t\ttotal += len(item)\n\t}\n\treturn total\n}\n```\n\n" +
+		"- Bullet point describing **architecture**, `config.yml`, and edge cases.\n" +
+		"- Follow-up item covering rollout and verification.\n"
+	bigTail := strings.Repeat(block, 20)
+	down := tea.KeyPressMsg{Text: "j"}
+	up := tea.KeyPressMsg{Text: "k"}
+
+	b.ResetTimer()
+	for i := 0; b.Loop(); i++ {
+		b.StopTimer()
+		// Unique body per iteration so markdown and prview caches are truly cold.
+		idx := (i % 2) ^ 1
+		sec.Prs[idx].Enriched.Body = fmt.Sprintf("## PR Change %d\n\nShort intro paragraph for change %d.\n", i, i) + bigTail
+		b.StartTimer()
+		if i%2 == 0 {
+			m.Update(down)
+		} else {
+			m.Update(up)
+		}
+		_ = m.View()
+	}
+}
+
+func BenchmarkPRCommitsTab(b *testing.B) {
+	m := newBenchPRModel(b, 1, 2, true, true)
+	sec := m.prs[0].(*prssection.Model)
+	now := time.Now()
+	commits := make([]struct {
+		Commit struct {
+			AbbreviatedOid  string
+			CommittedDate   time.Time
+			MessageHeadline string
+			Author          struct {
+				Name string
+				User struct {
+					Login string
+				}
+			}
+			StatusCheckRollup data.StatusCheckRollupStats
+		}
+	}, 80)
+	for i := range commits {
+		commits[i].Commit.AbbreviatedOid = fmt.Sprintf("%07x", i+1)
+		commits[i].Commit.CommittedDate = now.Add(-time.Duration(i) * time.Hour)
+		commits[i].Commit.MessageHeadline = fmt.Sprintf("feat(tui): commit headline number %d", i+1)
+		commits[i].Commit.Author.Name = "alice"
+		commits[i].Commit.Author.User.Login = "alice"
+	}
+	sec.Prs[0].Enriched.AllCommits.Nodes = commits
+	m.prView.SetRow(&sec.Prs[0])
+	nextTab := tea.KeyPressMsg{Text: "]"}
+	prevTab := tea.KeyPressMsg{Text: "["}
+	// Move to Activity (1), then toggle to Commits (2) and back.
+	m.Update(nextTab)
+
+	b.ResetTimer()
+	for i := 0; b.Loop(); i++ {
+		b.StopTimer()
+		// Bust prView cache with fresh width/headline variation only on first render:
+		sec.Prs[0].Primary.Additions = i
+		b.StartTimer()
+		m.Update(nextTab)
+		_ = m.View()
+		m.Update(prevTab)
+	}
+}

@@ -26,6 +26,13 @@ import (
 	"github.com/tmih06/nightshift/internal/ghdash/utils"
 )
 
+type searchBoxCache struct {
+	valid    bool
+	value    string
+	width    int
+	rendered string
+}
+
 type BaseModel struct {
 	Id                        int
 	Config                    config.SectionConfig
@@ -49,6 +56,7 @@ type BaseModel struct {
 	ShowAuthorIcon            bool
 	IsFilteredByCurrentRemote bool
 	IsLoading                 bool
+	searchCache               *searchBoxCache
 }
 
 type FetchEvent struct {
@@ -296,6 +304,9 @@ func (m *BaseModel) enrichSearchWithTemplateVars() string {
 
 func (m *BaseModel) UpdateProgramContext(ctx *context.ProgramContext) {
 	m.Ctx = ctx
+	if m.searchCache != nil {
+		m.searchCache.valid = false
+	}
 	newDimensions := m.GetDimensions()
 	tableDimensions := constants.Dimensions{
 		Height: max(0, newDimensions.Height-2),
@@ -461,15 +472,37 @@ func (m *BaseModel) GetMainContent() string {
 	}
 }
 
+func (m *BaseModel) renderSearchBox() string {
+	if !m.IsSearching && m.SearchBar.ViewCompletions() == "" {
+		val := m.SearchBar.Value()
+		w := m.Ctx.MainContentWidth
+		if m.searchCache != nil && m.searchCache.valid &&
+			m.searchCache.value == val && m.searchCache.width == w {
+			return m.searchCache.rendered
+		}
+		rendered := m.Ctx.Styles.Section.ContainerStyle.
+			Width(w).
+			Render(m.SearchBar.View(m.Ctx))
+		if m.searchCache == nil {
+			m.searchCache = &searchBoxCache{}
+		}
+		m.searchCache.valid = true
+		m.searchCache.value = val
+		m.searchCache.width = w
+		m.searchCache.rendered = rendered
+		return rendered
+	}
+	return m.Ctx.Styles.Section.ContainerStyle.
+		Width(m.Ctx.MainContentWidth).
+		Render(m.SearchBar.View(m.Ctx))
+}
+
 func (m *BaseModel) View() string {
-	search := m.SearchBar.View(m.Ctx)
 	padWidth := m.Ctx.Styles.Section.ContainerPadding
 	if m.Table.Rows != nil && !m.Table.IsLoading() && len(m.Table.Rows) > 0 &&
 		m.Ctx.MainContentWidth >= 2*padWidth {
 		pad := strings.Repeat(" ", padWidth)
-		searchBox := m.Ctx.Styles.Section.ContainerStyle.
-			Width(m.Ctx.MainContentWidth).
-			Render(search)
+		searchBox := m.renderSearchBox()
 		tbl := m.Table.View()
 		var b strings.Builder
 		b.Grow(len(searchBox) + 1 + len(tbl) + 2*len(pad)*48)
@@ -495,6 +528,7 @@ func (m *BaseModel) View() string {
 		}
 		return b.String()
 	}
+	search := m.SearchBar.View(m.Ctx)
 	return m.Ctx.Styles.Section.ContainerStyle.
 		Width(m.Ctx.MainContentWidth).
 		Render(

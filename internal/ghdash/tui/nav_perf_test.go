@@ -195,3 +195,35 @@ func TestPRNavEnrichDebounceAndStaleEnrichedMsg(t *testing.T) {
 	require.True(t, sec.Prs[3].IsEnriched)
 	require.Contains(t, ansi.Strip(m.sidebar.View()), "Current PR 4 body")
 }
+
+func TestPRNavLargeFoldedSummaryAndExpand(t *testing.T) {
+	m := newPerfTestPRModel(t, 2, true)
+	sec := m.prs[0].(*prssection.Model)
+	sec.Prs[0].Enriched.Body = "## Intro\n\nFirst line\n\n```go\n" +
+		strings.Repeat("fmt.Println(\"line\")\n", 40) +
+		"```\n\nTAIL_MARKER_ONLY_WHEN_EXPANDED\n"
+	m.syncSidebar()
+
+	folded := ansi.Strip(m.sidebar.View())
+	require.Contains(t, folded, "First line")
+	require.Contains(t, folded, "to read more")
+	require.NotContains(t, folded, "TAIL_MARKER_ONLY_WHEN_EXPANDED")
+
+	// Pressing 'e' expands the full summary and shows the tail marker.
+	m.Update(tea.KeyPressMsg{Text: "e"})
+	expanded := ansi.Strip(m.prView.View())
+	require.Contains(t, expanded, "TAIL_MARKER_ONLY_WHEN_EXPANDED")
+}
+
+func TestPRNavUpdateSelectionCellsMatchesFullBuild(t *testing.T) {
+	m := newPerfTestPRModel(t, 3, true)
+	sec := m.prs[0].(*prssection.Model)
+	sec.Table.EnsureLayout()
+
+	// Move down via key and verify rows 0 and 1 match a fresh BuildRows().
+	m.Update(tea.KeyPressMsg{Text: "j"})
+	require.Equal(t, 1, sec.CurrRow())
+	expected := sec.BuildRows()
+	require.Equal(t, expected[0], sec.Table.Rows[0])
+	require.Equal(t, expected[1], sec.Table.Rows[1])
+}

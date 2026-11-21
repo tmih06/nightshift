@@ -49,7 +49,7 @@ type viewCacheKey struct {
 	numReviews       int
 	numThreads       int
 	numFiles         int
-	bodyLen          int
+	body             string
 	createdElapsed   string
 	updatedElapsed   string
 	tab              string
@@ -180,7 +180,7 @@ func (m Model) cacheKey() (viewCacheKey, bool) {
 		numReviews:       len(e.Reviews.Nodes),
 		numThreads:       len(e.ReviewThreads.Nodes),
 		numFiles:         len(e.Files.Nodes),
-		bodyLen:          len(e.Body),
+		body:             e.Body,
 		createdElapsed:   utils.TimeElapsed(p.CreatedAt),
 		updatedElapsed:   utils.TimeElapsed(p.UpdatedAt),
 		tab:              m.carousel.SelectedItem(),
@@ -227,10 +227,31 @@ func (m Model) renderView() string {
 		body.WriteString(m.renderChangedFiles())
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left,
-		m.viewHeader(),
-		lipgloss.NewStyle().Padding(0, m.ctx.Styles.Sidebar.ContentPadding).Render(body.String()),
-	)
+	header := m.viewHeader()
+	pad := strings.Repeat(" ", m.ctx.Styles.Sidebar.ContentPadding)
+	bodyStr := body.String()
+	var out strings.Builder
+	out.Grow(len(header) + 1 + len(bodyStr) + 64*len(pad))
+	out.WriteString(header)
+	out.WriteByte('\n')
+	start := 0
+	for start <= len(bodyStr) {
+		nl := strings.IndexByte(bodyStr[start:], '\n')
+		var line string
+		if nl < 0 {
+			line = bodyStr[start:]
+			start = len(bodyStr) + 1
+		} else {
+			line = bodyStr[start : start+nl]
+			start += nl + 1
+		}
+		out.WriteString(pad)
+		out.WriteString(line)
+		if start <= len(bodyStr) {
+			out.WriteByte('\n')
+		}
+	}
+	return out.String()
 }
 
 func (m *Model) viewHeader() string {
@@ -572,6 +593,66 @@ func (m *Model) renderAuthor() string {
 	)
 }
 
+const (
+	foldedMaxRawLines = 24
+	foldedMaxRawBytes = 1600
+)
+
+// trimMarkdownForFold bounds raw markdown input before glamour renders it when
+// only foldBodyHeight lines will be shown, preventing syntax highlighting of
+// huge off-screen code blocks during PR list navigation.
+func trimMarkdownForFold(body string) (string, bool) {
+	if len(body) <= foldedMaxRawBytes && strings.Count(body, "\n") <= foldedMaxRawLines {
+		return body, false
+	}
+	limit := min(len(body), foldedMaxRawBytes)
+	lines := 0
+	cut := limit
+	for i := 0; i < limit; i++ {
+		if body[i] == '\n' {
+			lines++
+			if lines >= foldedMaxRawLines {
+				cut = i
+				break
+			}
+		}
+	}
+	if cut == limit && limit < len(body) {
+		if nl := strings.LastIndexByte(body[:limit], '\n'); nl > 0 {
+			cut = nl
+		}
+	}
+	prefix := body[:cut]
+	// Close an open fenced code block so glamour renders lines 1..8 cleanly.
+	fences := 0
+	for line := range strings.SplitSeq(prefix, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") {
+			fences++
+		}
+	}
+	if fences%2 == 1 {
+		prefix += "\n```"
+	}
+	return prefix, true
+}
+
+func takeFirstLines(s string, maxLines int) (string, bool) {
+	if maxLines <= 0 {
+		return "", s != ""
+	}
+	lines := 1
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			if lines >= maxLines {
+				return s[:i], true
+			}
+			lines++
+		}
+	}
+	return s, false
+}
+
 func (m *Model) renderSummary() string {
 	width := m.getIndentedContentWidth()
 	// Strip HTML comments from body and cleanup body.
@@ -584,19 +665,16 @@ func (m *Model) renderSummary() string {
 	}
 
 	desc := m.ctx.Styles.Common.MainTextStyle.Bold(true).Underline(true).Render(" Summary")
-	title := lipgloss.JoinVertical(
-		lipgloss.Left,
-		desc,
-		"",
-	)
-	sbody := lipgloss.NewStyle().Width(m.getIndentedContentWidth())
+	title := desc + "\n"
 	body = strings.TrimSpace(body)
 	if body == "" {
-		return lipgloss.JoinVertical(
-			lipgloss.Left,
-			title,
-			sbody.Italic(true).Foreground(m.ctx.Theme.FaintText).Render("No description provided."),
-		)
+		sbody := lipgloss.NewStyle().Width(width)
+		return title + "\n" + sbody.Italic(true).Foreground(m.ctx.Theme.FaintText).Render("No description provided.")
+	}
+
+	preTrimmed := false
+	if !m.summaryViewMore {
+		body, preTrimmed = trimMarkdownForFold(body)
 	}
 
 	rendered, err := markdown.Render(body, width, m.ctx)
@@ -604,33 +682,25 @@ func (m *Model) renderSummary() string {
 		return ""
 	}
 
-	bodyHeight := lipgloss.Height(rendered)
-	if !m.summaryViewMore && bodyHeight > foldBodyHeight {
-		rendered = lipgloss.NewStyle().MaxHeight(foldBodyHeight).Render(rendered)
-		rendered = lipgloss.JoinVertical(lipgloss.Left,
-			rendered,
-			"",
-			lipgloss.PlaceHorizontal(m.getIndentedContentWidth(), lipgloss.Center,
-				lipgloss.JoinHorizontal(
-					lipgloss.Top,
-					lipgloss.NewStyle().Bold(true).Italic(true).Render("Press "),
-					lipgloss.NewStyle().
-						Background(m.ctx.Theme.SelectedBackground).
-						Foreground(m.ctx.Theme.PrimaryText).
-						Render("e"),
-					lipgloss.NewStyle().Bold(true).Italic(true).Render(" to read more..."),
-				),
-			),
-		)
+	if !m.summaryViewMore {
+		trimmed, exceeded := takeFirstLines(rendered, foldBodyHeight)
+		if exceeded || preTrimmed {
+			rendered = trimmed + "\n\n" +
+				lipgloss.PlaceHorizontal(width, lipgloss.Center,
+					lipgloss.JoinHorizontal(
+						lipgloss.Top,
+						lipgloss.NewStyle().Bold(true).Italic(true).Render("Press "),
+						lipgloss.NewStyle().
+							Background(m.ctx.Theme.SelectedBackground).
+							Foreground(m.ctx.Theme.PrimaryText).
+							Render("e"),
+						lipgloss.NewStyle().Bold(true).Italic(true).Render(" to read more..."),
+					),
+				)
+		}
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left, title,
-		lipgloss.NewStyle().
-			Width(width).
-			MaxWidth(width).
-			Align(lipgloss.Left).
-			Render(rendered),
-	)
+	return title + "\n" + rendered
 }
 
 func (m *Model) SetSectionId(id int) {

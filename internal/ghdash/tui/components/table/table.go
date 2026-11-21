@@ -20,7 +20,9 @@ type renderCache struct {
 	layoutValid   bool
 	layoutWidth   int
 	colWidths     []int
+	totalColWidth int
 	header        string
+	separator     string
 	rows          []string
 	selected      int
 	bodyValid     bool
@@ -236,6 +238,7 @@ func (m *Model) EnsureLayout() {
 	}
 	headerColumns := m.renderHeaderColumns()
 	colWidths := make([]int, len(headerColumns))
+	totalColWidth := 0
 	headerColId := 0
 	for i := range m.Columns {
 		if m.Columns[i].Hidden != nil && *m.Columns[i].Hidden {
@@ -244,6 +247,7 @@ func (m *Model) EnsureLayout() {
 		if headerColId < len(headerColumns) {
 			w := lipgloss.Width(headerColumns[headerColId])
 			colWidths[headerColId] = w
+			totalColWidth += w
 			m.Columns[i].ComputedWidth = w
 			headerColId++
 		}
@@ -257,7 +261,11 @@ func (m *Model) EnsureLayout() {
 		Width(m.dimensions.Width).
 		Height(common.TableHeaderHeight).
 		Render(header)
+	c.separator = lipgloss.NewStyle().
+		Foreground(m.ctx.Theme.FaintBorder).
+		Render(strings.Repeat(lipgloss.NormalBorder().Bottom, max(0, m.dimensions.Width)))
 	c.colWidths = colWidths
+	c.totalColWidth = totalColWidth
 	c.layoutWidth = m.dimensions.Width
 	c.layoutValid = true
 }
@@ -498,7 +506,16 @@ func (m *Model) renderRow(rowId int, colWidths []int) string {
 		style = m.ctx.Styles.Table.CellStyle
 	}
 
-	renderedColumns := make([]string, 0, len(m.Columns))
+	colHeight := 1
+	if m.ContentHeight > 0 {
+		colHeight = m.ContentHeight
+	} else if !m.ctx.Config.Theme.Ui.Table.Compact {
+		colHeight = 2
+	}
+
+	// Build each visual row line directly across columns so we avoid
+	// lipgloss.JoinHorizontal + RowStyle.Render re-scanning ANSI widths.
+	rowLines := make([]strings.Builder, colHeight)
 	headerColId := 0
 
 	for i, column := range m.Columns {
@@ -507,36 +524,27 @@ func (m *Model) renderRow(rowId int, colWidths []int) string {
 		}
 
 		colWidth := colWidths[headerColId]
-		colHeight := 1
-		if m.ContentHeight > 0 {
-			// Use custom content height if set
-			colHeight = m.ContentHeight
-		} else if !m.ctx.Config.Theme.Ui.Table.Compact {
-			colHeight = 2
-		}
 		col := m.Rows[rowId][i]
-		// For multi-line content, truncate long lines and pad short lines
-		// so lines don't wrap and background color extends properly
 		// Account for cell padding (1 left + 1 right = 2)
 		contentWidth := max(colWidth-2, 1)
-		var renderedCol string
 		if strings.Contains(col, "\n") {
 			// For multi-line content, apply cell style to each line individually
 			// This ensures background color extends properly despite ANSI resets in content
 			lines := strings.Split(col, "\n")
-			renderedLines := make([]string, len(lines))
-			for j, line := range lines {
-				lineWidth := lipgloss.Width(line)
-				if lineWidth > contentWidth {
-					line = ansi.Truncate(line, contentWidth, "")
-				}
-				lineStyle := style.Width(colWidth).MaxWidth(colWidth).Height(1)
-				if column.Align != nil {
-					lineStyle = lineStyle.Align(*column.Align)
-				}
-				renderedLines[j] = lineStyle.Render(line)
+			lineStyle := style.Width(colWidth).MaxWidth(colWidth).Height(1)
+			if column.Align != nil {
+				lineStyle = lineStyle.Align(*column.Align)
 			}
-			renderedCol = strings.Join(renderedLines, "\n")
+			for j := range colHeight {
+				var line string
+				if j < len(lines) {
+					line = lines[j]
+					if len(line) > contentWidth && lipgloss.Width(line) > contentWidth {
+						line = ansi.Truncate(line, contentWidth, "")
+					}
+				}
+				rowLines[j].WriteString(lineStyle.Render(line))
+			}
 		} else {
 			cellStyle := style.
 				Width(colWidth).
@@ -546,18 +554,51 @@ func (m *Model) renderRow(rowId int, colWidths []int) string {
 			if column.Align != nil {
 				cellStyle = cellStyle.Align(*column.Align)
 			}
-			renderedCol = cellStyle.Render(col)
+			renderedCol := cellStyle.Render(col)
+			if colHeight == 1 {
+				rowLines[0].WriteString(renderedCol)
+			} else {
+				start := 0
+				for j := range colHeight {
+					nl := strings.IndexByte(renderedCol[start:], '\n')
+					if nl < 0 {
+						rowLines[j].WriteString(renderedCol[start:])
+						start = len(renderedCol)
+					} else {
+						rowLines[j].WriteString(renderedCol[start : start+nl])
+						start += nl + 1
+					}
+				}
+			}
 		}
 
-		renderedColumns = append(renderedColumns, renderedCol)
 		headerColId++
 	}
 
-	return m.ctx.Styles.Table.RowStyle.
-		BorderBottom(m.ctx.Config.Theme.Ui.Table.ShowSeparator).
-		Width(m.dimensions.Width).
-		MaxWidth(m.dimensions.Width).
-		Render(lipgloss.JoinHorizontal(lipgloss.Top, renderedColumns...))
+	c := m.ensureCache()
+	rightPad := ""
+	if c.totalColWidth < m.dimensions.Width {
+		rightPad = strings.Repeat(" ", m.dimensions.Width-c.totalColWidth)
+	}
+
+	var out strings.Builder
+	for j := range colHeight {
+		if j > 0 {
+			out.WriteByte('\n')
+		}
+		line := rowLines[j].String()
+		if c.totalColWidth > m.dimensions.Width {
+			line = ansi.Truncate(line, m.dimensions.Width, "")
+		} else if rightPad != "" {
+			line += rightPad
+		}
+		out.WriteString(line)
+	}
+	if m.ctx.Config.Theme.Ui.Table.ShowSeparator {
+		out.WriteByte('\n')
+		out.WriteString(c.separator)
+	}
+	return out.String()
 }
 
 func (m *Model) UpdateProgramContext(ctx *context.ProgramContext) {
