@@ -211,7 +211,7 @@ func containersOf(podTemplate map[string]any) []map[string]any {
 // is deleted either way. progress gets the Job's latest log line about once
 // a second, or "" while its pod is not running yet.
 func CloneIntoVolume(volume, image, script string, timeout time.Duration, progress func(string)) error {
-	out, err := runKubectl(cloneJobManifest(volume, image, script), "create", "-f", "-", "-o", "jsonpath={.metadata.name}")
+	out, err := runKubectl(cloneJobManifestWithEgress(volume, image, script, EgressProxyURL()), "create", "-f", "-", "-o", "jsonpath={.metadata.name}")
 	if err != nil {
 		return err
 	}
@@ -247,10 +247,34 @@ func CloneIntoVolume(volume, image, script string, timeout time.Duration, progre
 }
 
 func cloneJobManifest(volume, image, script string) []byte {
+	return cloneJobManifestWithEgress(volume, image, script, "")
+}
+
+func cloneJobManifestWithEgress(volume, image, script, proxyURL string) []byte {
 	prefix := volume
 	if len(prefix) > 50 {
 		prefix = strings.TrimRight(prefix[:50], "-")
 	}
+	podSpec := map[string]any{
+		"restartPolicy": "Never",
+		"containers": []any{map[string]any{
+			"name":            "clone",
+			"image":           image,
+			"imagePullPolicy": "IfNotPresent",
+			"command":         []string{"bash", "-c", script},
+			"workingDir":      "/volume",
+			"volumeMounts":    []any{map[string]any{"name": "repo", "mountPath": "/volume"}},
+			"resources": map[string]any{
+				"requests": map[string]string{"cpu": "100m", "memory": "128Mi"},
+				"limits":   map[string]string{"cpu": "500m", "memory": "512Mi"},
+			},
+		}},
+		"volumes": []any{map[string]any{
+			"name":                  "repo",
+			"persistentVolumeClaim": map[string]any{"claimName": volume},
+		}},
+	}
+	applyEgressToPodSpec(podSpec, proxyURL, false)
 	return mustJSON(map[string]any{
 		"apiVersion": "batch/v1",
 		"kind":       "Job",
@@ -264,25 +288,7 @@ func cloneJobManifest(volume, image, script string) []byte {
 			"ttlSecondsAfterFinished": 600,
 			"template": map[string]any{
 				"metadata": map[string]any{"labels": map[string]string{VolumeLabel: volume}},
-				"spec": map[string]any{
-					"restartPolicy": "Never",
-					"containers": []any{map[string]any{
-						"name":            "clone",
-						"image":           image,
-						"imagePullPolicy": "IfNotPresent",
-						"command":         []string{"bash", "-c", script},
-						"workingDir":      "/volume",
-						"volumeMounts":    []any{map[string]any{"name": "repo", "mountPath": "/volume"}},
-						"resources": map[string]any{
-							"requests": map[string]string{"cpu": "100m", "memory": "128Mi"},
-							"limits":   map[string]string{"cpu": "500m", "memory": "512Mi"},
-						},
-					}},
-					"volumes": []any{map[string]any{
-						"name":                  "repo",
-						"persistentVolumeClaim": map[string]any{"claimName": volume},
-					}},
-				},
+				"spec":     podSpec,
 			},
 		},
 	})
@@ -294,7 +300,7 @@ func cloneJobManifest(volume, image, script string) []byte {
 // also its pod's. Nothing owns it: DeleteSandbox ends it, and the volume
 // stays.
 func CreateVolumeSandbox(template string, podTemplate map[string]any, volume, mountPath string) (string, error) {
-	manifest, err := volumeSandboxManifest(template, podTemplate, volume, mountPath)
+	manifest, err := volumeSandboxManifestWithEgress(template, podTemplate, volume, mountPath, EgressProxyURL())
 	if err != nil {
 		return "", err
 	}
@@ -306,6 +312,10 @@ func CreateVolumeSandbox(template string, podTemplate map[string]any, volume, mo
 }
 
 func volumeSandboxManifest(template string, podTemplate map[string]any, volume, mountPath string) ([]byte, error) {
+	return volumeSandboxManifestWithEgress(template, podTemplate, volume, mountPath, "")
+}
+
+func volumeSandboxManifestWithEgress(template string, podTemplate map[string]any, volume, mountPath, proxyURL string) ([]byte, error) {
 	var pod map[string]any
 	if err := json.Unmarshal(mustJSON(podTemplate), &pod); err != nil { // a deep copy
 		return nil, err
@@ -327,6 +337,7 @@ func volumeSandboxManifest(template string, podTemplate map[string]any, volume, 
 		mounts, _ := c["volumeMounts"].([]any)
 		c["volumeMounts"] = append(mounts, map[string]any{"name": "repo", "mountPath": mountPath, "subPath": VolumeRepoDir})
 	}
+	applyEgressToPodSpec(spec, proxyURL, true)
 	agent := dnsLabel(strings.TrimSuffix(template, "-template"))
 	if len(agent) > 30 {
 		agent = strings.TrimRight(agent[:30], "-")

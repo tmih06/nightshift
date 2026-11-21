@@ -180,3 +180,66 @@ func TestASandboxOnAVolumeCountsAsClaimed(t *testing.T) {
 		t.Error("ranks are off")
 	}
 }
+
+func TestEgressWiringAddsProxyCAAndPlaceholdersWithoutRealSecrets(t *testing.T) {
+	pod := map[string]any{"spec": map[string]any{
+		"restartPolicy": "OnFailure",
+		"containers":    []any{map[string]any{"name": "agent", "image": "ghcr.io/x/pi:latest"}},
+	}}
+	raw, err := volumeSandboxManifestWithEgress("pi-template", pod, "pr-acme-rocket-7", "/home/node/workspace/rocket", "http://10.96.0.42:8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := decode(t, raw)
+	spec := dig(m, "spec", "podTemplate", "spec").(map[string]any)
+	if spec["automountServiceAccountToken"] != false {
+		t.Errorf("automountServiceAccountToken = %v, want false", spec["automountServiceAccountToken"])
+	}
+	vols := spec["volumes"].([]any)
+	if len(vols) != 2 || dig(vols[1], "configMap", "name") != EgressCAConfigMap {
+		t.Errorf("volumes = %v, want egress-ca ConfigMap", vols)
+	}
+	c := spec["containers"].([]any)[0].(map[string]any)
+	mounts := c["volumeMounts"].([]any)
+	if len(mounts) != 2 || dig(mounts[1], "mountPath") != egressCAMountDir || dig(mounts[1], "readOnly") != true {
+		t.Errorf("mounts = %v", mounts)
+	}
+	envMap := map[string]string{}
+	for _, rawEnv := range c["env"].([]any) {
+		em := rawEnv.(map[string]any)
+		envMap[em["name"].(string)] = em["value"].(string)
+	}
+	for k, want := range map[string]string{
+		"HTTP_PROXY":          "http://10.96.0.42:8080",
+		"HTTPS_PROXY":         "http://10.96.0.42:8080",
+		"NODE_EXTRA_CA_CERTS": egressCACertPath,
+		"SSL_CERT_FILE":       egressCACertPath,
+		"GIT_SSL_CAINFO":      egressCACertPath,
+		"ANTHROPIC_API_KEY":   "nightshift:secret:ANTHROPIC_API_KEY",
+		"OPENAI_API_KEY":      "nightshift:secret:OPENAI_API_KEY",
+		"GEMINI_API_KEY":      "nightshift:secret:GEMINI_API_KEY",
+		"GITHUB_TOKEN":        "nightshift:secret:GITHUB_TOKEN",
+	} {
+		if envMap[k] != want {
+			t.Errorf("env[%s] = %q, want %q", k, envMap[k], want)
+		}
+	}
+
+	// Clone job gets proxy + CA + GITHUB_TOKEN placeholder, but not LLM API key placeholders.
+	jobM := decode(t, cloneJobManifestWithEgress("pr-acme-rocket-7", "ghcr.io/x/pi:latest", "git clone x .", "http://10.96.0.42:8080"))
+	jobSpec := dig(jobM, "spec", "template", "spec").(map[string]any)
+	if jobSpec["automountServiceAccountToken"] != false {
+		t.Errorf("clone job automountServiceAccountToken = %v, want false", jobSpec["automountServiceAccountToken"])
+	}
+	jobEnv := map[string]string{}
+	for _, rawEnv := range dig(jobSpec, "containers", 0, "env").([]any) {
+		em := rawEnv.(map[string]any)
+		jobEnv[em["name"].(string)] = em["value"].(string)
+	}
+	if jobEnv["GITHUB_TOKEN"] != "nightshift:secret:GITHUB_TOKEN" || jobEnv["HTTPS_PROXY"] != "http://10.96.0.42:8080" {
+		t.Errorf("clone job env missing proxy or GITHUB_TOKEN placeholder: %v", jobEnv)
+	}
+	if _, hasLLM := jobEnv["ANTHROPIC_API_KEY"]; hasLLM {
+		t.Errorf("clone job should not receive LLM API key placeholder")
+	}
+}

@@ -2,7 +2,7 @@
 
 Nightshift combines a Kubernetes sandbox fleet with a terminal dashboard and
 GitHub views. The automated ticket-to-merge workflow is still on the roadmap.
-The demo runs in `sandbox-demo` on `kind-agent-sandbox`.
+Nightshift runs in the `nightshift` namespace on `kind-agent-sandbox`.
 
 ## Sandbox fleet
 
@@ -24,7 +24,7 @@ flowchart LR
   OpenCode[OpenCode pool: 1 warm] -->|restocks| Claim
 ```
 
-`demo/warmpool.yaml` defines four templates and pools, each with one standby:
+`k8s/warmpool.yaml` defines four templates and pools, each with one standby:
 
 | Agent | Pool | Template | Image |
 | --- | --- | --- | --- |
@@ -45,7 +45,7 @@ and the limits of this budget.
 Select a warm sandbox in the dashboard and press `c` to claim its pool. When
 no warm sandbox is selected, `c` defaults to Pi. Alternatively, `sbx` defaults
 to Pi and accepts `POOL=codex-pool`, `POOL=claude-code-pool`, or
-`POOL=opencode-pool`; `demo/claim.yaml` is a Pi example. A claim adopts any
+`POOL=opencode-pool`; `k8s/claim.yaml` is a Pi example. A claim adopts any
 available sandbox in the chosen pool, not necessarily the exact selected pod.
 The controller replenishes that pool. Deleting a claim destroys its sandbox
 and pod because its shutdown policy is `Delete`.
@@ -55,7 +55,8 @@ and pod because its shutdown policy is `Delete`.
 `S` on a pull request, issue, or repository/branch in the GitHub tab gives it a
 volume that outlives any sandbox. gh-dash or the Repo view sends the target to
 the root model, which asks for a pool (and a branch name for an issue or
-repository) in a dialog and hands the checkout to the sandbox tab.
+repository), forks a right-side model submenu for that pool's harness, and
+hands the checkout—along with the chosen harness and model—to the sandbox tab.
 
 ```mermaid
 flowchart LR
@@ -91,17 +92,24 @@ the requested branch for an issue or repository), or returns to the sandbox
 already on it.
 Dropping it also deletes the PersistentVolumeClaim, which Kubernetes removes
 once the pod is gone. A clone that did not finish is redone from
-scratch. The demo's `standard` class is local-path, so a volume lives on
+scratch. The cluster's `standard` class is local-path, so a volume lives on
 one node's disk and pins its sandboxes to that node.
 
 Inside a claimed pod, Herdr keeps bash alive independently of the dashboard's
 connection. The dashboard reads and interacts with it through `kubectl exec`;
 see `docs/session-manager.md`. Pod deletion or restart ends the session and
-its ephemeral workspace. Credentials must be supplied at runtime.
+its ephemeral workspace. Credentials must be supplied at runtime, or isolated
+outside the sandbox via Nightshift's optional lightweight Go egress proxy
+(`cmd/egress-proxy`, `k8s/egress.yaml`, `k8s/egress-setup.sh`): a single
+pod in `nightshift-egress` holds real API/GitHub credentials, enforces
+default-deny host/method/path allowlists and SSRF-safe dialing, swaps opaque
+`nightshift:secret:*` env placeholders on matched hosts only, and scrubs
+reflected secrets from responses while `NetworkPolicy` blocks direct internet
+and DNS from checkout sandboxes.
 
-## Operating the demo
+## Operating the cluster
 
-Apply `demo/warmpool.yaml` after installing the agent-sandbox controller and
+Apply `k8s/warmpool.yaml` after installing the agent-sandbox controller and
 ensuring the GHCR images are accessible. This creates `pi-pool` but does not
 remove the old `agent-pool` or the `agent-bash-template` template. Existing
 claims may still reference the old resources; do not delete them as part of
@@ -110,7 +118,7 @@ manifest does not remove unrelated resources or stale pools.
 
 Use k9s or kubectl to inspect `SandboxTemplate` (`sbt`), `SandboxWarmPool`
 (`swp`), `SandboxClaim` (`sbc`), `Sandbox` (`sbx`), and pod resources in
-`sandbox-demo`. Pull request volumes stay until removed by hand:
+`nightshift`. Pull request volumes stay until removed by hand:
 `kubectl delete pvc -l nightshift.dev/volume` removes all of them, once no
 sandbox mounts them. The default claim loop is `SBX_NO_EXEC=1 sbx`, which removes
 only the claim it creates. See `CONTEXT.md` for dashboard and verify commands.

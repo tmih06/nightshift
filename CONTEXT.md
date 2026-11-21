@@ -17,28 +17,31 @@ through gh-dash.
 
 ## Cluster
 
-The demo runs on the kind cluster `kind-agent-sandbox` in the namespace
-`sandbox-demo`.
+Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
+`nightshift` (with the egress proxy isolated in `nightshift-egress`).
 
 ## What lives here
 
-- `demo/` holds the Kubernetes side: `warmpool.yaml` creates the namespace
-  `sandbox-demo` and four template/pool pairs, each keeping one Pi, Codex,
-  Claude Code, or OpenCode sandbox warm. Each pod is capped at 1000m CPU
-  and 2Gi memory. `claim.yaml`
-  claims a Pi sandbox by default.
+- `k8s/` holds the Kubernetes manifests and cluster scripts: `warmpool.yaml`
+  creates the namespace `nightshift` and four template/pool pairs, each keeping
+  one Pi, Codex, Claude Code, or OpenCode sandbox warm. Each pod is capped at
+  1000m CPU and 2Gi memory. `claim.yaml` claims a Pi sandbox by default.
   `sbx.sh` wraps that loop in one command and is installed as `sbx` through
-  a symlink in `~/.local/bin`.
+  a symlink in `~/.local/bin`. `egress.yaml` and `egress-setup.sh` deploy the
+  single-pod Go egress + credential-injection proxy in the separate
+  `nightshift-egress` namespace with default-deny `NetworkPolicy` enforcement.
 - `images/base/` defines the common sandbox tools and Herdr; `images/agent/`
-  adds one versioned Pi, Codex, Claude Code, or OpenCode agent. The image
+  adds one versioned Pi, Codex, Claude Code, or OpenCode agent; `images/egress/`
+  builds the static distroless container for `cmd/egress-proxy`. The image
   workflow watches stable npm releases and publishes to GHCR. Check
-  registry access before applying `demo/warmpool.yaml`; see
+  registry access before applying `k8s/warmpool.yaml`; see
   `images/agent/README.md`.
 - `cmd/nightshift` is the entrypoint of the Go program, a Bubble Tea v2
-  TUI. `internal/app` is the root model: it draws the tab bar and routes
+  TUI; `cmd/egress-proxy` is the standalone outbound egress + secret-injection
+  proxy backed by `internal/egress`. `internal/app` is the root model: it draws the tab bar and routes
   input to the active tab. `internal/dashboard` is the sandbox tab,
   `internal/cluster` reads the fleet from the cluster, `internal/session`
-  owns the Herdr terminal sessions, and `internal/manifest` pins the demo
+  owns the Herdr terminal sessions, and `internal/manifest` pins the cluster
   manifests' resource budget in its tests.
 - `internal/ghdash` is a vendored copy of
   [gh-dash](https://github.com/dlvhdr/gh-dash) (MIT), the GitHub tab.
@@ -56,6 +59,8 @@ The demo runs on the kind cluster `kind-agent-sandbox` in the namespace
 - `docs/` holds research notes. `docs/software-factory.md` traces the term
   "software factory" through its definitions from 1968 to 2026.
   `docs/session-manager.md` describes session behavior.
+  `docs/sandbox-egress-and-secrets.md` surveys open-source network egress
+  control and credential-isolation proxies for coding agent sandboxes.
 - `.agents/skills/` holds the agent skills for this repo. `.claude/` is a
   symlink to `.agents/`, so Claude Code reads the same skills.
 - `ARCHITECTURE.md` explains how the parts connect, with diagrams.
@@ -103,11 +108,16 @@ The demo runs on the kind cluster `kind-agent-sandbox` in the namespace
 - `S` on a pull request, issue, or repository/branch row checks it out on its
   own volume in a new sandbox. On a pull request, a dialog over gh-dash or the
   Repo view names the volume and lists the pools with their templates;
-  `↑`/`↓` or a number picks the agent, `enter` or a click starts it, and `esc`
-  cancels. On an issue or repository/branch, the same dialog also includes a
-  branch name input (defaulting to `issue-<n>` for an issue or the selected
-  branch / `main` for a repository; `tab` switches between branch and pool,
-  `↑`/`↓` still steps through pools while typing). The volume is a
+  `↑`/`↓` or `j`/`k` picks the pool, and `enter`, `→`/`l`, a number, or a click
+  forks a cascading model submenu to the right of the selected pool for that
+  harness (`claude`, `codex`, `pi`, or `opencode`). Inside the model submenu,
+  `↑`/`↓`/`j`/`k` moves through models, `←`/`h`/`esc` returns to the pool list,
+  and `enter`, a number, or a click starts the sandbox and launches the harness
+  with `--model <selected>` (or the harness default). On an issue or
+  repository/branch, the same dialog also includes a branch name input
+  (defaulting to `issue-<n>` for an issue or the selected branch / `main` for a
+  repository; `tab` switches between branch and pool, `↑`/`↓` still steps
+  through pools while typing). The volume is a
   PersistentVolumeClaim named `pr-<owner>-<repo>-<n>` for a pull request,
   `issue-<owner>-<repo>-<n>` for an issue, or `repo-<owner>-<repo>-<branch>`
   for a repository branch. The first time, a Job on
@@ -148,7 +158,7 @@ The demo runs on the kind cluster `kind-agent-sandbox` in the namespace
 - Usage refreshes every 2 seconds. A claimed sandbox's numbers come from its
   own cgroup counters, read with one `kubectl exec` per refresh: memory from
   the first read, CPU as the rate between two. Warm sandboxes use
-  metrics-server, which the demo cluster samples every 15 seconds and
+  metrics-server, which the cluster samples every 15 seconds and
   averages over 15 to 30.
 - A tab out of sight keeps refreshing, but the sandbox tab stops rendering the
   shell's screen until it is shown again. Its viewer still processes output so
@@ -196,7 +206,7 @@ toolchain on demand, and the repo needs no other Go config.
 
 ## Verify
 
-- Run `bash -n demo/sbx.sh` to check that the script parses.
+- Run `bash -n k8s/sbx.sh k8s/egress-setup.sh` to check that the scripts parse.
 - Ensure the published sandbox images are accessible as documented in
   `images/agent/README.md` before testing against the cluster.
 - With the cluster up, run `SBX_NO_EXEC=1 sbx` to check the claim and destroy
@@ -204,7 +214,7 @@ toolchain on demand, and the repo needs no other Go config.
 - Run `go test ./...` and `go vet ./...` to check the Go module, and
   `go run ./cmd/nightshift -once` to print one dashboard frame against the
   live cluster.
-- Run `make lint` for shellcheck, yamllint on `demo/`, and markdownlint on
+- Run `make lint` for shellcheck, yamllint on `k8s/`, and markdownlint on
   `*.md` and `docs/*.md`. It requires shellcheck, pipx, and npx; CI runs the
   same target and also checks workflow files with actionlint.
 - Run `make fmt` to format Go files or `make fmt-check` to check formatting

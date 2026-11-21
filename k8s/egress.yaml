@@ -1,0 +1,206 @@
+# Lightweight single-pod egress + credential-injection proxy for Nightshift.
+# Apply via k8s/egress-setup.sh (generates the CA and real Secrets first).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nightshift-egress
+  labels:
+    kubernetes.io/metadata.name: nightshift-egress
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: egress-policy
+  namespace: nightshift-egress
+data:
+  policy.yaml: |
+    ca:
+      cert_file: /etc/egress-ca/ca.crt
+      key_file: /etc/egress-ca/ca.key
+    block_private_ips: true
+    scrub_responses: true
+    rules:
+      - name: anthropic
+        hosts: ["api.anthropic.com"]
+        ports: [443]
+        mode: mitm
+        secrets: ["ANTHROPIC_API_KEY"]
+      - name: openai
+        hosts: ["api.openai.com"]
+        ports: [443]
+        mode: mitm
+        secrets: ["OPENAI_API_KEY"]
+      - name: google-ai
+        hosts: ["generativelanguage.googleapis.com"]
+        ports: [443]
+        mode: mitm
+        secrets: ["GEMINI_API_KEY"]
+      - name: github
+        hosts: ["github.com", "api.github.com"]
+        ports: [443]
+        mode: mitm
+        methods: ["GET", "HEAD", "POST", "PUT", "PATCH"]
+        secrets: ["GITHUB_TOKEN"]
+      - name: npm
+        hosts: ["registry.npmjs.org"]
+        ports: [443]
+        mode: tunnel
+      - name: pypi
+        hosts: ["pypi.org", "files.pythonhosted.org"]
+        ports: [443]
+        mode: tunnel
+      - name: golang
+        hosts: ["proxy.golang.org", "sum.golang.org"]
+        ports: [443]
+        mode: tunnel
+    secrets:
+      ANTHROPIC_API_KEY:
+        placeholder: "nightshift:secret:ANTHROPIC_API_KEY"
+        env: "REAL_ANTHROPIC_API_KEY"
+      OPENAI_API_KEY:
+        placeholder: "nightshift:secret:OPENAI_API_KEY"
+        env: "REAL_OPENAI_API_KEY"
+      GEMINI_API_KEY:
+        placeholder: "nightshift:secret:GEMINI_API_KEY"
+        env: "REAL_GEMINI_API_KEY"
+      GITHUB_TOKEN:
+        placeholder: "nightshift:secret:GITHUB_TOKEN"
+        env: "REAL_GITHUB_TOKEN"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: egress-proxy
+  namespace: nightshift-egress
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: egress-proxy
+  template:
+    metadata:
+      labels:
+        app: egress-proxy
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: proxy
+        image: nightshift-egress-proxy:local
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: proxy
+          containerPort: 8080
+        - name: admin
+          containerPort: 9090
+        envFrom:
+        - secretRef:
+            name: egress-secrets
+            optional: true
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: admin
+          initialDelaySeconds: 1
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: admin
+          initialDelaySeconds: 3
+          periodSeconds: 15
+        volumeMounts:
+        - name: policy
+          mountPath: /etc/egress
+          readOnly: true
+        - name: ca
+          mountPath: /etc/egress-ca
+          readOnly: true
+      volumes:
+      - name: policy
+        configMap:
+          name: egress-policy
+      - name: ca
+        secret:
+          secretName: egress-ca
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: egress-proxy
+  namespace: nightshift-egress
+spec:
+  selector:
+    app: egress-proxy
+  ports:
+  - name: proxy
+    port: 8080
+    targetPort: proxy
+---
+# Allow only nightshift pods to reach the proxy listener (port 8080).
+# Admin port 9090 is intentionally unreachable from nightshift.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-proxy-ingress
+  namespace: nightshift-egress
+spec:
+  podSelector:
+    matchLabels:
+      app: egress-proxy
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: nightshift
+    ports:
+    - protocol: TCP
+      port: 8080
+---
+# Lock down checkout sandboxes (and clone Jobs) in nightshift so their ONLY
+# permitted outbound destination is the egress proxy on TCP 8080. Direct
+# internet, cluster internals, cloud metadata, and UDP/TCP 53 DNS are dropped
+# (Nightshift sets HTTP_PROXY/HTTPS_PROXY to the proxy's ClusterIP so all DNS
+# resolution happens inside the egress proxy).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sandbox-volume-egress
+  namespace: nightshift
+spec:
+  podSelector:
+    matchExpressions:
+    - key: nightshift.dev/volume
+      operator: Exists
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: nightshift-egress
+      podSelector:
+        matchLabels:
+          app: egress-proxy
+    ports:
+    - protocol: TCP
+      port: 8080

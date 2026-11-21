@@ -113,6 +113,7 @@ func (c Checkout) CloneScript() string {
 		"export GIT_CONFIG_KEY_0=http.version GIT_CONFIG_VALUE_0=HTTP/1.1",
 		"export GIT_CONFIG_KEY_1=http.lowSpeedLimit GIT_CONFIG_VALUE_1=1024",
 		"export GIT_CONFIG_KEY_2=http.lowSpeedTime GIT_CONFIG_VALUE_2=20",
+		`if [ -n "${GITHUB_TOKEN:-}" ]; then export GIT_ASKPASS=/tmp/git-askpass.sh GIT_TERMINAL_PROMPT=0; printf '#!/bin/sh\ncase "$1" in *Username*) echo x-access-token;; *) echo "$GITHUB_TOKEN";; esac\n' > "$GIT_ASKPASS"; chmod 700 "$GIT_ASKPASS"; fi`,
 	}
 	lines = append(lines, retryScriptLines(
 		"clone",
