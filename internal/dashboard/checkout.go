@@ -77,15 +77,13 @@ func (c Checkout) CloneScript() string {
 		"export GIT_CONFIG_KEY_0=http.version GIT_CONFIG_VALUE_0=HTTP/1.1",
 		"export GIT_CONFIG_KEY_1=http.lowSpeedLimit GIT_CONFIG_VALUE_1=1024",
 		"export GIT_CONFIG_KEY_2=http.lowSpeedTime GIT_CONFIG_VALUE_2=20",
-		"for i in 1 2 3; do",
-		"  rm -rf " + dir,
-		"  if git clone --progress " + shellQuote("https://github.com/"+c.Repo+".git") + " " + dir + " 2>&1 | lines; then break; fi",
-		`  [ "$i" -lt 3 ] || exit 1`,
-		`  echo "clone stalled, retrying ($((i+1))/3)..."`,
-		"  sleep 2",
-		"done",
-		"cd " + dir,
 	}
+	lines = append(lines, retryScriptLines(
+		"clone",
+		"rm -rf "+dir,
+		"git clone --progress "+shellQuote("https://github.com/"+c.Repo+".git")+" "+dir+" 2>&1 | lines",
+	)...)
+	lines = append(lines, "cd "+dir)
 	if c.Issue {
 		b := shellQuote(c.branch())
 		ref := shellQuote("refs/remotes/origin/" + c.branch())
@@ -93,17 +91,28 @@ func (c Checkout) CloneScript() string {
 			"if git show-ref --verify --quiet "+ref+"; then git checkout -B "+b+" --track "+ref+"; else git checkout -B "+b+"; fi",
 		)
 	} else {
-		lines = append(lines,
-			"for i in 1 2 3; do",
-			fmt.Sprintf("  if git fetch --progress origin pull/%d/head 2>&1 | lines; then break; fi", c.Number),
-			`  [ "$i" -lt 3 ] || exit 1`,
-			`  echo "fetch stalled, retrying ($((i+1))/3)..."`,
-			"  sleep 2",
-			"done",
-			"git checkout -B "+shellQuote(c.branch())+" FETCH_HEAD",
-		)
+		lines = append(lines, retryScriptLines(
+			"fetch",
+			"",
+			fmt.Sprintf("git fetch --progress origin pull/%d/head 2>&1 | lines", c.Number),
+		)...)
+		lines = append(lines, "git checkout -B "+shellQuote(c.branch())+" FETCH_HEAD")
 	}
 	return strings.Join(lines, "\n")
+}
+
+func retryScriptLines(label, setup, cmd string) []string {
+	out := []string{"for i in 1 2 3; do"}
+	if setup != "" {
+		out = append(out, "  "+setup)
+	}
+	return append(out,
+		"  if "+cmd+"; then break; fi",
+		`  [ "$i" -lt 3 ] || exit 1`,
+		fmt.Sprintf(`  echo "%s stalled, retrying ($((i+1))/3)..."`, label),
+		"  sleep 2",
+		"done",
+	)
 }
 
 // ShellLine is what the sandbox's bash is given after a fresh clone: into the

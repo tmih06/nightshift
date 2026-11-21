@@ -292,3 +292,14 @@ func (m *Model) HitTestButtonXForTest() int {
 	}
 	return -1
 }
+
+func BenchmarkMouseDragSameWidth(b *testing.B) {
+	t := &testing.T{}
+	m := newMouseTestModel(t, 140, 35, "right")
+	divX := m.ctx.MainContentWidth
+	m.Update(tea.MouseClickMsg{X: divX, Y: 10, Button: tea.MouseLeft})
+	m.Update(tea.MouseMotionMsg{X: divX - 10, Y: 10, Button: tea.MouseLeft})
+	for b.Loop() {
+		m.Update(tea.MouseMotionMsg{X: divX - 10, Y: 11, Button: tea.MouseLeft})
+	}
+}

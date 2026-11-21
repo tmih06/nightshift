@@ -32,14 +32,24 @@ type picker struct {
 	branchErr   string
 }
 
-// openPicker answers S on a pull request with the pools the fleet shows.
-func (m Model) openPicker(msg ghtui.SandboxPullRequestMsg) (Model, tea.Cmd) {
-	if _, name, ok := strings.Cut(msg.Repo, "/"); !ok || name == "" || msg.Number <= 0 {
-		return m.noticeErr(fmt.Sprintf("cannot check out %q", msg.URL))
+// preparePicker validates the target repository/number and returns available
+// warm pools, or an error notice string.
+func (m Model) preparePicker(repo string, number int, url string) ([]cluster.Pool, string) {
+	if _, name, ok := strings.Cut(repo, "/"); !ok || name == "" || number <= 0 {
+		return nil, fmt.Sprintf("cannot check out %q", url)
 	}
 	pools := m.sandboxes.WarmPools()
 	if len(pools) == 0 {
-		return m.noticeErr("no warm pools to claim from: is the cluster up?")
+		return nil, "no warm pools to claim from: is the cluster up?"
+	}
+	return pools, ""
+}
+
+// openPicker answers S on a pull request with the pools the fleet shows.
+func (m Model) openPicker(msg ghtui.SandboxPullRequestMsg) (Model, tea.Cmd) {
+	pools, errMsg := m.preparePicker(msg.Repo, msg.Number, msg.URL)
+	if errMsg != "" {
+		return m.noticeErr(errMsg)
 	}
 	m.picker = &picker{
 		repo:   msg.Repo,
@@ -54,12 +64,9 @@ func (m Model) openPicker(msg ghtui.SandboxPullRequestMsg) (Model, tea.Cmd) {
 // openIssuePicker answers S on an issue with a branch name input and the pools
 // the fleet shows.
 func (m Model) openIssuePicker(msg ghtui.SandboxIssueMsg) (Model, tea.Cmd) {
-	if _, name, ok := strings.Cut(msg.Repo, "/"); !ok || name == "" || msg.Number <= 0 {
-		return m.noticeErr(fmt.Sprintf("cannot check out %q", msg.URL))
-	}
-	pools := m.sandboxes.WarmPools()
-	if len(pools) == 0 {
-		return m.noticeErr("no warm pools to claim from: is the cluster up?")
+	pools, errMsg := m.preparePicker(msg.Repo, msg.Number, msg.URL)
+	if errMsg != "" {
+		return m.noticeErr(errMsg)
 	}
 	defaultBranch := fmt.Sprintf("issue-%d", msg.Number)
 	ti := textinput.New()
@@ -100,12 +107,18 @@ func (m Model) openIssuePicker(msg ghtui.SandboxIssueMsg) (Model, tea.Cmd) {
 	return m, nil
 }
 
+func stepCursor(cursor, delta, n int) int {
+	if n <= 0 {
+		return 0
+	}
+	return ((cursor+delta)%n + n) % n
+}
+
 func (m Model) updatePicker(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	p := *m.picker
 	if p.issue && p.focusBranch {
 		return m.updatePickerBranch(msg)
 	}
-	menu := m.pickerMenu()
 	switch s := msg.String(); s {
 	case "esc", "q", "ctrl+c":
 		m.picker = nil
@@ -118,14 +131,14 @@ func (m Model) updatePicker(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		if s == "shift+tab" {
-			menu.Move(-1)
+			p.cursor = stepCursor(p.cursor, -1, len(p.pools))
 		} else {
-			menu.Move(1)
+			p.cursor = stepCursor(p.cursor, 1, len(p.pools))
 		}
 	case "up", "k":
-		menu.Move(-1)
+		p.cursor = stepCursor(p.cursor, -1, len(p.pools))
 	case "down", "j":
-		menu.Move(1)
+		p.cursor = stepCursor(p.cursor, 1, len(p.pools))
 	case "enter":
 		return m.pickPool(p.cursor)
 	default:
@@ -133,14 +146,12 @@ func (m Model) updatePicker(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			return m.pickPool(int(s[0] - '1'))
 		}
 	}
-	p.cursor = menu.Cursor
 	m.picker = &p
 	return m, nil
 }
 
 func (m Model) updatePickerBranch(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	p := *m.picker
-	menu := m.pickerMenu()
 	switch msg.String() {
 	case "esc", "ctrl+c":
 		m.picker = nil
@@ -151,13 +162,11 @@ func (m Model) updatePickerBranch(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.picker = &p
 		return m, nil
 	case "up":
-		menu.Move(-1)
-		p.cursor = menu.Cursor
+		p.cursor = stepCursor(p.cursor, -1, len(p.pools))
 		m.picker = &p
 		return m, nil
 	case "down":
-		menu.Move(1)
-		p.cursor = menu.Cursor
+		p.cursor = stepCursor(p.cursor, 1, len(p.pools))
 		m.picker = &p
 		return m, nil
 	case "enter":
@@ -266,36 +275,45 @@ func (m Model) pickerMouse(msg tea.MouseMsg) (Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) pickerInputWidth(p *picker) int {
-	nameW, tmplW := 0, 0
-	for _, pool := range p.pools {
+const issuePickerHint = "tab switch · ↑/↓ agent · enter start · esc cancel"
+
+func poolColumnWidths(pools []cluster.Pool) (nameW, tmplW int) {
+	for _, pool := range pools {
 		nameW = max(nameW, lipgloss.Width(pool.Name))
 		tmplW = max(tmplW, lipgloss.Width(pool.Template))
 	}
-	optW := lipgloss.Width(fmt.Sprintf(" %d  %-*s  %-*s ", len(p.pools), nameW, "", tmplW, ""))
-	title := fmt.Sprintf("Check out %s#%d in a sandbox", p.repo, p.number)
+	return nameW, tmplW
+}
+
+func pickerTitle(repo string, number int) string {
+	return fmt.Sprintf("Check out %s#%d in a sandbox", repo, number)
+}
+
+func (m Model) pickerInputWidthFor(p *picker, nameW, tmplW int, title string) int {
+	digits := len(fmt.Sprintf("%d", len(p.pools)))
+	optW := 1 + digits + 2 + nameW + 2 + tmplW + 1
 	vol := "volume " + cluster.IssueVolumeName(p.repo, p.number)
-	hint := "tab switch · ↑/↓ agent · enter start · esc cancel"
-	inner := max(44, lipgloss.Width(title), lipgloss.Width(vol), lipgloss.Width(hint), optW)
+	inner := max(44, lipgloss.Width(title), lipgloss.Width(vol), lipgloss.Width(issuePickerHint), optW)
 	inner = min(inner, max(1, m.width-4))
 	return max(1, inner-lipgloss.Width(p.branchInput.Prompt)-1)
 }
 
+func (m Model) pickerInputWidth(p *picker) int {
+	nameW, tmplW := poolColumnWidths(p.pools)
+	return m.pickerInputWidthFor(p, nameW, tmplW, pickerTitle(p.repo, p.number))
+}
+
 func (m Model) pickerMenu() dialog.Menu {
 	p := m.picker
-	nameW, tmplW := 0, 0
-	for _, pool := range p.pools {
-		nameW = max(nameW, lipgloss.Width(pool.Name))
-		tmplW = max(tmplW, lipgloss.Width(pool.Template))
-	}
+	nameW, tmplW := poolColumnWidths(p.pools)
 	opts := make([]dialog.Option, len(p.pools))
 	for i, pool := range p.pools {
 		opts[i] = dialog.Option{Text: fmt.Sprintf(" %d  %-*s  %-*s ", i+1, nameW, pool.Name, tmplW, pool.Template)}
 	}
-	title := fmt.Sprintf("Check out %s#%d in a sandbox", p.repo, p.number)
+	title := pickerTitle(p.repo, p.number)
 	if p.issue {
 		ti := p.branchInput
-		ti.SetWidth(m.pickerInputWidth(p))
+		ti.SetWidth(m.pickerInputWidthFor(p, nameW, tmplW, title))
 		return dialog.Menu{
 			Title:        title,
 			Lines:        []string{"volume " + cluster.IssueVolumeName(p.repo, p.number)},
@@ -303,7 +321,7 @@ func (m Model) pickerMenu() dialog.Menu {
 			OptionsLabel: "Pool",
 			Options:      opts,
 			Cursor:       p.cursor,
-			Hint:         "tab switch · ↑/↓ agent · enter start · esc cancel",
+			Hint:         issuePickerHint,
 		}
 	}
 	branch := p.branch

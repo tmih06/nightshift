@@ -10,6 +10,7 @@ import (
 	"github.com/tmih06/nightshift/internal/ghdash/tui/common"
 	"github.com/tmih06/nightshift/internal/ghdash/tui/components/footer"
 	"github.com/tmih06/nightshift/internal/ghdash/tui/components/notificationrow"
+	"github.com/tmih06/nightshift/internal/ghdash/tui/components/section"
 	"github.com/tmih06/nightshift/internal/ghdash/tui/components/tabs"
 	"github.com/tmih06/nightshift/internal/ghdash/tui/keys"
 )
@@ -138,10 +139,18 @@ func (m *Model) applyDividerDrag(x, y int) tea.Cmd {
 	if m.ctx.PreviewPosition == "bottom" {
 		available := m.getBaseContentHeight() - m.ctx.Styles.Sidebar.BorderWidth
 		desiredTableH := y - m.bodyTop()
-		m.previewHeightOverride = clampPreviewSize(available-desiredTableH, minPreviewHeight, available-minMainTableHeight, available)
+		next := clampPreviewSize(available-desiredTableH, minPreviewHeight, available-minMainTableHeight, available)
+		if next == m.ctx.DynamicPreviewHeight {
+			return nil
+		}
+		m.previewHeightOverride = next
 	} else {
 		desiredPreviewW := m.ctx.ScreenWidth - x
-		m.previewWidthOverride = clampPreviewSize(desiredPreviewW, minPreviewWidth, m.ctx.ScreenWidth-minMainTableWidth, m.ctx.ScreenWidth)
+		next := clampPreviewSize(desiredPreviewW, minPreviewWidth, m.ctx.ScreenWidth-minMainTableWidth, m.ctx.ScreenWidth)
+		if next == m.ctx.DynamicPreviewWidth {
+			return nil
+		}
+		m.previewWidthOverride = next
 	}
 	m.syncMainContentDimensions()
 	m.syncProgramContext()
@@ -180,21 +189,26 @@ func (m *Model) applyMouseWheel(x, y, delta int) tea.Cmd {
 	if currSection == nil {
 		return nil
 	}
-	var cmds []tea.Cmd
 	prevRow := currSection.CurrRow()
 	var nextRow int
 	if delta > 0 {
 		nextRow = currSection.NextRow()
-		if prevRow != nextRow && nextRow == currSection.NumRows()-1 && m.ctx.View != config.RepoView {
-			cmds = append(cmds, currSection.FetchNextPageSectionRows()...)
-		}
 	} else {
 		nextRow = currSection.PrevRow()
 	}
-	if prevRow != nextRow {
-		cmds = append(cmds, m.onViewedRowChanged())
-		m.syncFooterPager()
+	return m.finishRowMove(currSection, prevRow, nextRow)
+}
+
+func (m *Model) finishRowMove(currSection section.Section, prevRow, nextRow int) tea.Cmd {
+	if prevRow == nextRow {
+		return nil
 	}
+	var cmds []tea.Cmd
+	if nextRow == currSection.NumRows()-1 && m.ctx.View != config.RepoView {
+		cmds = append(cmds, currSection.FetchNextPageSectionRows()...)
+	}
+	cmds = append(cmds, m.onViewedRowChanged())
+	m.syncFooterPager()
 	return tea.Batch(cmds...)
 }
 
@@ -214,29 +228,21 @@ func (m *Model) applyMouseClick(x, y int) tea.Cmd {
 	if m.ctx.View != config.RepoView && y == 0 {
 		kind, id := m.tabs.HitTest(x)
 		switch kind {
-		case tabs.HitSection:
-			if sec := m.getSectionAt(id); sec != nil && sec.GetId() != m.currSectionId {
-				m.setCurrSectionId(sec.GetId())
-				cmd := m.onViewedRowChanged()
-				m.syncFooterPager()
-				return cmd
-			}
-		case tabs.HitPrevOverflow:
-			if sec := m.getSectionAt(m.getPrevSectionId()); sec != nil && sec.GetId() != m.currSectionId {
-				m.setCurrSectionId(sec.GetId())
-				cmd := m.onViewedRowChanged()
-				m.syncFooterPager()
-				return cmd
-			}
-		case tabs.HitNextOverflow:
-			if sec := m.getSectionAt(m.getNextSectionId()); sec != nil && sec.GetId() != m.currSectionId {
-				m.setCurrSectionId(sec.GetId())
-				cmd := m.onViewedRowChanged()
-				m.syncFooterPager()
-				return cmd
-			}
 		case tabs.HitNewSection:
 			m.addNewSection()
+			cmd := m.onViewedRowChanged()
+			m.syncFooterPager()
+			return cmd
+		case tabs.HitPrevOverflow:
+			id = m.getPrevSectionId()
+		case tabs.HitNextOverflow:
+			id = m.getNextSectionId()
+		case tabs.HitSection:
+		default:
+			return nil
+		}
+		if sec := m.getSectionAt(id); sec != nil && sec.GetId() != m.currSectionId {
+			m.setCurrSectionId(sec.GetId())
 			cmd := m.onViewedRowChanged()
 			m.syncFooterPager()
 			return cmd
@@ -299,17 +305,9 @@ func (m *Model) applyMouseClick(x, y int) tea.Cmd {
 		m.lastClickSection = m.currSectionId
 		m.lastClickView = m.ctx.View
 
-		var cmds []tea.Cmd
 		prevRow := currSection.CurrRow()
 		nextRow := currSection.SetCurrRow(rowIdx)
-		if prevRow != nextRow {
-			if nextRow == currSection.NumRows()-1 && m.ctx.View != config.RepoView {
-				cmds = append(cmds, currSection.FetchNextPageSectionRows()...)
-			}
-			cmds = append(cmds, m.onViewedRowChanged())
-			m.syncFooterPager()
-		}
-		return tea.Batch(cmds...)
+		return m.finishRowMove(currSection, prevRow, nextRow)
 	}
 
 	return nil

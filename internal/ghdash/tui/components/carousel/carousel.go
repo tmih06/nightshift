@@ -237,7 +237,7 @@ func (m Model) View() string {
 // UpdateContent updates the carousel size based on the previously defined
 // items and width.
 func (m *Model) UpdateContent() {
-	m.spans = nil
+	m.spans = m.spans[:0]
 	m.leftSpan = itemSpan{}
 	m.rightSpan = itemSpan{}
 	if len(m.items) == 0 {
@@ -246,7 +246,7 @@ func (m *Model) UpdateContent() {
 	}
 	leftover := m.width
 	itemsContent := ""
-	rawWidths := make(map[int]int, len(m.items))
+	rawWidths := make([]int, len(m.items))
 
 	currDirection := -1
 	left := m.cursor
@@ -317,10 +317,8 @@ func (m *Model) UpdateContent() {
 			itemsContent = lipgloss.JoinHorizontal(lipgloss.Center, ell, itemsContent)
 			shift = loW + ellW - truncate
 			clipLeft = loW + ellW
-			clipRight = loW + lipgloss.Width(itemsContent)
-		} else {
-			clipRight = loW + lipgloss.Width(itemsContent)
 		}
+		clipRight = loW + lipgloss.Width(itemsContent)
 	} else if rawTotalW > leftover {
 		itemsContent = ansi.Truncate(itemsContent, leftover, "")
 		itemsContent = lipgloss.JoinHorizontal(lipgloss.Center, itemsContent,

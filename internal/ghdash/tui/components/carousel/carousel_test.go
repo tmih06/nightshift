@@ -8,6 +8,27 @@ import (
 	"github.com/charmbracelet/x/exp/golden"
 )
 
+func BenchmarkCarouselUpdateContent(b *testing.B) {
+	m := NewModel(
+		WithHeight(1),
+		WithWidth(69),
+		WithOverflowIndicators("←", "→"),
+		WithSeparators(),
+		WithItems([]string{
+			" Mine (0) ",
+			" Review (1) ",
+			" All (560) ",
+			" Scratch (1) ",
+			" Scratch (2) ",
+			" Scratch (3) ",
+		}),
+	)
+	m.SetCursor(3)
+	for b.Loop() {
+		m.UpdateContent()
+	}
+}
+
 func TestOverflow(t *testing.T) {
 	w := 69
 	m := NewModel(

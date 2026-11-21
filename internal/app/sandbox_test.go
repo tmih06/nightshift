@@ -310,3 +310,12 @@ func TestValidateBranchName(t *testing.T) {
 		}
 	}
 }
+
+func BenchmarkIssuePickerTyping(b *testing.B) {
+	t := &testing.T{}
+	m, _ := openIssuePicker(t)
+	k := tea.KeyPressMsg{Code: 'a', Text: "a"}
+	for b.Loop() {
+		_, _ = m.updatePickerBranch(k)
+	}
+}

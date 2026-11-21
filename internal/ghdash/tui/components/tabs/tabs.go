@@ -208,7 +208,8 @@ func (m Model) HitTest(x int) (HitKind, int) {
 	if x < 0 || m.ctx == nil {
 		return HitNone, -1
 	}
-	cw := m.carouselWidth()
+	btnW := lipgloss.Width(m.viewNewSectionButton())
+	cw := m.ctx.ScreenWidth - lipgloss.Width(m.viewLogo()) - btnW
 	if x < cw {
 		kind, id := m.carousel.HitTest(x)
 		switch kind {
@@ -221,7 +222,6 @@ func (m Model) HitTest(x int) (HitKind, int) {
 		}
 		return HitNone, -1
 	}
-	btnW := lipgloss.Width(m.viewNewSectionButton())
 	if x < cw+btnW {
 		return HitNewSection, -1
 	}

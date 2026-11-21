@@ -83,8 +83,14 @@ func (m *Model) applyDividerDrag(x int) {
 	w := min(max(x, sideMin), max(sideMin, m.width-minMainWidth))
 	switch {
 	case m.sideVisible():
+		if w == m.sideColumn() {
+			return
+		}
 		m.sideWidthOverride = w
 	case m.railVisible() && m.railColumn():
+		if w == m.railWidth() {
+			return
+		}
 		m.railWidthOverride = w
 	default:
 		return
@@ -147,11 +153,8 @@ func (m Model) applyMouseClick(x, y int) (Model, tea.Cmd) {
 
 	// Tab strip sits on row 3 of frameHead when the full header fits.
 	if lead >= 4 && y == 3 {
-		if idx, ok := m.tabAt(x); ok {
-			if idx != m.tab {
-				return m, m.goToTab(idx)
-			}
-			return m, nil
+		if idx, ok := m.tabAt(x); ok && idx != m.tab {
+			return m, m.goToTab(idx)
 		}
 		return m, nil
 	}
