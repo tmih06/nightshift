@@ -50,6 +50,9 @@ The demo runs on the kind cluster `kind-agent-sandbox` in the namespace
   [zen-octo](https://github.com/praxis-labs-io/zen-octo) (MIT), vendored the
   same way and repainted in gh-dash's look; see `internal/zenocto/README.md`
   for the commit, what was left out, and the local changes.
+- `internal/repoview` is Nightshift's 3-pane repository workspace for the
+  GitHub tab (repository/scope tree, grouped Branches/PRs/Issues/Actions/Files
+  list, and detail preview pane with active sandbox badges).
 - `docs/` holds research notes. `docs/software-factory.md` traces the term
   "software factory" through its definitions from 1968 to 2026.
   `docs/session-manager.md` describes session behavior.
@@ -66,12 +69,18 @@ The demo runs on the kind cluster `kind-agent-sandbox` in the namespace
   (the embedded shell, or a gh-dash search bar, prompt, or comment box) `tab`
   belongs to that tab instead.
 - The GitHub tab is gh-dash as it ships: pull requests, issues, and
-  notifications, switched with its own view keys or by clicking the footer
-  view switcher. Mouse support matches the Sandboxes tab: clicks select section
-  tabs, table rows (double-clicking a pull request opens it in zen-octo), the
-  search bar, PR preview tabs, and footer controls; the wheel moves through
-  table rows or scrolls the preview sidebar under the pointer; and dragging the
-  sidebar rule resizes the preview in both right and bottom layouts.
+  notifications, plus Nightshift's 3-pane Repo view (`internal/repoview`),
+  switched with its own view keys (`s`) or by clicking the footer view
+  switcher. The Repo view shows a repository/scope tree, a grouped list
+  (Branches, PRs, Issues, Actions, Files), and a detail preview pane with
+  active sandbox badges (`b` jumps to a running sandbox in the Sandboxes tab;
+  `enter` on a PR opens it in zen-octo and returns to the Repo view on `esc`).
+  `go run ./cmd/nightshift -repos` opens straight onto the Repo view. Mouse
+  support matches the Sandboxes tab: clicks select section tabs, table rows
+  (double-clicking a pull request opens it in zen-octo), the search bar, PR
+  preview tabs, and footer controls; the wheel moves through table rows or
+  scrolls the preview sidebar under the pointer; and dragging the sidebar rule
+  resizes the preview in both right and bottom layouts.
 - `enter` (or a double-click) on a pull request opens it in zen-octo's view,
   painted from gh-dash's theme: gh-dash's preview head over Conversation,
   Commits, Checks, and Files tabs, with a details rail. Everything zen-octo
@@ -91,17 +100,20 @@ The demo runs on the kind cluster `kind-agent-sandbox` in the namespace
   or `~/.config/gh-dash/config.yml`), and scopes to the repository it was
   started in, as gh-dash does. A bad config stops nightshift before the TUI
   opens. gh-dash's log is discarded unless `NIGHTSHIFT_DEBUG` names a file.
-- `S` on a pull request or issue row checks it out on its own volume in a new
-  sandbox. On a pull request, a dialog over gh-dash names the volume and lists
-  the pools with their templates; `↑`/`↓` or a number picks the agent, `enter`
-  or a click starts it, and `esc` cancels. On an issue, the same dialog also
-  includes a branch name input (defaulting to `issue-<n>`, `tab` switches
-  between branch and pool, `↑`/`↓` still steps through pools while typing). The
-  volume is a PersistentVolumeClaim named `pr-<owner>-<repo>-<n>` for a pull
-  request or `issue-<owner>-<repo>-<n>` for an issue. The first time, a Job on
+- `S` on a pull request, issue, or repository/branch row checks it out on its
+  own volume in a new sandbox. On a pull request, a dialog over gh-dash or the
+  Repo view names the volume and lists the pools with their templates;
+  `↑`/`↓` or a number picks the agent, `enter` or a click starts it, and `esc`
+  cancels. On an issue or repository/branch, the same dialog also includes a
+  branch name input (defaulting to `issue-<n>` for an issue or the selected
+  branch / `main` for a repository; `tab` switches between branch and pool,
+  `↑`/`↓` still steps through pools while typing). The volume is a
+  PersistentVolumeClaim named `pr-<owner>-<repo>-<n>` for a pull request,
+  `issue-<owner>-<repo>-<n>` for an issue, or `repo-<owner>-<repo>-<branch>`
+  for a repository branch. The first time, a Job on
   the agent's image clones the repository over https into it and checks out
   either the pull request's head ref (named after its head branch, or `pr-<n>`)
-  or the chosen issue branch (tracking `origin/<branch>` if it exists remotely,
+  or the chosen branch (tracking `origin/<branch>` if it exists remotely,
   otherwise creating it from HEAD). Then a Sandbox starts from the pool's
   template with the clone mounted at `~/workspace/<repo>`, and the Sandboxes
   tab opens with its shell focused there. A running pod cannot take a new
@@ -112,10 +124,10 @@ The demo runs on the kind cluster `kind-agent-sandbox` in the namespace
   step's time. The tab bar carries the same in one line while the GitHub tab is
   open. One checkout runs at a time. Nothing owns the volume: `x` on the
   sandbox opens a dialog to keep the volume (the default) or destroy it too,
-  and `S` on the same pull request or issue later mounts a kept volume with its
-  work (switching to the requested branch on an issue), or returns to the
-  sandbox already on it. The image carries no `gh` and no credentials, so the
-  clone only reaches public repositories.
+  and `S` on the same pull request, issue, or repository branch later mounts a
+  kept volume with its work (switching to the requested branch on an issue or
+  repository), or returns to the sandbox already on it. The image carries no
+  `gh` and no credentials, so the clone only reaches public repositories.
 - The Sandboxes tab is laid out like gh-dash and painted from gh-dash's
   theme. Section tabs (All, Warm, Claimed; `h`/`l` or a click) sit over a
   table with gh-dash's header row, two lines per sandbox (node and owner,
@@ -178,6 +190,7 @@ toolchain on demand, and the repo needs no other Go config.
 - Print one frame of the sandbox tab with `go run ./cmd/nightshift -once`.
 - Open on one pull request with
   `go run ./cmd/nightshift -pr owner/repo#123` (or its URL).
+- Open on the GitHub Repo view with `go run ./cmd/nightshift -repos`.
 - Build with `go build -o <path> ./cmd/nightshift` to keep the binary out of
   the repo.
 

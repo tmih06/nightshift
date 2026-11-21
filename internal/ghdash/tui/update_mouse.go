@@ -259,6 +259,8 @@ func (m *Model) applyMouseClick(x, y int) tea.Cmd {
 			return m.switchToView(config.PRsView)
 		case footer.HitIssues:
 			return m.switchToView(config.IssuesView)
+		case footer.HitRepos:
+			return func() tea.Msg { return OpenRepoViewMsg{} }
 		case footer.HitHelp:
 			m.footer.ShowAll = !m.footer.ShowAll
 			m.syncMainContentDimensions()

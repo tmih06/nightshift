@@ -97,7 +97,7 @@ func (m Model) prFound(msg prFoundMsg) (Model, tea.Cmd) {
 		m.pr = &host
 		cmds = append(cmds, host.Opening())
 	}
-	m.prOpen = true
+	m.ghScreen = ghScreenPR
 	cmds = append(cmds, m.updatePR(tea.WindowSizeMsg{Width: m.width, Height: max(0, m.height-barHeight)}))
 	return m, tea.Batch(cmds...)
 }

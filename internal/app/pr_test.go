@@ -92,7 +92,7 @@ func TestEnterOnAPullRequestOpensItInZenOctosView(t *testing.T) {
 	if len(f.found) != 1 || f.found[0] != (zgh.PRRef{Owner: "acme", Name: "rocket", Number: 7}) {
 		t.Fatalf("looked up %v, want acme/rocket#7 once", f.found)
 	}
-	if !m.prOpen {
+	if m.ghScreen != ghScreenPR {
 		t.Fatal("the pull request view did not open")
 	}
 	body := strings.Join(frame(m), "\n")
@@ -114,7 +114,7 @@ func TestEscLeavesThePullRequestForGhDash(t *testing.T) {
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = drain(t, next.(Model), cmd)
 
-	if m.prOpen {
+	if m.ghScreen == ghScreenPR {
 		t.Fatal("esc left the pull request open")
 	}
 	if body := strings.Join(frame(m), "\n"); !strings.Contains(body, "GH-DASH BODY") {
@@ -140,7 +140,7 @@ func TestKeysReachThePullRequestAndTabStillSwitches(t *testing.T) {
 		t.Errorf("tab inside a pull request landed on %d, want the sandboxes", m.active)
 	}
 	m = press(m, "tab")
-	if !m.prOpen || m.active != TabGitHub {
+	if m.ghScreen != ghScreenPR || m.active != TabGitHub {
 		t.Error("coming back did not find the pull request still open")
 	}
 }
@@ -152,7 +152,7 @@ func TestAPullRequestThatCannotBeFoundSaysSoInTheBar(t *testing.T) {
 	next, cmd := m.Update(ghtui.OpenPullRequestMsg{Repo: "acme/rocket", Number: 9})
 	m = drain(t, next.(Model), cmd)
 
-	if m.prOpen {
+	if m.ghScreen == ghScreenPR {
 		t.Fatal("a failed lookup opened a view")
 	}
 	if bar := frame(m)[0]; !strings.Contains(bar, "could not open acme/rocket#9") {

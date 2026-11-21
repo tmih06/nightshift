@@ -1797,6 +1797,9 @@ func (m *Model) switchSelectedView() tea.Cmd {
 			m.ctx.View = config.PRsView
 		case config.PRsView:
 			m.ctx.View = config.IssuesView
+		case config.IssuesView:
+			// nightshift: s from Issues opens the host's Repo view.
+			return func() tea.Msg { return OpenRepoViewMsg{} }
 		default:
 			m.ctx.View = config.NotificationsView
 		}

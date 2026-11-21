@@ -3,7 +3,8 @@
 // gh-dash.
 //
 // go run ./cmd/nightshift opens the TUI; -once prints one sandbox frame;
-// -pr owner/repo#123 (or a pull request URL) opens on that pull request.
+// -pr owner/repo#123 (or a pull request URL) opens on that pull request;
+// -repos opens on the GitHub Repo view.
 package main
 
 import (
@@ -32,17 +33,23 @@ func main() {
 		fmt.Println(app.Once(120, 32))
 		return
 	}
-	var openPR string
-	if len(os.Args) > 2 && os.Args[1] == "-pr" {
+	var (
+		openPR     string
+		startRepos bool
+	)
+	switch {
+	case len(os.Args) > 2 && os.Args[1] == "-pr":
 		openPR = os.Args[2]
+	case len(os.Args) > 1 && os.Args[1] == "-repos":
+		startRepos = true
 	}
-	if err := run(openPR); err != nil {
+	if err := run(openPR, startRepos); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(openPR string) error {
+func run(openPR string, startRepos bool) error {
 	var start *zgh.PRRef
 	if openPR != "" {
 		ref, err := zgh.ParsePRRef(openPR)
@@ -83,8 +90,13 @@ func run(openPR string) error {
 	dash := ghtui.NewModel(location, ghtui.Repositories{GitRepo: gitRepo, GHRepo: &ghRepo})
 
 	root := app.New(theme, app.NewGhDash(&dash), nil)
+	if ghRepo.Owner != "" && ghRepo.Name != "" {
+		root = root.WithCurrentRepo(ghRepo.Owner + "/" + ghRepo.Name)
+	}
 	if start != nil {
 		root = root.StartOn(*start)
+	} else if startRepos {
+		root = root.StartOnRepos()
 	}
 	_, err = tea.NewProgram(root).Run()
 	return err

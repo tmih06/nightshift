@@ -1,5 +1,11 @@
 package tui
 
+import (
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/tmih06/nightshift/internal/ghdash/config"
+)
+
 // OpenPullRequestMsg asks the host to open a pull request in its own view.
 // nightshift sends it from enter on a pull request row and shows the pull
 // request in zen-octo's view; gh-dash itself does nothing with it.
@@ -27,4 +33,22 @@ type SandboxIssueMsg struct {
 	Number int
 	URL    string
 	Title  string
+}
+
+// OpenRepoViewMsg asks the host to open its repository view.
+// nightshift opens its Repo view on it; gh-dash itself does nothing with it.
+type OpenRepoViewMsg struct{}
+
+// SwitchView switches gh-dash directly to view so the host can return from
+// an external view (such as nightshift's Repo view) straight into any
+// gh-dash view.
+func (m *Model) SwitchView(view config.ViewType) tea.Cmd {
+	if m.ctx == nil {
+		return nil
+	}
+	if m.ctx.Config == nil {
+		m.ctx.View = view
+		return nil
+	}
+	return m.switchToView(view)
 }

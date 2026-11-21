@@ -26,6 +26,11 @@ Local changes, kept small so an upstream sync stays a copy and a rewrite:
   `S` (the `sandbox` builtin, rebindable) sends `SandboxPullRequestMsg` on a
   pull request row or `SandboxIssueMsg` on an issue row, and nightshift checks
   it out in a new sandbox.
+- `tui/components/footer/footer.go`, `tui/keys/issueKeys.go`, `tui/ui.go`,
+  `tui/update_mouse.go`, `tui/nightshift.go`: adds a `Repos` view-switcher
+  button (and cycles `s` from Issues into it) that emits `OpenRepoViewMsg` so
+  nightshift opens its Repo view (`internal/repoview`), and exports
+  `Model.SwitchView` so nightshift can return straight into any gh-dash view.
 - `tui/update_mouse.go`, `tui/ui.go`, and hit-test/scroll helpers in
   `tui/components/{carousel,tabs,listviewport,table,section,sidebar,prview,footer}`:
   native mouse support matching the Sandboxes tab — clicking section tabs

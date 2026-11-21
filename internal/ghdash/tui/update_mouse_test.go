@@ -284,6 +284,37 @@ func TestMouseClicksSearchBarAndFooterControls(t *testing.T) {
 	require.True(t, m.footer.ShowAll)
 }
 
+func TestRepoViewBridge(t *testing.T) {
+	m := newMouseTestModel(t, 140, 35, "right")
+
+	// Clicking Repos in the footer returns a cmd producing OpenRepoViewMsg.
+	reposX, reposY := findTextInView(t, m.View().Content, "Repos")
+	require.Equal(t, m.footerY(), reposY)
+	_, cmd := m.Update(tea.MouseClickMsg{X: reposX + 1, Y: reposY, Button: tea.MouseLeft})
+	require.NotNil(t, cmd, "clicking Repos should return a command")
+	_, ok := cmd().(OpenRepoViewMsg)
+	require.True(t, ok, "clicking Repos should emit OpenRepoViewMsg")
+
+	// Pressing s in IssuesView returns a cmd producing OpenRepoViewMsg.
+	m.SwitchView(config.IssuesView)
+	require.Equal(t, config.IssuesView, m.ctx.View)
+	_, cmd = m.Update(tea.KeyPressMsg{Text: "s"})
+	require.NotNil(t, cmd, "pressing s in IssuesView should return a command")
+	_, ok = cmd().(OpenRepoViewMsg)
+	require.True(t, ok, "pressing s in IssuesView should emit OpenRepoViewMsg")
+
+	// Calling SwitchView switches cleanly to NotificationsView.
+	m.SwitchView(config.NotificationsView)
+	require.Equal(t, config.NotificationsView, m.ctx.View)
+
+	// Calling SwitchView before config is loaded updates ctx.View without panicking.
+	uninit := NewModel(config.Location{}, Repositories{})
+	require.NotPanics(t, func() {
+		uninit.SwitchView(config.NotificationsView)
+	})
+	require.Equal(t, config.NotificationsView, uninit.ctx.View)
+}
+
 func (m *Model) HitTestButtonXForTest() int {
 	for x := 0; x < m.ctx.ScreenWidth; x++ {
 		if kind, _ := m.tabs.HitTest(x); kind == tabs.HitNewSection {

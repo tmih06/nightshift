@@ -11,9 +11,11 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/tmih06/nightshift/internal/dashboard"
+	"github.com/tmih06/nightshift/internal/ghdash/config"
 	ghtui "github.com/tmih06/nightshift/internal/ghdash/tui"
 	"github.com/tmih06/nightshift/internal/ghdash/tui/context"
 	ghtheme "github.com/tmih06/nightshift/internal/ghdash/tui/theme"
+	"github.com/tmih06/nightshift/internal/repoview"
 	zgh "github.com/tmih06/nightshift/internal/zenocto/gh"
 	zapp "github.com/tmih06/nightshift/internal/zenocto/tui/app"
 )
@@ -24,6 +26,14 @@ type Tab int
 const (
 	TabSandboxes Tab = iota
 	TabGitHub
+)
+
+type ghScreen int
+
+const (
+	ghScreenDash ghScreen = iota
+	ghScreenRepos
+	ghScreenPR
 )
 
 var tabLabels = [...]string{
@@ -37,6 +47,7 @@ type GitHub interface {
 	Update(tea.Msg) (tea.Model, tea.Cmd)
 	View() tea.View
 	Capturing() bool
+	SwitchView(config.ViewType) tea.Cmd
 }
 
 // Model routes input to the active tab and every other message to both, so a
@@ -52,12 +63,22 @@ type Model struct {
 	gh    GitHub
 	ghErr error
 
+	// ghScreen tracks which view fills the GitHub tab; prReturn remembers
+	// where closing zen-octo returns (gh-dash or the Repo view).
+	ghScreen ghScreen
+	prReturn ghScreen
+
 	// pr is zen-octo's pull request view, made on the first enter on a pull
-	// request and kept; prOpen is whether it covers gh-dash right now.
+	// request and kept.
 	pr          *zapp.Model
-	prOpen      bool
 	prClient    PullRequests
 	newPRClient func() (PullRequests, error)
+
+	// repos is Nightshift's 3-pane repository workspace, made on first open.
+	repos       *repoview.Model
+	currentRepo string
+	newRepos    func() *repoview.Model
+	startRepos  bool
 
 	// notice is a one-line message in the bar: opening, or why it failed.
 	notice    string
@@ -105,6 +126,8 @@ func (m Model) Init() tea.Cmd {
 	if m.start != nil {
 		open := *m.start
 		cmds = append(cmds, func() tea.Msg { return open })
+	} else if m.startRepos {
+		cmds = append(cmds, func() tea.Msg { return ghtui.OpenRepoViewMsg{} })
 	}
 	return tea.Batch(cmds...)
 }
@@ -136,7 +159,52 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.toActive(msg)
 
 	case ghtui.OpenPullRequestMsg:
+		m.prReturn = ghScreenDash
 		return m.openPR(msg)
+
+	case ghtui.OpenRepoViewMsg:
+		return m.openRepos()
+
+	case repoview.SwitchViewMsg:
+		m.ghScreen = ghScreenDash
+		if m.gh != nil {
+			return m, m.gh.SwitchView(msg.View)
+		}
+		return m, nil
+
+	case repoview.OpenPRMsg:
+		m.prReturn = ghScreenRepos
+		return m.openPR(ghtui.OpenPullRequestMsg{
+			Repo:   msg.Repo,
+			Number: msg.Number,
+			URL:    msg.URL,
+		})
+
+	case repoview.SandboxRepoMsg:
+		return m.openRepoPicker(msg.Repo, msg.Branch, msg.URL)
+
+	case repoview.SandboxPRMsg:
+		return m.openPicker(ghtui.SandboxPullRequestMsg{
+			Repo:   msg.Repo,
+			Number: msg.Number,
+			URL:    msg.URL,
+			Branch: msg.Branch,
+		})
+
+	case repoview.SandboxIssueMsg:
+		return m.openIssuePicker(ghtui.SandboxIssueMsg{
+			Repo:   msg.Repo,
+			Number: msg.Number,
+			URL:    msg.URL,
+			Title:  msg.Title,
+		})
+
+	case repoview.FocusSandboxMsg:
+		m.active = TabSandboxes
+		m.sandboxes = m.sandboxes.SetHidden(false)
+		var cmd tea.Cmd
+		m.sandboxes, cmd = m.sandboxes.FocusPod(msg.Pod)
+		return m, cmd
 
 	case ghtui.SandboxPullRequestMsg:
 		return m.openPicker(msg)
@@ -148,7 +216,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.prFound(msg)
 
 	case zapp.ClosedMsg:
-		m.prOpen = false
+		m.ghScreen = m.prReturn
 		return m, nil
 
 	case noticeExpiredMsg:
@@ -188,10 +256,14 @@ func (m Model) capturing() bool {
 	case TabSandboxes:
 		return m.sandboxes.Capturing()
 	case TabGitHub:
-		if m.prOpen {
-			return m.pr.Capturing()
+		switch m.ghScreen {
+		case ghScreenPR:
+			return m.pr != nil && m.pr.Capturing()
+		case ghScreenRepos:
+			return m.repos != nil && m.repos.Capturing()
+		default:
+			return m.gh != nil && m.gh.Capturing()
 		}
-		return m.gh != nil && m.gh.Capturing()
 	}
 	return false
 }
@@ -208,33 +280,43 @@ func (m Model) toActive(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case TabSandboxes:
 		m.sandboxes, cmd = m.sandboxes.Update(msg)
 	case TabGitHub:
-		if m.prOpen {
+		switch m.ghScreen {
+		case ghScreenPR:
 			return m, m.updatePR(msg)
-		}
-		if m.gh == nil {
-			if key, ok := msg.(tea.KeyPressMsg); ok && (key.String() == "q" || key.String() == "ctrl+c") {
-				return m, tea.Quit
+		case ghScreenRepos:
+			return m, m.updateRepos(msg)
+		default:
+			if m.gh == nil {
+				if key, ok := msg.(tea.KeyPressMsg); ok && (key.String() == "q" || key.String() == "ctrl+c") {
+					return m, tea.Quit
+				}
+				return m, nil
 			}
-			return m, nil
+			cmd = m.updateGitHub(msg)
 		}
-		cmd = m.updateGitHub(msg)
 	}
 	return m, cmd
 }
 
 func (m Model) broadcast(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var sandboxCmd, prCmd tea.Cmd
+	var sandboxCmd, ghCmd tea.Cmd
 	m.sandboxes, sandboxCmd = m.sandboxes.Update(msg)
+	if m.repos != nil {
+		m.syncRepoSandboxes()
+	}
 	if dashboard.Owns(msg) {
 		return m, sandboxCmd
 	}
 	if prOwns(msg) {
 		return m, tea.Batch(sandboxCmd, m.updatePR(msg))
 	}
-	if m.gh != nil {
-		prCmd = m.updateGitHub(msg)
+	if repoview.Owns(msg) {
+		return m, tea.Batch(sandboxCmd, m.updateRepos(msg))
 	}
-	return m, tea.Batch(sandboxCmd, prCmd, m.updatePR(msg))
+	if m.gh != nil {
+		ghCmd = m.updateGitHub(msg)
+	}
+	return m, tea.Batch(sandboxCmd, ghCmd, m.updatePR(msg), m.updateRepos(msg))
 }
 
 // updateGitHub keeps gh-dash's pointer model; it updates in place, as it does
@@ -273,16 +355,23 @@ func (m Model) render() string { return m.View().Content }
 
 func (m Model) body() tea.View {
 	h := max(0, m.height-barHeight)
-	switch {
-	case m.active == TabSandboxes:
+	if m.active == TabSandboxes {
 		return tea.NewView(m.sandboxes.View())
-	case m.prOpen:
-		return m.pr.View()
-	case m.gh != nil:
-		return m.gh.View()
-	default:
-		return tea.NewView(unavailable(m.theme, m.ghErr, m.width, h))
 	}
+	switch m.ghScreen {
+	case ghScreenPR:
+		if m.pr != nil {
+			return m.pr.View()
+		}
+	case ghScreenRepos:
+		if m.repos != nil {
+			return m.repos.View()
+		}
+	}
+	if m.gh != nil {
+		return m.gh.View()
+	}
+	return tea.NewView(unavailable(m.theme, m.ghErr, m.width, h))
 }
 
 // unavailable fills the GitHub tab when gh-dash cannot run.

@@ -8,17 +8,19 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/tmih06/nightshift/internal/ghdash/config"
 	ghtheme "github.com/tmih06/nightshift/internal/ghdash/tui/theme"
 )
 
 // fakePRs stands in for gh-dash: it records what reaches it and can claim
 // the keyboard like a focused search bar.
 type fakePRs struct {
-	capturing bool
-	keys      []string
-	mice      []tea.Mouse
-	other     int
-	views     int
+	capturing    bool
+	keys         []string
+	mice         []tea.Mouse
+	other        int
+	views        int
+	switchedView []config.ViewType
 }
 
 func (f *fakePRs) Init() tea.Cmd { return nil }
@@ -44,6 +46,11 @@ func (f *fakePRs) View() tea.View {
 }
 
 func (f *fakePRs) Capturing() bool { return f.capturing }
+
+func (f *fakePRs) SwitchView(view config.ViewType) tea.Cmd {
+	f.switchedView = append(f.switchedView, view)
+	return nil
+}
 
 func sized(m Model, w, h int) Model {
 	next, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
