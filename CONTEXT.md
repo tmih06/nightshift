@@ -66,16 +66,24 @@ The demo runs on the kind cluster `kind-agent-sandbox` in the namespace
   (the embedded shell, or a gh-dash search bar, prompt, or comment box) `tab`
   belongs to that tab instead.
 - The GitHub tab is gh-dash as it ships: pull requests, issues, and
-  notifications, switched with its own view keys.
-- `enter` on a pull request opens it in zen-octo's view, painted from
-  gh-dash's theme: gh-dash's preview head over Conversation, Commits, Checks,
-  and Files tabs, with a details rail. Everything zen-octo does on a pull
-  request works there: threaded replies, reactions, resolving, inline review
-  comments, reviews, labels, reviewers, assignees, base branch, state, job
-  logs and reruns, and merging. `esc` or `q` goes back to gh-dash; `?`
-  lists the keys. `tab` still switches nightshift's tabs, unless a form or
-  box holds the keyboard; the file, commit, or check column steps with
-  `ctrl+n` and `ctrl+p`. Issues stay in gh-dash's preview.
+  notifications, switched with its own view keys or by clicking the footer
+  view switcher. Mouse support matches the Sandboxes tab: clicks select section
+  tabs, table rows (double-clicking a pull request opens it in zen-octo), the
+  search bar, PR preview tabs, and footer controls; the wheel moves through
+  table rows or scrolls the preview sidebar under the pointer; and dragging the
+  sidebar rule resizes the preview in both right and bottom layouts.
+- `enter` (or a double-click) on a pull request opens it in zen-octo's view,
+  painted from gh-dash's theme: gh-dash's preview head over Conversation,
+  Commits, Checks, and Files tabs, with a details rail. Everything zen-octo
+  does on a pull request works there: threaded replies, reactions, resolving,
+  inline review comments, reviews, labels, reviewers, assignees, base branch,
+  state, job logs and reruns, and merging. Mouse clicks switch its tabs, focus
+  panes, select or fold files, commits, and checks, wheel scrolls the pane
+  under the pointer, and dragging the rule resizes the side column or rail.
+  `esc` or `q` goes back to gh-dash; `?` lists the keys. `tab` still switches
+  nightshift's tabs, unless a form or box holds the keyboard; the file, commit,
+  or check column steps with `ctrl+n` and `ctrl+p`. Issues stay in gh-dash's
+  preview.
   `go run ./cmd/nightshift -pr owner/repo#123` opens straight onto one.
   Large diffs are prepared in the background so file and commit navigation
   stay responsive. The view only receives its own messages, as its model is large to copy. It rides on `gh`'s login,

@@ -46,6 +46,10 @@ Local changes:
   Line navigation paints cursor and selection only on visible diff rows.
   The conversation reuses unfocused comment cards and keeps Markdown
   cached across the different widths of cards, threads, and replies.
+- `tui/app/app.go`, `tui/prview/mouse.go`, `tui/prview/prview.go`: native mouse
+  support — clicking Conversation/Commits/Checks/Files tabs, focusing panes,
+  selecting or folding files/commits/checks in the side column, wheel scrolling
+  the pane under the pointer, and dragging the divider between panes.
 
 To sync, copy the packages above from upstream `internal/`, rerun the import
 rewrite and `gofmt -w`, and reapply the changes.

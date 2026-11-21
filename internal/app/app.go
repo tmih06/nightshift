@@ -163,6 +163,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		mouse := msg.Mouse()
 		if mouse.Y < barHeight {
+			if _, rel := msg.(tea.MouseReleaseMsg); rel {
+				return m.toActive(shiftMouse(msg, -barHeight))
+			}
 			if click, ok := msg.(tea.MouseClickMsg); ok && click.Button == tea.MouseLeft {
 				if tab, hit := m.tabAt(mouse.X); hit {
 					return m.switchTo(tab)

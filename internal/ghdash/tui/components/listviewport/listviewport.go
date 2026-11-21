@@ -87,6 +87,48 @@ func (m *Model) GetCurrItem() int {
 	return m.currId
 }
 
+// RowAt maps a viewport-relative row relY to the item index drawn there.
+// Clicks on the separator row between items or beyond the last item miss.
+func (m *Model) RowAt(relY int) (int, bool) {
+	if relY < 0 || relY >= m.viewport.Height() || m.ListItemHeight <= 0 || m.NumCurrentItems <= 0 {
+		return 0, false
+	}
+	line := m.viewport.YOffset() + relY
+	idx := line / m.ListItemHeight
+	if idx < 0 || idx >= m.NumCurrentItems {
+		return 0, false
+	}
+	if m.ctx.Config != nil && m.ctx.Config.Theme.Ui.Table.ShowSeparator &&
+		m.ListItemHeight > 1 && line%m.ListItemHeight == m.ListItemHeight-1 {
+		return 0, false
+	}
+	return idx, true
+}
+
+// SetCurrItem selects item idx and keeps it visible inside the viewport.
+func (m *Model) SetCurrItem(idx int) int {
+	if m.NumCurrentItems <= 0 {
+		m.currId = 0
+		return 0
+	}
+	idx = utils.Max(0, utils.Min(idx, m.NumCurrentItems-1))
+	m.currId = idx
+	if m.ListItemHeight > 0 {
+		perPage := utils.Max(1, m.getNumPrsPerPage())
+		topIdx := m.viewport.YOffset() / m.ListItemHeight
+		if idx < topIdx {
+			topIdx = idx
+			m.viewport.SetYOffset(topIdx * m.ListItemHeight)
+		} else if idx >= topIdx+perPage {
+			topIdx = idx - perPage + 1
+			m.viewport.SetYOffset(topIdx * m.ListItemHeight)
+		}
+		m.topBoundId = topIdx
+		m.bottomBoundId = utils.Min(m.NumCurrentItems-1, topIdx+perPage-1)
+	}
+	return m.currId
+}
+
 func (m *Model) NextItem() int {
 	atBottomOfViewport := m.currId >= m.bottomBoundId
 	if atBottomOfViewport {

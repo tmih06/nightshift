@@ -26,6 +26,14 @@ Local changes, kept small so an upstream sync stays a copy and a rewrite:
   `S` (the `sandbox` builtin, rebindable) sends `SandboxPullRequestMsg` on a
   pull request row or `SandboxIssueMsg` on an issue row, and nightshift checks
   it out in a new sandbox.
+- `tui/update_mouse.go`, `tui/ui.go`, and hit-test/scroll helpers in
+  `tui/components/{carousel,tabs,listviewport,table,section,sidebar,prview,footer}`:
+  native mouse support matching the Sandboxes tab — clicking section tabs
+  (including overflow arrows and the new-section button), table rows
+  (double-clicking a pull request opens it in zen-octo), the search bar, PR
+  preview tabs, and footer view-switcher/help controls; wheel scrolling over
+  the table and sidebar; and dragging the sidebar divider in right or bottom
+  layout.
 
 To sync, copy upstream `internal/` over this directory, rerun the import
 rewrite and `gofmt -w`, and reapply the changes above.

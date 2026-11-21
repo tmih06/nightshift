@@ -875,6 +875,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
+
 	case viewerFetchedMsg:
 		m.store.ViewerApplied(msg.res)
 		m.detail.SetViewer(m.store.Viewer())
@@ -1201,6 +1204,42 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m.delegate(msg)
+}
+
+func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.width < minWidth || m.height < minHeight || m.showHelp || m.screen != screenDetail {
+		return m, nil
+	}
+	notice := m.noticeHeight()
+	bodyH := max(0, m.height-statusBarHeight-notice)
+	y := msg.Mouse().Y - notice
+	if y < 0 || y >= bodyH {
+		if _, rel := msg.(tea.MouseReleaseMsg); !rel {
+			return m, nil
+		}
+	}
+	return m.delegate(shiftMouseY(msg, -notice))
+}
+
+func shiftMouseY(msg tea.MouseMsg, dy int) tea.MouseMsg {
+	if dy == 0 {
+		return msg
+	}
+	switch msg := msg.(type) {
+	case tea.MouseClickMsg:
+		msg.Y += dy
+		return msg
+	case tea.MouseReleaseMsg:
+		msg.Y += dy
+		return msg
+	case tea.MouseWheelMsg:
+		msg.Y += dy
+		return msg
+	case tea.MouseMotionMsg:
+		msg.Y += dy
+		return msg
+	}
+	return msg
 }
 
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {

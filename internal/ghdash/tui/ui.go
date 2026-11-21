@@ -49,24 +49,31 @@ import (
 )
 
 type Model struct {
-	keys             *keys.KeyMap
-	sidebar          sidebar.Model
-	prView           prview.Model
-	issueSidebar     issueview.Model
-	branchSidebar    branchsidebar.Model
-	notificationView notificationview.Model
-	currSectionId    int
-	footer           footer.Model
-	repo             section.Section
-	prs              []section.Section
-	issues           []section.Section
-	notifications    []section.Section
-	tabs             tabs.Model
-	ctx              *context.ProgramContext
-	taskSpinner      spinner.Model
-	tasks            map[string]context.Task
-	positionOverride string // "" means no override, "right" or "bottom"
-	mode             Mode
+	keys                  *keys.KeyMap
+	sidebar               sidebar.Model
+	prView                prview.Model
+	issueSidebar          issueview.Model
+	branchSidebar         branchsidebar.Model
+	notificationView      notificationview.Model
+	currSectionId         int
+	footer                footer.Model
+	repo                  section.Section
+	prs                   []section.Section
+	issues                []section.Section
+	notifications         []section.Section
+	tabs                  tabs.Model
+	ctx                   *context.ProgramContext
+	taskSpinner           spinner.Model
+	tasks                 map[string]context.Task
+	positionOverride      string // "" means no override, "right" or "bottom"
+	previewWidthOverride  int
+	previewHeightOverride int
+	dragging              bool
+	lastClickAt           time.Time
+	lastClickRow          int
+	lastClickSection      int
+	lastClickView         config.ViewType
+	mode                  Mode
 }
 
 type Mode int
@@ -897,10 +904,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, currSection.FetchNextPageSectionRows()...)
 		}
 
-	case tea.MouseClickMsg:
-		if msg.Button != tea.MouseLeft {
-			return m, nil
-		}
+	case tea.MouseMsg:
+		return m.updateMouse(msg)
 
 	case tea.WindowSizeMsg:
 		m.onWindowSizeChanged(msg)
@@ -1248,21 +1253,39 @@ func (m *Model) syncMainContentDimensions() {
 		// Subtract border height: lipgloss Height() sets content height,
 		// and BorderTop adds an extra row outside of that.
 		availableHeight := m.getBaseContentHeight() - m.ctx.Styles.Sidebar.BorderWidth
-		h := m.ctx.Config.Defaults.Preview.Height
-		if h > 0 && h < 1 {
-			h *= float64(availableHeight)
+		if m.previewHeightOverride > 0 {
+			m.ctx.DynamicPreviewHeight = clampPreviewSize(
+				m.previewHeightOverride,
+				minPreviewHeight,
+				availableHeight-minMainTableHeight,
+				availableHeight,
+			)
+		} else {
+			h := m.ctx.Config.Defaults.Preview.Height
+			if h > 0 && h < 1 {
+				h *= float64(availableHeight)
+			}
+			m.ctx.DynamicPreviewHeight = min(int(h), availableHeight)
 		}
-		m.ctx.DynamicPreviewHeight = min(int(h), availableHeight)
 		m.ctx.MainContentHeight = availableHeight - m.ctx.DynamicPreviewHeight
 		m.ctx.DynamicPreviewWidth = m.ctx.ScreenWidth
 	} else {
 		m.ctx.MainContentHeight = m.getBaseContentHeight()
 
-		w := m.ctx.Config.Defaults.Preview.Width
-		if w > 0 && w < 1 {
-			w *= float64(m.ctx.ScreenWidth)
+		if m.previewWidthOverride > 0 {
+			m.ctx.DynamicPreviewWidth = clampPreviewSize(
+				m.previewWidthOverride,
+				minPreviewWidth,
+				m.ctx.ScreenWidth-minMainTableWidth,
+				m.ctx.ScreenWidth,
+			)
+		} else {
+			w := m.ctx.Config.Defaults.Preview.Width
+			if w > 0 && w < 1 {
+				w *= float64(m.ctx.ScreenWidth)
+			}
+			m.ctx.DynamicPreviewWidth = min(int(w), m.ctx.ScreenWidth)
 		}
-		m.ctx.DynamicPreviewWidth = min(int(w), m.ctx.ScreenWidth)
 		m.ctx.MainContentWidth = m.ctx.ScreenWidth - m.ctx.DynamicPreviewWidth
 		m.ctx.DynamicPreviewHeight = 0
 	}

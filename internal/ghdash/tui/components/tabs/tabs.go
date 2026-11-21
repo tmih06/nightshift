@@ -191,6 +191,43 @@ func (m *Model) viewLogo() string {
 		))
 }
 
+// HitKind describes what part of the section tabs row a column landed on.
+type HitKind int
+
+const (
+	HitNone HitKind = iota
+	HitSection
+	HitPrevOverflow
+	HitNextOverflow
+	HitNewSection
+)
+
+// HitTest maps a column on the tabs row to a section tab, overflow arrow, or
+// the new-section button.
+func (m Model) HitTest(x int) (HitKind, int) {
+	if x < 0 || m.ctx == nil {
+		return HitNone, -1
+	}
+	cw := m.carouselWidth()
+	if x < cw {
+		kind, id := m.carousel.HitTest(x)
+		switch kind {
+		case carousel.HitItem:
+			return HitSection, id
+		case carousel.HitLeftOverflow:
+			return HitPrevOverflow, -1
+		case carousel.HitRightOverflow:
+			return HitNextOverflow, -1
+		}
+		return HitNone, -1
+	}
+	btnW := lipgloss.Width(m.viewNewSectionButton())
+	if x < cw+btnW {
+		return HitNewSection, -1
+	}
+	return HitNone, -1
+}
+
 func (m *Model) SetAllLoading() []tea.Cmd {
 	cmds := make([]tea.Cmd, 0)
 	for i := range m.sectionTabs {

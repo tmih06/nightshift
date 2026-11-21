@@ -173,6 +173,8 @@ type Table interface {
 	NumRows() int
 	GetCurrRow() data.RowData
 	CurrRow() int
+	SetCurrRow(idx int) int
+	RowAt(relY int) (int, bool)
 	NextRow() int
 	PrevRow() int
 	FirstItem() int
@@ -328,6 +330,14 @@ func (m *BaseModel) GetType() string {
 
 func (m *BaseModel) CurrRow() int {
 	return m.Table.GetCurrItem()
+}
+
+func (m *BaseModel) SetCurrRow(idx int) int {
+	return m.Table.SetCurrItem(idx)
+}
+
+func (m *BaseModel) RowAt(relY int) (int, bool) {
+	return m.Table.RowAt(relY)
 }
 
 func (m *BaseModel) NextRow() int {

@@ -124,6 +124,19 @@ func (m *Model) GetCurrItem() int {
 	return m.rowsViewport.GetCurrItem()
 }
 
+func (m *Model) RowAt(relY int) (int, bool) {
+	if m.isLoading || len(m.Rows) == 0 {
+		return 0, false
+	}
+	return m.rowsViewport.RowAt(relY)
+}
+
+func (m *Model) SetCurrItem(idx int) int {
+	currItem := m.rowsViewport.SetCurrItem(idx)
+	m.SyncViewPortContent()
+	return currItem
+}
+
 func (m *Model) PrevItem() int {
 	currItem := m.rowsViewport.PrevItem()
 	m.SyncViewPortContent()

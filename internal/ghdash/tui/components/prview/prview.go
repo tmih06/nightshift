@@ -757,6 +757,34 @@ func (m *Model) GoToActivityTab() {
 	m.carousel.SetCursor(1) // Activity is the second tab (index 1)
 }
 
+// Click handles a left click at sidebar-content coordinates (x, y).
+// It switches PR preview tabs when the click lands on the tab strip.
+func (m *Model) Click(x, y int) bool {
+	if !m.hasData() || m.IsTextInputBoxFocused() {
+		return false
+	}
+	tabY := lipgloss.Height(m.renderFullNameAndNumber()) +
+		lipgloss.Height(m.renderTitle()) + 1 +
+		lipgloss.Height(m.renderBranches()) + 1 +
+		lipgloss.Height(m.renderAuthor()) + 1
+	if y != tabY {
+		return false
+	}
+	kind, idx := m.carousel.HitTest(x)
+	switch kind {
+	case carousel.HitItem:
+		m.carousel.SetCursor(idx)
+		return true
+	case carousel.HitLeftOverflow:
+		m.carousel.MoveLeft()
+		return true
+	case carousel.HitRightOverflow:
+		m.carousel.MoveRight()
+		return true
+	}
+	return false
+}
+
 func (m Model) SelectedTab() string {
 	return m.carousel.SelectedItem()
 }

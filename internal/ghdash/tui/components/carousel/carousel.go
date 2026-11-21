@@ -27,9 +27,28 @@ type Model struct {
 	separator              string
 	styles                 Styles
 
-	content string
-	start   int
-	end     int
+	content   string
+	start     int
+	end       int
+	spans     []itemSpan
+	leftSpan  itemSpan
+	rightSpan itemSpan
+}
+
+// HitKind describes what part of a carousel a column landed on.
+type HitKind int
+
+const (
+	HitNone HitKind = iota
+	HitItem
+	HitLeftOverflow
+	HitRightOverflow
+)
+
+type itemSpan struct {
+	id   int
+	from int
+	to   int
 }
 
 // KeyMap defines keybindings. It satisfies to the help.KeyMap interface, which
@@ -218,12 +237,16 @@ func (m Model) View() string {
 // UpdateContent updates the carousel size based on the previously defined
 // items and width.
 func (m *Model) UpdateContent() {
+	m.spans = nil
+	m.leftSpan = itemSpan{}
+	m.rightSpan = itemSpan{}
 	if len(m.items) == 0 {
 		m.content = lipgloss.NewStyle().Height(m.height).Render("")
 		return
 	}
 	leftover := m.width
 	itemsContent := ""
+	rawWidths := make(map[int]int, len(m.items))
 
 	currDirection := -1
 	left := m.cursor
@@ -233,13 +256,17 @@ func (m *Model) UpdateContent() {
 	for len(m.items) > 0 && leftover > 0 && (left >= 0 || right < len(m.items)) {
 		if currDirection < 0 && left >= 0 {
 			lItem := m.renderItem(left, leftover)
-			leftover -= lipgloss.Width(lItem)
+			w := lipgloss.Width(lItem)
+			rawWidths[left] = w
+			leftover -= w
 			itemsContent = lipgloss.JoinHorizontal(lipgloss.Top, lItem, itemsContent)
 			lastLeft = left
 			left--
 		} else if currDirection > 0 && right < len(m.items) {
 			rItem := m.renderItem(right, leftover)
-			leftover -= lipgloss.Width(rItem)
+			w := lipgloss.Width(rItem)
+			rawWidths[right] = w
+			leftover -= w
 			itemsContent = lipgloss.JoinHorizontal(lipgloss.Top, itemsContent, rItem)
 			lastRight = right
 			right++
@@ -271,21 +298,70 @@ func (m *Model) UpdateContent() {
 		leftover -= lipgloss.Width(roIndicator)
 	}
 
+	loW := lipgloss.Width(loIndicator)
+	if loW > 0 {
+		m.leftSpan = itemSpan{from: 0, to: loW}
+	}
+
+	rawTotalW := lipgloss.Width(itemsContent)
+	shift := loW
+	clipLeft := loW
+	clipRight := loW + rawTotalW
+
 	if loIndicator != "" {
-		truncate := lipgloss.Width(itemsContent) - leftover + 1
+		truncate := rawTotalW - leftover + 1
 		itemsContent = ansi.TruncateLeft(itemsContent, truncate, "")
 		if truncate > 0 {
-			itemsContent = lipgloss.JoinHorizontal(lipgloss.Center,
-				m.styles.Item.Inline(true).Render(constants.Ellipsis), itemsContent)
+			ell := m.styles.Item.Inline(true).Render(constants.Ellipsis)
+			ellW := lipgloss.Width(ell)
+			itemsContent = lipgloss.JoinHorizontal(lipgloss.Center, ell, itemsContent)
+			shift = loW + ellW - truncate
+			clipLeft = loW + ellW
+			clipRight = loW + lipgloss.Width(itemsContent)
+		} else {
+			clipRight = loW + lipgloss.Width(itemsContent)
 		}
-	} else if w := lipgloss.Width(itemsContent); w > leftover {
+	} else if rawTotalW > leftover {
 		itemsContent = ansi.Truncate(itemsContent, leftover, "")
 		itemsContent = lipgloss.JoinHorizontal(lipgloss.Center, itemsContent,
 			m.styles.Item.Inline(true).Render(constants.Ellipsis))
+		clipRight = loW + leftover
+	}
+
+	pos := 0
+	for i := lastLeft; i <= lastRight; i++ {
+		w := rawWidths[i]
+		from := max(pos+shift, clipLeft)
+		to := min(pos+w+shift, clipRight)
+		if to > from {
+			m.spans = append(m.spans, itemSpan{id: i, from: from, to: to})
+		}
+		pos += w
+	}
+
+	if roW := lipgloss.Width(roIndicator); roW > 0 {
+		roStart := loW + lipgloss.Width(itemsContent)
+		m.rightSpan = itemSpan{from: roStart, to: roStart + roW}
 	}
 
 	m.content = lipgloss.NewStyle().Height(m.height).Render(
 		lipgloss.JoinHorizontal(lipgloss.Center, loIndicator, itemsContent, roIndicator))
+}
+
+// HitTest maps a carousel-relative column x to the item or overflow arrow drawn there.
+func (m Model) HitTest(x int) (HitKind, int) {
+	if m.leftSpan.to > m.leftSpan.from && x >= m.leftSpan.from && x < m.leftSpan.to {
+		return HitLeftOverflow, -1
+	}
+	if m.rightSpan.to > m.rightSpan.from && x >= m.rightSpan.from && x < m.rightSpan.to {
+		return HitRightOverflow, -1
+	}
+	for _, s := range m.spans {
+		if x >= s.from && x < s.to {
+			return HitItem, s.id
+		}
+	}
+	return HitNone, -1
 }
 
 // SelectedItem returns the selected item.

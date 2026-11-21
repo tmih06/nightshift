@@ -194,3 +194,49 @@ func (m *Model) SetLeftSection(leftSection string) {
 func (m *Model) SetRightSection(rightSection string) {
 	*m.rightSection = rightSection
 }
+
+// HitKind describes which control on the footer bar a column landed on.
+type HitKind int
+
+const (
+	HitNone HitKind = iota
+	HitNotifications
+	HitPRs
+	HitIssues
+	HitHelp
+)
+
+// HitTest maps a column x on the footer bar to its view-switcher button or help button.
+func (m Model) HitTest(x int) HitKind {
+	if m.ctx == nil || m.ShowConfirmQuit || x < 0 || x >= m.ctx.ScreenWidth {
+		return HitNone
+	}
+	helpIndicator := lipgloss.NewStyle().
+		Background(m.ctx.Theme.FaintText).
+		Foreground(m.ctx.Theme.SelectedBackground).
+		Padding(0, 1).
+		Render("? help")
+	if x >= m.ctx.ScreenWidth-lipgloss.Width(helpIndicator) {
+		return HitHelp
+	}
+	pos := 0
+	notif := m.ctx.Styles.ViewSwitcher.ViewsSeparator.PaddingLeft(1).
+		Render(m.renderViewButton(config.NotificationsView))
+	notifW := lipgloss.Width(notif)
+	if x < pos+notifW {
+		return HitNotifications
+	}
+	pos += notifW
+	sepW := lipgloss.Width(m.ctx.Styles.ViewSwitcher.ViewsSeparator.Render(viewSeparator))
+	pos += sepW
+	prsW := lipgloss.Width(m.renderViewButton(config.PRsView))
+	if x >= pos && x < pos+prsW {
+		return HitPRs
+	}
+	pos += prsW + sepW
+	issuesW := lipgloss.Width(m.renderViewButton(config.IssuesView))
+	if x >= pos && x < pos+issuesW {
+		return HitIssues
+	}
+	return HitNone
+}

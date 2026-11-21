@@ -235,6 +235,10 @@ type Model struct {
 	reviewing  reviewing
 	reviewKept reviewDraft
 
+	sideWidthOverride int
+	railWidthOverride int
+	dragging          bool
+
 	width  int
 	height int
 }
@@ -362,6 +366,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
 
 	case CommitSettleMsg:
 		return m, m.settleCommit(msg)
@@ -1035,10 +1042,12 @@ func (m *Model) layout() {
 		m.sideView.SetHeight(m.sideHeight())
 	}
 	if m.railVisible() {
+		railW := columnWidth
 		if m.railColumn() {
-			mainWidth -= columnWidth
+			railW = m.railWidth()
+			mainWidth -= railW
 		}
-		m.rail = m.rail.Size(columnWidth, paneHeight)
+		m.rail = m.rail.Size(railW, paneHeight)
 		m.railView.SetWidth(m.rail.InnerWidth())
 		m.railView.SetHeight(m.rail.InnerHeight())
 	}
@@ -1096,7 +1105,17 @@ func (m Model) sideVisible() bool {
 }
 
 func (m Model) sideColumn() int {
+	if m.sideWidthOverride > 0 {
+		return min(max(m.sideWidthOverride, sideMin), max(sideMin, m.width-minMainWidth))
+	}
 	return min(columnWidth, max(sideMin, m.width-diffMeasure))
+}
+
+func (m Model) railWidth() int {
+	if m.railWidthOverride > 0 {
+		return min(max(m.railWidthOverride, sideMin), max(sideMin, m.width-minMainWidth))
+	}
+	return columnWidth
 }
 
 func (m Model) sideHeight() int {

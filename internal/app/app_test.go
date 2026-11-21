@@ -152,6 +152,13 @@ func TestThePullRequestTabIsGhDash(t *testing.T) {
 	if len(f.mice) != 1 || f.mice[0].Y != 9-barHeight || f.mice[0].X != 7 {
 		t.Errorf("gh-dash got mice %v, want one at (7, %d)", f.mice, 9-barHeight)
 	}
+
+	// Releasing a drag over the tab bar still notifies the active tab.
+	next, _ = m.Update(tea.MouseReleaseMsg{X: 7, Y: 0, Button: tea.MouseLeft})
+	m = next.(Model)
+	if len(f.mice) != 2 || f.mice[1].Y != -barHeight {
+		t.Errorf("gh-dash did not receive MouseReleaseMsg over tab bar: %v", f.mice)
+	}
 }
 
 func TestTabStaysInsideAGhDashTextBox(t *testing.T) {
