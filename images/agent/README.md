@@ -42,7 +42,7 @@ kind, and change the corresponding template to use its local tag and
 for the node's architecture.
 
 The workspace, agent configuration, and Herdr state are ephemeral by default.
-The demo gives OpenCode a 2Gi memory limit and the other agents 256Mi; real
+The demo gives each agent a 2Gi memory limit; real
 workloads may need more.
 
 ## Published images and release watcher

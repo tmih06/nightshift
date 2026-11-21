@@ -24,8 +24,8 @@ The demo runs on the kind cluster `kind-agent-sandbox` in the namespace
 
 - `demo/` holds the Kubernetes side: `warmpool.yaml` creates the namespace
   `sandbox-demo` and four template/pool pairs, each keeping one Pi, Codex,
-  Claude Code, or OpenCode sandbox warm. Each pod is capped at 500m CPU;
-  OpenCode has a 2Gi memory limit and the others have 256Mi. `claim.yaml`
+  Claude Code, or OpenCode sandbox warm. Each pod is capped at 1000m CPU
+  and 2Gi memory. `claim.yaml`
   claims a Pi sandbox by default.
   `sbx.sh` wraps that loop in one command and is installed as `sbx` through
   a symlink in `~/.local/bin`.

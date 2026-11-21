@@ -34,8 +34,8 @@ flowchart LR
 | OpenCode | `opencode-pool` | `opencode-template` | `ghcr.io/tmih06/nightshift-opencode:latest` |
 
 Every pod requests 100m CPU and is
-limited to 500m. OpenCode requests 512Mi memory and is limited to 2Gi; the
-others request 128Mi and are limited to 256Mi. Images use `Always` with mutable
+limited to 1000m CPU and 2Gi memory; OpenCode requests 512Mi memory and the
+others request 128Mi. Images use `Always` with mutable
 `latest` tags; existing pods do not update just because a tag changes. See
 `images/agent/README.md` for image publishing, registry access, reproducibility,
 and the limits of this budget.

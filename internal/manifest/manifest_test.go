@@ -72,10 +72,10 @@ func TestWarmPools(t *testing.T) {
 		pool, template, image string
 		requests, limits      quantities
 	}{
-		{"pi-pool", "pi-template", "pi", quantities{"100m", "128Mi"}, quantities{"500m", "256Mi"}},
-		{"codex-pool", "codex-template", "codex", quantities{"100m", "128Mi"}, quantities{"500m", "256Mi"}},
-		{"claude-code-pool", "claude-code-template", "claude-code", quantities{"100m", "128Mi"}, quantities{"500m", "256Mi"}},
-		{"opencode-pool", "opencode-template", "opencode", quantities{"100m", "512Mi"}, quantities{"500m", "2Gi"}},
+		{"pi-pool", "pi-template", "pi", quantities{"100m", "128Mi"}, quantities{"1000m", "2Gi"}},
+		{"codex-pool", "codex-template", "codex", quantities{"100m", "128Mi"}, quantities{"1000m", "2Gi"}},
+		{"claude-code-pool", "claude-code-template", "claude-code", quantities{"100m", "128Mi"}, quantities{"1000m", "2Gi"}},
+		{"opencode-pool", "opencode-template", "opencode", quantities{"100m", "512Mi"}, quantities{"1000m", "2Gi"}},
 	}
 	if len(pools) != len(agents) || len(templates) != len(agents) {
 		t.Fatalf("got %d pools and %d templates, want %d each", len(pools), len(templates), len(agents))
