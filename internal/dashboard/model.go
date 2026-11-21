@@ -129,6 +129,54 @@ func (m model) Capturing() bool {
 	return m.destroy != nil || (m.focus == focusShell && m.canFocusShell())
 }
 
+// Boxes returns a shallow copy of the current sandbox fleet for read-only
+// inspection.
+func (m model) Boxes() []cluster.Sandbox {
+	if len(m.boxes) == 0 {
+		return nil
+	}
+	out := make([]cluster.Sandbox, len(m.boxes))
+	copy(out, m.boxes)
+	return out
+}
+
+// FocusPod selects pod (switching to All if the current section hides it) and
+// attaches to its shell when it is claimed and running. It is a no-op if pod
+// is not in the fleet.
+func (m model) FocusPod(pod string) (Model, tea.Cmd) {
+	var target *cluster.Sandbox
+	for i := range m.boxes {
+		if m.boxes[i].Name == pod {
+			target = &m.boxes[i]
+			break
+		}
+	}
+	if target == nil {
+		return m, nil
+	}
+	visible := false
+	for _, idx := range m.navigationIndices() {
+		if m.boxes[idx].Name == target.Name {
+			visible = true
+			break
+		}
+	}
+	if !visible {
+		m.section = sectionAll
+	}
+	m.confirmDestroy = false
+	m.selectPod(target.Name)
+	if target.Claimed() && target.Phase == "Running" {
+		if m.hasSession(target.Name) {
+			m.focus = focusShell
+			m.prefix = false
+			return m, m.watchShell()
+		}
+		return m, attachCmd(target.Name)
+	}
+	return m, nil
+}
+
 func (m model) Init() tea.Cmd {
 	return tea.Batch(fetchCmd(), tickCmd(), shellTickCmd())
 }

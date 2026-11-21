@@ -14,16 +14,16 @@ import (
 	ghtui "github.com/tmih06/nightshift/internal/ghdash/tui"
 )
 
-// picker asks which pool's template a pull request's or issue's sandbox starts
-// from (the choice of agent), and for an issue also asks for the branch name
-// to check out. The sandbox starts cold on its volume, as a running pod cannot
-// take a new volume.
+// picker asks which pool's template a pull request's, issue's, or repository's
+// sandbox starts from (the choice of agent), and for an issue or repository
+// also asks for the branch name to check out. The sandbox starts cold on its
+// volume, as a running pod cannot take a new volume.
 type picker struct {
 	repo   string
 	number int
 	url    string
-	branch string // PR head branch; issues edit branchInput instead
-	issue  bool
+	branch string // PR head branch; issues and repos edit branchInput instead
+	kind   dashboard.CheckoutKind
 	pools  []cluster.Pool
 	cursor int
 
@@ -32,11 +32,20 @@ type picker struct {
 	branchErr   string
 }
 
-// preparePicker validates the target repository/number and returns available
-// warm pools, or an error notice string.
-func (m Model) preparePicker(repo string, number int, url string) ([]cluster.Pool, string) {
-	if _, name, ok := strings.Cut(repo, "/"); !ok || name == "" || number <= 0 {
-		return nil, fmt.Sprintf("cannot check out %q", url)
+func (p picker) hasBranchInput() bool {
+	return p.kind == dashboard.CheckoutIssue || p.kind == dashboard.CheckoutRepo
+}
+
+// prepareRepoPools validates owner/name and returns available warm pools, or
+// an error notice string.
+func (m Model) prepareRepoPools(repo, url string) ([]cluster.Pool, string) {
+	owner, name, ok := strings.Cut(repo, "/")
+	if !ok || owner == "" || name == "" {
+		target := url
+		if target == "" {
+			target = repo
+		}
+		return nil, fmt.Sprintf("cannot check out %q", target)
 	}
 	pools := m.sandboxes.WarmPools()
 	if len(pools) == 0 {
@@ -45,30 +54,16 @@ func (m Model) preparePicker(repo string, number int, url string) ([]cluster.Poo
 	return pools, ""
 }
 
-// openPicker answers S on a pull request with the pools the fleet shows.
-func (m Model) openPicker(msg ghtui.SandboxPullRequestMsg) (Model, tea.Cmd) {
-	pools, errMsg := m.preparePicker(msg.Repo, msg.Number, msg.URL)
-	if errMsg != "" {
-		return m.noticeErr(errMsg)
+// preparePicker validates the target repository/number and returns available
+// warm pools, or an error notice string.
+func (m Model) preparePicker(repo string, number int, url string) ([]cluster.Pool, string) {
+	if number <= 0 {
+		return nil, fmt.Sprintf("cannot check out %q", url)
 	}
-	m.picker = &picker{
-		repo:   msg.Repo,
-		number: msg.Number,
-		url:    msg.URL,
-		branch: msg.Branch,
-		pools:  pools,
-	}
-	return m, nil
+	return m.prepareRepoPools(repo, url)
 }
 
-// openIssuePicker answers S on an issue with a branch name input and the pools
-// the fleet shows.
-func (m Model) openIssuePicker(msg ghtui.SandboxIssueMsg) (Model, tea.Cmd) {
-	pools, errMsg := m.preparePicker(msg.Repo, msg.Number, msg.URL)
-	if errMsg != "" {
-		return m.noticeErr(errMsg)
-	}
-	defaultBranch := fmt.Sprintf("issue-%d", msg.Number)
+func (m Model) newBranchInput(defaultBranch string) textinput.Model {
 	ti := textinput.New()
 	ti.SetVirtualCursor(true)
 	ti.Prompt = "▸ "
@@ -95,13 +90,63 @@ func (m Model) openIssuePicker(msg ghtui.SandboxIssueMsg) (Model, tea.Cmd) {
 	ti.SetValue(defaultBranch)
 	ti.CursorEnd()
 	ti.Focus()
+	return ti
+}
+
+// openPicker answers S on a pull request with the pools the fleet shows.
+func (m Model) openPicker(msg ghtui.SandboxPullRequestMsg) (Model, tea.Cmd) {
+	pools, errMsg := m.preparePicker(msg.Repo, msg.Number, msg.URL)
+	if errMsg != "" {
+		return m.noticeErr(errMsg)
+	}
+	m.picker = &picker{
+		repo:   msg.Repo,
+		number: msg.Number,
+		url:    msg.URL,
+		branch: msg.Branch,
+		kind:   dashboard.CheckoutPR,
+		pools:  pools,
+	}
+	return m, nil
+}
+
+// openIssuePicker answers S on an issue with a branch name input and the pools
+// the fleet shows.
+func (m Model) openIssuePicker(msg ghtui.SandboxIssueMsg) (Model, tea.Cmd) {
+	pools, errMsg := m.preparePicker(msg.Repo, msg.Number, msg.URL)
+	if errMsg != "" {
+		return m.noticeErr(errMsg)
+	}
+	defaultBranch := fmt.Sprintf("issue-%d", msg.Number)
 	m.picker = &picker{
 		repo:        msg.Repo,
 		number:      msg.Number,
 		url:         msg.URL,
-		issue:       true,
+		kind:        dashboard.CheckoutIssue,
 		pools:       pools,
-		branchInput: ti,
+		branchInput: m.newBranchInput(defaultBranch),
+		focusBranch: true,
+	}
+	return m, nil
+}
+
+// openRepoPicker answers S on a repository or branch with a branch name input
+// and the pools the fleet shows.
+func (m Model) openRepoPicker(repo, branch, url string) (Model, tea.Cmd) {
+	pools, errMsg := m.prepareRepoPools(repo, url)
+	if errMsg != "" {
+		return m.noticeErr(errMsg)
+	}
+	defaultBranch := strings.TrimSpace(branch)
+	if defaultBranch == "" {
+		defaultBranch = "main"
+	}
+	m.picker = &picker{
+		repo:        repo,
+		url:         url,
+		kind:        dashboard.CheckoutRepo,
+		pools:       pools,
+		branchInput: m.newBranchInput(defaultBranch),
 		focusBranch: true,
 	}
 	return m, nil
@@ -116,7 +161,7 @@ func stepCursor(cursor, delta, n int) int {
 
 func (m Model) updatePicker(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	p := *m.picker
-	if p.issue && p.focusBranch {
+	if p.hasBranchInput() && p.focusBranch {
 		return m.updatePickerBranch(msg)
 	}
 	switch s := msg.String(); s {
@@ -124,7 +169,7 @@ func (m Model) updatePicker(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.picker = nil
 		return m, nil
 	case "tab", "shift+tab":
-		if p.issue {
+		if p.hasBranchInput() {
 			p.focusBranch = true
 			p.branchInput.Focus()
 			m.picker = &p
@@ -181,7 +226,7 @@ func (m Model) updatePickerBranch(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 func (m Model) updatePickerPaste(msg tea.PasteMsg) (Model, tea.Cmd) {
 	p := *m.picker
-	if p.issue && p.focusBranch {
+	if p.hasBranchInput() && p.focusBranch {
 		p.branchInput.SetWidth(m.pickerInputWidth(&p))
 		p.branchInput, _ = p.branchInput.Update(msg)
 		p.branchErr = ""
@@ -195,7 +240,7 @@ func (m Model) updatePickerPaste(msg tea.PasteMsg) (Model, tea.Cmd) {
 func (m Model) pickPool(i int) (Model, tea.Cmd) {
 	p := *m.picker
 	branch := p.branch
-	if p.issue {
+	if p.hasBranchInput() {
 		branch = strings.TrimSpace(p.branchInput.Value())
 		if reason := validateBranchName(branch); reason != "" {
 			p.cursor = i
@@ -211,7 +256,7 @@ func (m Model) pickPool(i int) (Model, tea.Cmd) {
 	m.sandboxes = m.sandboxes.SetHidden(false)
 	var cmd tea.Cmd
 	m.sandboxes, cmd = m.sandboxes.CheckOut(p.pools[i].Name,
-		dashboard.Checkout{Repo: p.repo, Number: p.number, Branch: branch, Issue: p.issue})
+		dashboard.Checkout{Repo: p.repo, Number: p.number, Branch: branch, Kind: p.kind})
 	return m, cmd
 }
 
@@ -261,7 +306,7 @@ func (m Model) pickerMouse(msg tea.MouseMsg) (Model, tea.Cmd) {
 			m.picker = nil
 			return m, nil
 		}
-		if placed.OnField(mouse.X, y) {
+		if m.picker.hasBranchInput() && placed.OnField(mouse.X, y) {
 			p := *m.picker
 			p.focusBranch = true
 			p.branchInput.Focus()
@@ -285,14 +330,32 @@ func poolColumnWidths(pools []cluster.Pool) (nameW, tmplW int) {
 	return nameW, tmplW
 }
 
-func pickerTitle(repo string, number int) string {
-	return fmt.Sprintf("Check out %s#%d in a sandbox", repo, number)
+func (p *picker) title() string {
+	if p.kind == dashboard.CheckoutRepo {
+		return fmt.Sprintf("Check out %s in a sandbox", p.repo)
+	}
+	return fmt.Sprintf("Check out %s#%d in a sandbox", p.repo, p.number)
 }
 
-func (m Model) pickerInputWidthFor(p *picker, nameW, tmplW int, title string) int {
+func (p *picker) volumeLine() string {
+	switch p.kind {
+	case dashboard.CheckoutRepo:
+		curBranch := strings.TrimSpace(p.branchInput.Value())
+		return "volume " + cluster.RepoVolumeName(p.repo, curBranch)
+	case dashboard.CheckoutIssue:
+		return "volume " + cluster.IssueVolumeName(p.repo, p.number)
+	default:
+		branch := p.branch
+		if branch == "" {
+			branch = fmt.Sprintf("pr-%d", p.number)
+		}
+		return "branch " + branch + " · volume " + cluster.VolumeName(p.repo, p.number)
+	}
+}
+
+func (m Model) pickerInputWidthFor(p *picker, nameW, tmplW int, title, vol string) int {
 	digits := len(fmt.Sprintf("%d", len(p.pools)))
 	optW := 1 + digits + 2 + nameW + 2 + tmplW + 1
-	vol := "volume " + cluster.IssueVolumeName(p.repo, p.number)
 	inner := max(44, lipgloss.Width(title), lipgloss.Width(vol), lipgloss.Width(issuePickerHint), optW)
 	inner = min(inner, max(1, m.width-4))
 	return max(1, inner-lipgloss.Width(p.branchInput.Prompt)-1)
@@ -300,7 +363,7 @@ func (m Model) pickerInputWidthFor(p *picker, nameW, tmplW int, title string) in
 
 func (m Model) pickerInputWidth(p *picker) int {
 	nameW, tmplW := poolColumnWidths(p.pools)
-	return m.pickerInputWidthFor(p, nameW, tmplW, pickerTitle(p.repo, p.number))
+	return m.pickerInputWidthFor(p, nameW, tmplW, p.title(), p.volumeLine())
 }
 
 func (m Model) pickerMenu() dialog.Menu {
@@ -310,13 +373,14 @@ func (m Model) pickerMenu() dialog.Menu {
 	for i, pool := range p.pools {
 		opts[i] = dialog.Option{Text: fmt.Sprintf(" %d  %-*s  %-*s ", i+1, nameW, pool.Name, tmplW, pool.Template)}
 	}
-	title := pickerTitle(p.repo, p.number)
-	if p.issue {
+	title := p.title()
+	vol := p.volumeLine()
+	if p.hasBranchInput() {
 		ti := p.branchInput
-		ti.SetWidth(m.pickerInputWidthFor(p, nameW, tmplW, title))
+		ti.SetWidth(m.pickerInputWidthFor(p, nameW, tmplW, title, vol))
 		return dialog.Menu{
 			Title:        title,
-			Lines:        []string{"volume " + cluster.IssueVolumeName(p.repo, p.number)},
+			Lines:        []string{vol},
 			Field:        &dialog.Field{Label: "Branch", View: ti.View(), Focused: p.focusBranch, Err: p.branchErr},
 			OptionsLabel: "Pool",
 			Options:      opts,
@@ -324,13 +388,9 @@ func (m Model) pickerMenu() dialog.Menu {
 			Hint:         issuePickerHint,
 		}
 	}
-	branch := p.branch
-	if branch == "" {
-		branch = fmt.Sprintf("pr-%d", p.number)
-	}
 	return dialog.Menu{
 		Title:   title,
-		Lines:   []string{"branch " + branch + " · volume " + cluster.VolumeName(p.repo, p.number)},
+		Lines:   []string{vol},
 		Options: opts,
 		Cursor:  p.cursor,
 		Hint:    "↑/↓ choose agent · enter start · esc cancel",

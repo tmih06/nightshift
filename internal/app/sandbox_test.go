@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/tmih06/nightshift/internal/cluster"
+	"github.com/tmih06/nightshift/internal/dashboard"
 	ghtui "github.com/tmih06/nightshift/internal/ghdash/tui"
 )
 
@@ -176,7 +177,7 @@ func openIssuePicker(t *testing.T) (Model, *fakePRs) {
 
 func TestIssueSandboxKeyAsksForBranchAndPool(t *testing.T) {
 	m, _ := openIssuePicker(t)
-	if m.picker == nil || !m.picker.issue || !m.picker.focusBranch {
+	if m.picker == nil || m.picker.kind != dashboard.CheckoutIssue || !m.picker.focusBranch {
 		t.Fatalf("picker = %+v, want issue picker focused on branch", m.picker)
 	}
 	if got := m.picker.branchInput.Value(); got != "issue-42" {
@@ -317,5 +318,143 @@ func BenchmarkIssuePickerTyping(b *testing.B) {
 	k := tea.KeyPressMsg{Code: 'a', Text: "a"}
 	for b.Loop() {
 		_, _ = m.updatePickerBranch(k)
+	}
+}
+
+func openRepoPickerHelper(t *testing.T, repo, branch, url string) (Model, *fakePRs) {
+	t.Helper()
+	m, gh := withPools(t)
+	next, cmd := m.openRepoPicker(repo, branch, url)
+	if cmd != nil {
+		t.Error("opening the repo picker ran a command")
+	}
+	return next, gh
+}
+
+func TestRepoPickerOpensWithBranchAndDynamicVolume(t *testing.T) {
+	m, _ := openRepoPickerHelper(t, "acme/rocket", "develop", "https://github.com/acme/rocket")
+	if m.picker == nil || m.picker.kind != dashboard.CheckoutRepo || !m.picker.focusBranch {
+		t.Fatalf("picker = %+v, want repo picker focused on branch", m.picker)
+	}
+	if got := m.picker.branchInput.Value(); got != "develop" {
+		t.Errorf("branch = %q, want develop", got)
+	}
+	f := frame(m)
+	if len(f) != 40 {
+		t.Errorf("frame is %d rows, want 40", len(f))
+	}
+	for i, row := range f {
+		if w := ansi.StringWidth(row); w > 120 {
+			t.Errorf("row %d is %d wide", i, w)
+		}
+	}
+	body := strings.Join(f, "\n")
+	for _, want := range []string{
+		"Check out acme/rocket in a sandbox",
+		"volume repo-acme-rocket-develop",
+		"Branch",
+		"develop",
+		"Pool",
+		"codex-pool",
+		"pi-pool",
+		"esc cancel",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the repo picker lacks %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "acme/rocket#") {
+		t.Errorf("repo picker title includes a number:\n%s", body)
+	}
+	if v := m.View(); v.Cursor != nil {
+		t.Error("gh-dash's cursor shows through the repo picker")
+	}
+
+	// Clearing and typing updates the volume preview line dynamically.
+	next, _ := m.Update(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
+	m = next.(Model)
+	if body := strings.Join(frame(m), "\n"); !strings.Contains(body, "volume repo-acme-rocket-default") {
+		t.Errorf("empty branch preview did not fall back to default:\n%s", body)
+	}
+	next, _ = m.Update(tea.PasteMsg{Content: "feat/search"})
+	m = next.(Model)
+	if body := strings.Join(frame(m), "\n"); !strings.Contains(body, "volume repo-acme-rocket-feat-search") {
+		t.Errorf("typed branch preview did not update:\n%s", body)
+	}
+}
+
+func TestRepoPickerDefaultsToMainAndValidatesRepoAndPools(t *testing.T) {
+	m, _ := openRepoPickerHelper(t, "acme/rocket", "", "")
+	if m.picker == nil || m.picker.branchInput.Value() != "main" {
+		t.Fatalf("picker = %+v, want default branch main", m.picker)
+	}
+	if body := strings.Join(frame(m), "\n"); !strings.Contains(body, "volume repo-acme-rocket-main") {
+		t.Errorf("default branch preview missing:\n%s", body)
+	}
+
+	// Invalid repo names are rejected with an error notice.
+	for _, bad := range []string{"", "noslash", "/name", "owner/"} {
+		mBad, _ := withPools(t)
+		next, _ := mBad.openRepoPicker(bad, "main", "")
+		if next.picker != nil {
+			t.Errorf("bad repo %q opened picker", bad)
+		}
+		if bar := frame(next)[0]; !strings.Contains(bar, "cannot check out") {
+			t.Errorf("bad repo %q bar = %q", bad, bar)
+		}
+	}
+
+	// Missing warm pools shows notice without opening picker.
+	mNoPools, _ := newModel(t)
+	mNoPools = press(mNoPools, "tab")
+	next, _ := mNoPools.openRepoPicker("acme/rocket", "main", "")
+	if next.picker != nil {
+		t.Fatal("repo picker opened with no warm pools")
+	}
+	if bar := frame(next)[0]; !strings.Contains(bar, "no warm pools") {
+		t.Errorf("bar = %q, want missing pools notice", bar)
+	}
+}
+
+func TestRepoPickerEditsValidatesMouseAndStartsCheckout(t *testing.T) {
+	m, gh := openRepoPickerHelper(t, "acme/rocket", "main", "https://github.com/acme/rocket")
+	before := len(gh.keys)
+
+	// Invalid branch blocks start and shows validation error.
+	next, _ := m.Update(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
+	m = next.(Model)
+	m = press(m, "b", "a", "d", " ", "x")
+	if len(gh.keys) != before {
+		t.Error("keys typed in repo branch input reached gh-dash")
+	}
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	if cmd != nil || m.picker == nil || m.picker.branchErr == "" {
+		t.Fatalf("invalid branch started repo checkout: picker=%v cmd=%v", m.picker != nil, cmd != nil)
+	}
+
+	// Fix branch, tab to pool list, click branch to refocus, then click pool 2 to start.
+	next, _ = m.Update(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
+	m = next.(Model)
+	next, _ = m.Update(tea.PasteMsg{Content: "release/v2"})
+	m = next.(Model)
+	m = press(m, "tab")
+	if m.picker.focusBranch {
+		t.Fatal("tab did not move focus to pools")
+	}
+	p := m.pickerPlaced()
+	next, cmd = m.Update(tea.MouseClickMsg{X: p.X + 4, Y: barHeight + p.FieldY(), Button: tea.MouseLeft})
+	m = next.(Model)
+	if cmd != nil || m.picker == nil || !m.picker.focusBranch {
+		t.Fatalf("click on branch field did not refocus it: picker=%v focus=%v", m.picker != nil, m.picker != nil && m.picker.focusBranch)
+	}
+	next, cmd = m.Update(tea.MouseClickMsg{X: p.X + 4, Y: barHeight + p.OptionY(1), Button: tea.MouseLeft})
+	m = next.(Model)
+	if cmd == nil || m.picker != nil || m.active != TabSandboxes {
+		t.Fatalf("click on pool did not start repo checkout: cmd=%v picker=%v active=%d", cmd != nil, m.picker != nil, m.active)
+	}
+	body := strings.Join(frame(m), "\n")
+	if !strings.Contains(body, "Checking out acme/rocket@release/v2") || !strings.Contains(body, "on pi-template") {
+		t.Errorf("sandbox tab did not start repo checkout:\n%s", body)
 	}
 }

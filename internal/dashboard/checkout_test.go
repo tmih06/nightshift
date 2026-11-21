@@ -52,7 +52,7 @@ func TestCloneScriptQuotesBranchNames(t *testing.T) {
 }
 
 func TestIssueCloneScriptChecksOutTheRequestedBranch(t *testing.T) {
-	issue := Checkout{Repo: "acme/rocket", Number: 42, Branch: "feat/dark-mode", Issue: true}
+	issue := Checkout{Repo: "acme/rocket", Number: 42, Branch: "feat/dark-mode", Kind: CheckoutIssue}
 	if got := issue.Volume(); got != "issue-acme-rocket-42" {
 		t.Errorf("volume = %q", got)
 	}
@@ -72,17 +72,17 @@ func TestIssueCloneScriptChecksOutTheRequestedBranch(t *testing.T) {
 	if strings.Contains(got, "pull/") {
 		t.Errorf("issue script fetches a pull request ref:\n%s", got)
 	}
-	defaultIssue := Checkout{Repo: "acme/rocket", Number: 42, Issue: true}
+	defaultIssue := Checkout{Repo: "acme/rocket", Number: 42, Kind: CheckoutIssue}
 	if s := defaultIssue.CloneScript(); !strings.Contains(s, "git checkout -B issue-42;") {
 		t.Errorf("default branch script:\n%s", s)
 	}
-	if s := (Checkout{Repo: "acme/rocket", Number: 42, Branch: "it's;$(rm)", Issue: true}).CloneScript(); !strings.Contains(s, `'it'\''s;$(rm)'`) {
+	if s := (Checkout{Repo: "acme/rocket", Number: 42, Branch: "it's;$(rm)", Kind: CheckoutIssue}).CloneScript(); !strings.Contains(s, `'it'\''s;$(rm)'`) {
 		t.Errorf("issue branch not quoted:\n%s", s)
 	}
 }
 
 func TestIssueCheckoutClonesFreshAndSwitchesBranchOnKeptVolume(t *testing.T) {
-	issue := Checkout{Repo: "acme/rocket", Number: 42, Branch: "feat/login", Issue: true}
+	issue := Checkout{Repo: "acme/rocket", Number: 42, Branch: "feat/login", Kind: CheckoutIssue}
 
 	fresh := &fakeOps{}
 	var evs []checkoutEvent
@@ -100,6 +100,9 @@ func TestIssueCheckoutClonesFreshAndSwitchesBranchOnKeptVolume(t *testing.T) {
 	if strings.Join(fresh.calls, "\n") != strings.Join(wantFresh, "\n") {
 		t.Errorf("fresh calls:\n%s", strings.Join(fresh.calls, "\n"))
 	}
+	if fresh.volumeFor.Kind != cluster.VolumeIssue || fresh.volumeFor.Number != 42 || fresh.volumeFor.Branch != "feat/login" {
+		t.Errorf("volumeFor = %+v", fresh.volumeFor)
+	}
 	if !evs[len(evs)-1].done {
 		t.Errorf("fresh checkout did not finish: %+v", evs[len(evs)-1])
 	}
@@ -113,6 +116,65 @@ func TestIssueCheckoutClonesFreshAndSwitchesBranchOnKeptVolume(t *testing.T) {
 	}
 	if !evs[len(evs)-1].done {
 		t.Errorf("kept checkout did not finish: %+v", evs[len(evs)-1])
+	}
+}
+
+func TestRepoCheckoutScriptVolumeAndRun(t *testing.T) {
+	repo := Checkout{Repo: "acme/rocket", Branch: "feat/search", Kind: CheckoutRepo}
+	if got := repo.String(); got != "acme/rocket@feat/search" {
+		t.Errorf("String() = %q, want acme/rocket@feat/search", got)
+	}
+	if got := repo.Volume(); got != "repo-acme-rocket-feat-search" {
+		t.Errorf("Volume() = %q, want repo-acme-rocket-feat-search", got)
+	}
+	got := repo.CloneScript()
+	for _, want := range []string{
+		"set -euo pipefail\n",
+		"git clone --progress https://github.com/acme/rocket.git repo 2>&1 | lines",
+		"\ncd repo\n",
+		"if git show-ref --verify --quiet refs/remotes/origin/feat/search; then git checkout -B feat/search --track refs/remotes/origin/feat/search; else git checkout -B feat/search; fi",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("repo script lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "pull/") {
+		t.Errorf("repo script fetches a pull request ref:\n%s", got)
+	}
+
+	defaultRepo := Checkout{Repo: "acme/rocket", Kind: CheckoutRepo}
+	if got := defaultRepo.String(); got != "acme/rocket@main" {
+		t.Errorf("default String() = %q, want acme/rocket@main", got)
+	}
+	if got := defaultRepo.Volume(); got != "repo-acme-rocket-main" {
+		t.Errorf("default Volume() = %q, want repo-acme-rocket-main", got)
+	}
+	if s := defaultRepo.CloneScript(); !strings.Contains(s, "git checkout -B main;") {
+		t.Errorf("default repo script:\n%s", s)
+	}
+
+	fresh := &fakeOps{}
+	var evs []checkoutEvent
+	runCheckout(fresh.ops(), repo, "pi-template", func(ev checkoutEvent) { evs = append(evs, ev) })
+	if fresh.volumeFor.Kind != cluster.VolumeRepo || fresh.volumeFor.Repo != "acme/rocket" || fresh.volumeFor.Branch != "feat/search" || fresh.volumeFor.Number != 0 {
+		t.Errorf("repo volumeFor = %+v", fresh.volumeFor)
+	}
+	if got := fresh.calls[len(fresh.calls)-1]; got != "type cd /home/node/workspace/rocket && git status -sb" {
+		t.Errorf("fresh repo shell command = %q", got)
+	}
+	if !evs[len(evs)-1].done {
+		t.Errorf("fresh repo checkout did not finish: %+v", evs[len(evs)-1])
+	}
+
+	kept := &fakeOps{exists: true, cloned: true}
+	evs = nil
+	runCheckout(kept.ops(), repo, "pi-template", func(ev checkoutEvent) { evs = append(evs, ev) })
+	wantLine := "type cd /home/node/workspace/rocket && (git checkout feat/search 2>/dev/null || git checkout -b feat/search) && git status -sb"
+	if got := kept.calls[len(kept.calls)-1]; got != wantLine {
+		t.Errorf("kept repo shell command = %q, want %q", got, wantLine)
+	}
+	if !evs[len(evs)-1].done {
+		t.Errorf("kept repo checkout did not finish: %+v", evs[len(evs)-1])
 	}
 }
 
@@ -140,14 +202,16 @@ func TestGitProgressIsRead(t *testing.T) {
 type fakeOps struct {
 	exists, cloned bool
 	cloneErr       error
+	volumeFor      cluster.VolumeFor
 	calls          []string
 }
 
 func (f *fakeOps) ops() checkoutOps {
 	return checkoutOps{
 		volumeState: func(string) (bool, bool, error) { f.calls = append(f.calls, "state"); return f.exists, f.cloned, nil },
-		createVolume: func(name string, pr cluster.VolumeFor) error {
-			f.calls = append(f.calls, "create "+name+" "+pr.Repo)
+		createVolume: func(name string, target cluster.VolumeFor) error {
+			f.volumeFor = target
+			f.calls = append(f.calls, "create "+name+" "+target.Repo)
 			return nil
 		},
 		templatePod: func(tpl string) (map[string]any, string, error) {
@@ -418,5 +482,77 @@ func TestTheDestroyDialogTakesClicks(t *testing.T) {
 	next, cmd = m.Update(tea.MouseClickMsg{X: 0, Y: 0, Button: tea.MouseLeft})
 	if next.destroy != nil || cmd != nil {
 		t.Error("a click outside did not just close the dialog")
+	}
+}
+
+func TestBoxesReturnsShallowCopy(t *testing.T) {
+	empty := baseModel()
+	empty.boxes = nil
+	if got := empty.Boxes(); got != nil {
+		t.Fatalf("empty Boxes() = %v, want nil", got)
+	}
+
+	m := baseModel()
+	got := m.Boxes()
+	if len(got) != len(m.boxes) {
+		t.Fatalf("len(Boxes()) = %d, want %d", len(got), len(m.boxes))
+	}
+	orig := m.boxes[0].Name
+	got[0].Name = "mutated"
+	if m.boxes[0].Name != orig {
+		t.Errorf("mutating Boxes() changed model: got %q, want %q", m.boxes[0].Name, orig)
+	}
+}
+
+func TestFocusPodSwitchesSectionSelectsAndAttaches(t *testing.T) {
+	m := baseModel()
+	m.boxes = []cluster.Sandbox{
+		{Name: "pi-pool-a", OwnerKind: "SandboxWarmPool", Owner: "pi-pool", Phase: "Running"},
+		{Name: "pi-repo-1", Owner: "repo-acme-rocket-main", Volume: "repo-acme-rocket-main", Phase: "Running"},
+		{Name: "pi-repo-pending", Owner: "repo-acme-rocket-dev", Volume: "repo-acme-rocket-dev", Phase: "Pending"},
+	}
+	m.selected = "pi-pool-a"
+	m.section = sectionWarm
+
+	// Unknown pod is a no-op.
+	same, cmd := m.FocusPod("does-not-exist")
+	if cmd != nil || same.selected != "pi-pool-a" || same.section != sectionWarm || same.focus != focusNav {
+		t.Fatalf("missing pod changed state: selected=%q section=%d focus=%v cmd=%v", same.selected, same.section, same.focus, cmd != nil)
+	}
+
+	// Claimed & running pod hidden by sectionWarm switches to sectionAll and attaches.
+	next, cmd := m.FocusPod("pi-repo-1")
+	if cmd == nil || next.selected != "pi-repo-1" || next.section != sectionAll {
+		t.Fatalf("claimed running without session: selected=%q section=%d cmd=%v", next.selected, next.section, cmd != nil)
+	}
+
+	// Claimed & running pod with an active session focuses the shell and watches it.
+	mWithSess := m
+	mWithSess.sessions = map[string]bool{"pi-repo-1": true}
+	next, cmd = mWithSess.FocusPod("pi-repo-1")
+	if cmd == nil || next.selected != "pi-repo-1" || next.section != sectionAll || next.focus != focusShell {
+		t.Fatalf("claimed running with session: selected=%q section=%d focus=%v cmd=%v", next.selected, next.section, next.focus, cmd != nil)
+	}
+
+	// Claimed pod already visible in sectionClaimed keeps sectionClaimed.
+	mClaimed := mWithSess
+	mClaimed.section = sectionClaimed
+	next, cmd = mClaimed.FocusPod("pi-repo-1")
+	if cmd == nil || next.section != sectionClaimed || next.focus != focusShell {
+		t.Fatalf("visible claimed pod changed section: section=%d focus=%v cmd=%v", next.section, next.focus, cmd != nil)
+	}
+
+	// Claimed but non-running pod selects without attaching.
+	next, cmd = m.FocusPod("pi-repo-pending")
+	if cmd != nil || next.selected != "pi-repo-pending" || next.section != sectionAll || next.focus != focusNav {
+		t.Fatalf("pending claimed pod: selected=%q section=%d focus=%v cmd=%v", next.selected, next.section, next.focus, cmd != nil)
+	}
+
+	// Warm pod hidden by sectionClaimed switches to sectionAll and does not attach.
+	mWarm := m
+	mWarm.section = sectionClaimed
+	next, cmd = mWarm.FocusPod("pi-pool-a")
+	if cmd != nil || next.selected != "pi-pool-a" || next.section != sectionAll || next.focus != focusNav {
+		t.Fatalf("warm pod: selected=%q section=%d focus=%v cmd=%v", next.selected, next.section, next.focus, cmd != nil)
 	}
 }

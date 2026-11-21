@@ -25,23 +25,52 @@ const (
 	podTimeout   = 3 * time.Minute
 )
 
-// Checkout is a pull request or issue to keep on its own volume and work on in
-// a sandbox that mounts it.
+// CheckoutKind distinguishes what kind of GitHub target a Checkout builds.
+type CheckoutKind int
+
+const (
+	CheckoutPR CheckoutKind = iota
+	CheckoutIssue
+	CheckoutRepo
+)
+
+// Checkout is a pull request, issue, or repository branch to keep on its own
+// volume and work on in a sandbox that mounts it.
 type Checkout struct {
 	Repo   string // owner/name
 	Number int
-	Branch string // head branch for a PR (empty -> pr-<n>), or chosen branch for an issue (empty -> issue-<n>)
-	Issue  bool
+	Branch string // head branch for a PR (empty -> pr-<n>), issue branch (empty -> issue-<n>), or repo branch (empty -> main)
+	Kind   CheckoutKind
 }
 
-func (c Checkout) String() string { return fmt.Sprintf("%s#%d", c.Repo, c.Number) }
-
-// Volume is the volume that keeps the pull request or issue.
-func (c Checkout) Volume() string {
-	if c.Issue {
-		return cluster.IssueVolumeName(c.Repo, c.Number)
+func (c Checkout) String() string {
+	if c.Kind == CheckoutRepo {
+		return fmt.Sprintf("%s@%s", c.Repo, c.branch())
 	}
-	return cluster.VolumeName(c.Repo, c.Number)
+	return fmt.Sprintf("%s#%d", c.Repo, c.Number)
+}
+
+// Volume is the volume that keeps the pull request, issue, or repository branch.
+func (c Checkout) Volume() string {
+	switch c.Kind {
+	case CheckoutIssue:
+		return cluster.IssueVolumeName(c.Repo, c.Number)
+	case CheckoutRepo:
+		return cluster.RepoVolumeName(c.Repo, c.branch())
+	default:
+		return cluster.VolumeName(c.Repo, c.Number)
+	}
+}
+
+func (c Checkout) volumeKind() cluster.VolumeKind {
+	switch c.Kind {
+	case CheckoutIssue:
+		return cluster.VolumeIssue
+	case CheckoutRepo:
+		return cluster.VolumeRepo
+	default:
+		return cluster.VolumePR
+	}
 }
 
 // MountPath is where the volume sits in the sandbox.
@@ -53,21 +82,26 @@ func (c Checkout) branch() string {
 	if c.Branch != "" {
 		return c.Branch
 	}
-	if c.Issue {
+	switch c.Kind {
+	case CheckoutIssue:
 		return fmt.Sprintf("issue-%d", c.Number)
+	case CheckoutRepo:
+		return "main"
+	default:
+		return fmt.Sprintf("pr-%d", c.Number)
 	}
-	return fmt.Sprintf("pr-%d", c.Number)
 }
 
 // CloneScript runs at the volume's root in the clone Job. It drops what an
 // unfinished clone left, clones over https into cluster.VolumeRepoDir, and
 // checks out either the pull request's head ref (which works for forks too and
-// needs no gh in the image) or the chosen branch for an issue (tracking
-// origin/<branch> if it already exists, or creating it from HEAD). It pins
-// HTTP/1.1 with a low-speed timeout and retries transient stalls so a hung
-// GitHub stream does not sit decaying for minutes. git's progress is carriage
-// returns on one line, which the container log would hold back until the line
-// ends, so it is turned into lines, unbuffered, for the dashboard to follow.
+// needs no gh in the image) or the chosen branch for an issue or repository
+// (tracking origin/<branch> if it already exists, or creating it from HEAD).
+// It pins HTTP/1.1 with a low-speed timeout and retries transient stalls so a
+// hung GitHub stream does not sit decaying for minutes. git's progress is
+// carriage returns on one line, which the container log would hold back until
+// the line ends, so it is turned into lines, unbuffered, for the dashboard to
+// follow.
 func (c Checkout) CloneScript() string {
 	dir := cluster.VolumeRepoDir
 	lines := []string{
@@ -84,7 +118,7 @@ func (c Checkout) CloneScript() string {
 		"git clone --progress "+shellQuote("https://github.com/"+c.Repo+".git")+" "+dir+" 2>&1 | lines",
 	)...)
 	lines = append(lines, "cd "+dir)
-	if c.Issue {
+	if c.Kind == CheckoutIssue || c.Kind == CheckoutRepo {
 		b := shellQuote(c.branch())
 		ref := shellQuote("refs/remotes/origin/" + c.branch())
 		lines = append(lines,
@@ -121,11 +155,11 @@ func (c Checkout) ShellLine() string {
 	return c.shellLine(false)
 }
 
-// shellLine is what the sandbox's bash is given. When an issue reuses a kept
-// volume, it also checks out (or creates) the requested branch without
-// resetting any existing local branch.
+// shellLine is what the sandbox's bash is given. When an issue or repository
+// checkout reuses a kept volume, it also checks out (or creates) the requested
+// branch without resetting any existing local branch.
 func (c Checkout) shellLine(cloned bool) string {
-	if c.Issue && cloned {
+	if (c.Kind == CheckoutIssue || c.Kind == CheckoutRepo) && cloned {
 		b := shellQuote(c.branch())
 		return "cd " + shellQuote(c.MountPath()) + " && (git checkout " + b + " 2>/dev/null || git checkout -b " + b + ") && git status -sb"
 	}
@@ -244,7 +278,7 @@ func runCheckout(ops checkoutOps, c Checkout, template string, emit func(checkou
 	exists, cloned, err := ops.volumeState(vol)
 	if err == nil && !exists {
 		say(checkoutEvent{step: stepVolume, detail: "creating " + vol})
-		err = ops.createVolume(vol, cluster.VolumeFor{Repo: c.Repo, Number: c.Number, Branch: c.branch(), Issue: c.Issue})
+		err = ops.createVolume(vol, cluster.VolumeFor{Repo: c.Repo, Number: c.Number, Branch: c.branch(), Kind: c.volumeKind()})
 	}
 	if err != nil {
 		fail(stepVolume, err)

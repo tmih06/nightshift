@@ -2,9 +2,12 @@ package cluster
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 )
+
+var dns1123Label = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
 func TestVolumeNamesAreValidAndStable(t *testing.T) {
 	if got := VolumeName("acme/rocket", 7); got != "pr-acme-rocket-7" {
@@ -29,6 +32,33 @@ func TestVolumeNamesAreValidAndStable(t *testing.T) {
 	longIssue := IssueVolumeName("some-very-long-organisation-name/an-even-longer-repository-name-here", 12345)
 	if len(longIssue) > 63 || !strings.HasSuffix(longIssue, "-12345") || !strings.HasPrefix(longIssue, "issue-") {
 		t.Errorf("long issue = %s (%d)", longIssue, len(longIssue))
+	}
+
+	if got := RepoVolumeName("acme/rocket", "main"); got != "repo-acme-rocket-main" {
+		t.Errorf("repo short = %s", got)
+	}
+	if got := RepoVolumeName("acme/rocket", ""); got != "repo-acme-rocket-default" {
+		t.Errorf("repo empty branch = %s", got)
+	}
+	if got := RepoVolumeName("Acme_Co/rocket.js", "feat/dark_mode.v2"); got != "repo-acme-co-rocket-js-feat-dark-mode-v2" {
+		t.Errorf("repo odd chars = %s", got)
+	}
+	if RepoVolumeName("acme/rocket", "7") == VolumeName("acme/rocket", 7) ||
+		RepoVolumeName("acme/rocket", "7") == IssueVolumeName("acme/rocket", 7) {
+		t.Error("repo volume collides with PR or issue volume")
+	}
+	longRepo1 := RepoVolumeName("some-very-long-organisation-name/an-even-longer-repository-name", "feat/super-long-branch-name-alpha")
+	longRepo2 := RepoVolumeName("some-very-long-organisation-name/an-even-longer-repository-name", "feat/super-long-branch-name-beta")
+	for _, got := range []string{longRepo1, longRepo2} {
+		if len(got) > 63 || !strings.HasPrefix(got, "repo-") || !dns1123Label.MatchString(got) {
+			t.Errorf("invalid long repo volume = %q (%d)", got, len(got))
+		}
+	}
+	if longRepo1 != RepoVolumeName("some-very-long-organisation-name/an-even-longer-repository-name", "feat/super-long-branch-name-alpha") {
+		t.Error("long repo volume is not deterministic")
+	}
+	if longRepo1 == longRepo2 {
+		t.Errorf("two distinct long repo branches share a volume: %s", longRepo1)
 	}
 }
 
@@ -106,7 +136,7 @@ func TestVolumeManifestIsUnowned(t *testing.T) {
 	if dig(m, "metadata", "annotations", repoAnnotation) != "acme/rocket" || dig(m, "metadata", "annotations", prAnnotation) != "7" {
 		t.Errorf("annotations = %v", dig(m, "metadata", "annotations"))
 	}
-	im := decode(t, volumeManifest("issue-acme-rocket-42", VolumeFor{Repo: "acme/rocket", Number: 42, Branch: "fix-login", Issue: true}))
+	im := decode(t, volumeManifest("issue-acme-rocket-42", VolumeFor{Repo: "acme/rocket", Number: 42, Branch: "fix-login", Kind: VolumeIssue}))
 	if _, owned := dig(im, "metadata").(map[string]any)["ownerReferences"]; owned {
 		t.Error("the issue volume has an owner, so it would not outlive it")
 	}
@@ -114,6 +144,20 @@ func TestVolumeManifestIsUnowned(t *testing.T) {
 		dig(im, "metadata", "annotations", issueAnnotation) != "42" ||
 		dig(im, "metadata", "annotations", branchAnnotation) != "fix-login" {
 		t.Errorf("issue annotations = %v", dig(im, "metadata", "annotations"))
+	}
+	rm := decode(t, volumeManifest("repo-acme-rocket-develop", VolumeFor{Repo: "acme/rocket", Branch: "develop", Kind: VolumeRepo}))
+	if _, owned := dig(rm, "metadata").(map[string]any)["ownerReferences"]; owned {
+		t.Error("the repo volume has an owner, so it would not outlive it")
+	}
+	rAnn := dig(rm, "metadata", "annotations").(map[string]any)
+	if rAnn[repoAnnotation] != "acme/rocket" || rAnn[branchAnnotation] != "develop" {
+		t.Errorf("repo annotations = %v", rAnn)
+	}
+	if _, hasPR := rAnn[prAnnotation]; hasPR {
+		t.Errorf("repo manifest unexpectedly has PR annotation: %v", rAnn)
+	}
+	if _, hasIssue := rAnn[issueAnnotation]; hasIssue {
+		t.Errorf("repo manifest unexpectedly has issue annotation: %v", rAnn)
 	}
 }
 

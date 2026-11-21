@@ -45,6 +45,30 @@ func IssueVolumeName(repo string, number int) string {
 	return volumeName("issue", repo, number)
 }
 
+// RepoVolumeName is the volume that keeps repo's branch:
+// repo-<owner>-<name>-<branch>, cut to a valid <=63-char DNS-1123 label.
+// An empty branch is treated as "default".
+func RepoVolumeName(repo, branch string) string {
+	if branch == "" {
+		branch = "default"
+	}
+	branchPart := dnsLabel(branch)
+	if branchPart == "" {
+		branchPart = "default"
+	}
+	repoPart := dnsLabel(strings.ReplaceAll(repo, "/", "-"))
+	name := "repo-" + branchPart
+	if repoPart != "" {
+		name = "repo-" + repoPart + "-" + branchPart
+	}
+	if len(name) > 63 {
+		sum := sha256.Sum256([]byte(repo + "@" + branch))
+		hash := fmt.Sprintf("-%x", sum[:3])
+		name = strings.TrimRight(name[:63-len(hash)], "-") + hash
+	}
+	return name
+}
+
 func volumeName(prefix, repo string, number int) string {
 	suffix := fmt.Sprintf("-%d", number)
 	name := prefix + "-" + dnsLabel(strings.ReplaceAll(repo, "/", "-"))
@@ -87,12 +111,21 @@ func VolumeState(name string) (exists, cloned bool, err error) {
 	return true, pvc.Metadata.Annotations[clonedAnnotation] != "", nil
 }
 
-// VolumeFor records which pull request or issue a volume keeps.
+// VolumeKind distinguishes what kind of GitHub target a volume keeps.
+type VolumeKind int
+
+const (
+	VolumePR VolumeKind = iota
+	VolumeIssue
+	VolumeRepo
+)
+
+// VolumeFor records which pull request, issue, or repository branch a volume keeps.
 type VolumeFor struct {
 	Repo   string
 	Number int
 	Branch string
-	Issue  bool
+	Kind   VolumeKind
 }
 
 // CreateVolume creates the volume, or leaves it be if it exists.
@@ -102,22 +135,26 @@ func CreateVolume(name string, target VolumeFor) error {
 }
 
 func volumeManifest(name string, target VolumeFor) []byte {
-	numKey := prAnnotation
-	if target.Issue {
-		numKey = issueAnnotation
+	annotations := map[string]string{
+		repoAnnotation:   target.Repo,
+		branchAnnotation: target.Branch,
+	}
+	switch target.Kind {
+	case VolumePR:
+		annotations[prAnnotation] = fmt.Sprint(target.Number)
+	case VolumeIssue:
+		annotations[issueAnnotation] = fmt.Sprint(target.Number)
+	case VolumeRepo:
+		// Repo volumes only carry repo and branch annotations.
 	}
 	return mustJSON(map[string]any{
 		"apiVersion": "v1",
 		"kind":       "PersistentVolumeClaim",
 		"metadata": map[string]any{
-			"name":      name,
-			"namespace": Namespace,
-			"labels":    map[string]string{VolumeLabel: name},
-			"annotations": map[string]string{
-				repoAnnotation:   target.Repo,
-				numKey:           fmt.Sprint(target.Number),
-				branchAnnotation: target.Branch,
-			},
+			"name":        name,
+			"namespace":   Namespace,
+			"labels":      map[string]string{VolumeLabel: name},
+			"annotations": annotations,
 		},
 		"spec": map[string]any{
 			"accessModes": []string{"ReadWriteOnce"},
