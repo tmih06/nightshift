@@ -40,6 +40,8 @@ jobs:
   images:
     name: Image (${{ matrix.agent }})
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -74,6 +76,7 @@ jobs:
           RELEASE: ${{ matrix.release }}
           PACKAGE: ${{ matrix.package }}
           COMMAND: ${{ matrix.command }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           case "$RELEASE" in
             npm)
@@ -83,7 +86,7 @@ jobs:
               version=$(curl -fsSL "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_amd64.json" | jq -er .version)
               ;;
             ompig-slim)
-              version=$(curl -fsSL "https://api.github.com/repos/tmih06/ompig-slim/releases/latest" | jq -er '.tag_name | sub("^v";"")')
+              version=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/tmih06/ompig-slim/releases/latest" | jq -er '.tag_name | sub("^v";"")')
               ;;
             *)
               echo "unknown release source: $RELEASE" >&2
