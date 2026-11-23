@@ -124,17 +124,21 @@ func (m model) tableHeader(inner int) string {
 }
 
 type rowKey struct {
-	rev      int
-	selected string
-	section  int
-	width    int
+	rev   int
+	width int
+	theme uint64
+}
+
+type rowState struct {
+	index    int
+	selected bool
 }
 
 // rowCacheEntry is shared by every copy of the model, so a View on a value
 // receiver can still fill it.
 type rowCacheEntry struct {
 	key         rowKey
-	lines       []string
+	rows        map[rowState][]string
 	header      string
 	headerWidth int
 	headerTheme uint64

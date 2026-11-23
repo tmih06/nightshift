@@ -10,7 +10,7 @@ import (
 func benchBase() model {
 	m := baseModel()
 	m.rowCache = &rowCacheEntry{}
-	m.inspectDocs = map[string]inspectCache{}
+	m.inspectDocs = map[inspectKey]inspectCache{}
 	m.width, m.height = 150, 42
 	p := m.pools["agent-pool"]
 	p.TemplateYAML = strings.Repeat("apiVersion: v1\nkind: Pod\nspec:\n  replicas: 2\n", 80)

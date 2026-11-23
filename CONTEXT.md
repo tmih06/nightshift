@@ -182,8 +182,11 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
   and the sidebar's image line show the real version, not `:latest`.
 - A tab out of sight keeps refreshing, but the sandbox tab stops rendering the
   shell's screen until it is shown again. Its viewer still processes output so
-  the screen stays current. Table rows and warm-sandbox documents are rendered
-  once per change, not per frame.
+  the screen stays current. Only visible table rows are rendered, with both
+  selection states cached until fleet data, width, or theme changes.
+  Configs and Logs documents are reformatted only when their content,
+  width, or theme changes, not on unchanged refresh replies. See
+  `docs/pods-performance.md` for benchmarks and cache guardrails.
 - The shell embeds each sandbox's terminals over one persistent framed Herdr
   `hc connect` connection per pod and a local terminal emulator per attached
   window, preserving colors and styles. Right below the `● herdr live` row, a

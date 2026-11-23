@@ -33,13 +33,23 @@ const (
 	paneConfigs
 )
 
+type inspectContent struct {
+	text, logErr    string
+	loaded, loading bool
+	role            cluster.PodRole
+}
+
+type inspectKey struct {
+	pod  string
+	mode sidebarMode
+}
+
 type inspectCache struct {
-	pod    string
-	mode   sidebarMode
-	width  int
-	rev    int
-	logRev int
-	lines  []string
+	content inspectContent
+	width   int
+	theme   uint64
+	rev     int // Configs content need only be rebuilt after a fleet refresh
+	lines   []string
 }
 
 // liveUsage is a claimed sandbox's usage from its own cgroup counters:
@@ -83,12 +93,11 @@ type model struct {
 	inspectScroll  int
 	logFollow      bool
 	dataRev        int
-	logRev         int
-	inspect        inspectCache
-	inspectDocs    map[string]inspectCache // shared by every copy of the model
-	logs           map[string]string       // pod name -> raw container logs
-	logErr         map[string]string       // pod name -> last log fetch error
-	loadingLogs    string                  // pod currently fetching logs
+	inspect        []string
+	inspectDocs    map[inspectKey]inspectCache // shared by every copy of the model
+	logs           map[string]string           // pod name -> raw container logs
+	logErr         map[string]string           // pod name -> last log fetch error
+	loadingLogs    string                      // pod currently fetching logs
 	shellLines     []string
 	shellPod       string
 	shellTerm      string
@@ -128,7 +137,7 @@ func New(t ghtheme.Theme) Model {
 		windows:      map[string][]session.Terminal{},
 		activeWindow: map[string]string{},
 		rowCache:     &rowCacheEntry{},
-		inspectDocs:  map[string]inspectCache{},
+		inspectDocs:  map[inspectKey]inspectCache{},
 		logs:         map[string]string{},
 		logErr:       map[string]string{},
 		logFollow:    true,

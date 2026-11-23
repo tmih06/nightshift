@@ -35,7 +35,7 @@ Local and CI checks differ on purpose, at the maintainer's request:
 | Duplication, dupl | 0 first-party hits at 150 tokens | 150 tokens | Keeps first-party at zero |
 | Duplication, jscpd | 0.49% | 0.49%, ratchet only | May go down, never up |
 | Changed-line coverage | 70.6% first-party | 70% | New code meets the current average |
-| Diff size | p95 2,223 lines | 2,200 lines | Blocks only the top 5% of changes |
+| Diff size | p95 2,223 lines | removed | Cap removed at the repo admin's request |
 | `//nolint` in first-party | 0 | 0 new | Clean today, so keep it clean |
 | `t.Skip` added | 2 first-party | 0 new | History has no legitimate new skip |
 | Empty error block | 0 | 0 | Clean today |

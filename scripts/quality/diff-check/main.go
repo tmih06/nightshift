@@ -11,10 +11,7 @@ import (
 	"strings"
 )
 
-const (
-	sizeCap    = 2200 // p95 of first-party change size, docs/quality-discovery.md
-	agentsFile = "AGENTS.md"
-)
+const agentsFile = "AGENTS.md"
 
 var (
 	assertionRE = regexp.MustCompile(`\bt\.(Error|Errorf|Fatal|Fatalf|Fail|FailNow)\(|\b(assert|require)\.[A-Z]`)
@@ -48,7 +45,6 @@ type fileDiff struct {
 	removedAssertions int
 	addedAssertions   int
 	addedTests        int
-	changed           int
 }
 
 type addedLine struct {
@@ -191,7 +187,6 @@ func applyLine(fd *fileDiff, line string, lineNo int) int {
 		recordAdded(fd, lineNo, line[1:])
 		return lineNo + 1
 	case strings.HasPrefix(line, "-"):
-		fd.changed++
 		if assertionRE.MatchString(line) {
 			fd.removedAssertions++
 		}
@@ -200,7 +195,6 @@ func applyLine(fd *fileDiff, line string, lineNo int) int {
 }
 
 func recordAdded(fd *fileDiff, n int, text string) {
-	fd.changed++
 	fd.added = append(fd.added, addedLine{n: n, text: text})
 	if assertionRE.MatchString(text) {
 		fd.addedAssertions++
@@ -219,7 +213,6 @@ func check(files []*fileDiff, opts options) []finding {
 	out = append(out, checkDeletedTests(files)...)
 	out = append(out, checkProtected(files, opts)...)
 	out = append(out, checkGoMod(files, opts)...)
-	out = append(out, checkSize(files, opts)...)
 	return append(out, checkGuardrail(files, opts)...)
 }
 
@@ -314,32 +307,6 @@ func checkGoMod(files []*fileDiff, opts options) []finding {
 			msg: "add a 'Go-Mod-Justification: <reason>' line to the PR description."}}
 	}
 	return nil
-}
-
-func countsTowardSize(path string) bool {
-	for _, prefix := range []string{"internal/ghdash/", "internal/zenocto/", ".agents/"} {
-		if strings.HasPrefix(path, prefix) {
-			return false
-		}
-	}
-	return path != "go.sum" && !strings.Contains(path, "/testdata/") && !strings.HasSuffix(path, ".golden")
-}
-
-func checkSize(files []*fileDiff, opts options) []finding {
-	if opts.bootstrap {
-		return nil
-	}
-	total := 0
-	for _, fd := range files {
-		if countsTowardSize(fd.path) {
-			total += fd.changed
-		}
-	}
-	if total <= sizeCap {
-		return nil
-	}
-	return []finding{{file: ".", line: 1, rule: "diff/size-cap",
-		msg: fmt.Sprintf("%d changed lines exceeds the cap of %d. Split this into smaller changes.", total, sizeCap)}}
 }
 
 func isFixChange(opts options) bool {

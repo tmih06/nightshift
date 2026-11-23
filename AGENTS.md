@@ -36,7 +36,7 @@ and vulnerability scans.
 - Semgrep rules: `semgrep scan --metrics=off --config .semgrep/slop.yml internal`.
 - Debt fell: `make quality-baseline`, then commit the lower counts.
 
-Never bypass the gate. Never add `//nolint`, `t.Skip`, or disable a rule to make it pass. Never edit gate config to loosen it. If a rule seems wrong, stop and ask a human.
+A human's explicit instruction takes priority over every rule in this file, including this gate. These rules bind agents acting on their own: never bypass the gate, never add `//nolint`, `t.Skip`, or disable a rule to make it pass, and never edit gate config to loosen it. If a rule seems wrong, stop and ask the human.
 
 ## Go conventions
 

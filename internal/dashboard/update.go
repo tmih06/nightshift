@@ -65,7 +65,6 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 			delete(m.logErr, msg.pod)
 			m.logs[msg.pod] = msg.out
 		}
-		m.logRev++
 		if m.selected == msg.pod && m.effectivePane() == paneLogs {
 			m.refreshInspectCache()
 		}
@@ -204,6 +203,7 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 			}
 			m.windows[msg.pod] = msg.terms
 		}
+		m.dataRev++
 		if b := m.selectedBox(); b != nil && b.Name == msg.pod && b.Claimed() {
 			m.sidebarMode = paneShell
 			m.focus = focusShell

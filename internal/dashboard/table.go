@@ -55,13 +55,10 @@ type roleGroup struct {
 }
 
 func allRoleGroups() []roleGroup {
-	return []roleGroup{
+	return append([]roleGroup{
 		{title: "CLAIMED", roles: []cluster.PodRole{cluster.RoleClaimed}},
 		{title: "WARM POOLS", roles: []cluster.PodRole{cluster.RoleWarm}},
-		{title: "EGRESS PROXY", roles: []cluster.PodRole{cluster.RoleEgress}},
-		{title: "CLUSTER CORE", roles: []cluster.PodRole{cluster.RoleSystem}},
-		{title: "JOBS & OTHER", roles: []cluster.PodRole{cluster.RoleJob, cluster.RoleOther}},
-	}
+	}, infraRoleGroups()...)
 }
 
 func infraRoleGroups() []roleGroup {
@@ -577,26 +574,49 @@ func (m model) tableLineOffset(entries []tableEntry, l layout) int {
 	return clamp(offset, 0, max(total-viewH, 0))
 }
 
-// rows returns the rendered table body, cached until data, selection, section,
-// or width changes.
-func (m model) rows(inner int) []string {
-	key := rowKey{rev: m.dataRev, selected: m.selected, section: m.section, width: inner}
-	if m.rowCache != nil && m.rowCache.lines != nil && m.rowCache.key == key {
-		return m.rowCache.lines
+// cachedRow keeps both selection states so moving through the table does not
+// redraw unchanged pods. Rows are populated only when they enter the viewport.
+func (m model) cachedRow(index, inner int) []string {
+	state := rowState{index: index, selected: m.boxes[index].Name == m.selected}
+	if m.rowCache == nil {
+		return m.renderRow(index, inner, state.selected)
 	}
-	entries := m.tableEntries()
-	lines := make([]string, 0, len(entries)*itemH)
-	for _, e := range entries {
-		if e.isHeading {
-			lines = append(lines, m.renderHeadingRow(e.heading, inner))
-			continue
-		}
-		lines = append(lines, m.renderRow(e.boxIdx, inner, m.boxes[e.boxIdx].Name == m.selected)...)
+	key := rowKey{rev: m.dataRev, width: inner, theme: themeRevision}
+	if m.rowCache.rows == nil || m.rowCache.key != key {
+		m.rowCache.key = key
+		m.rowCache.rows = make(map[rowState][]string)
 	}
-	if m.rowCache != nil {
-		m.rowCache.key, m.rowCache.lines = key, lines
+	if lines, ok := m.rowCache.rows[state]; ok {
+		return lines
 	}
+	lines := m.renderRow(index, inner, state.selected)
+	m.rowCache.rows[state] = lines
 	return lines
+}
+
+func (m model) visibleRows(entries []tableEntry, inner, start, end int) []string {
+	var out []string
+	line := 0
+	for _, e := range entries {
+		h := itemH
+		if e.isHeading {
+			h = headingH
+		}
+		if line >= end {
+			break
+		}
+		if line+h > start {
+			var rows []string
+			if e.isHeading {
+				rows = []string{m.renderHeadingRow(e.heading, inner)}
+			} else {
+				rows = m.cachedRow(e.boxIdx, inner)
+			}
+			out = append(out, rows[max(start-line, 0):min(end-line, h)]...)
+		}
+		line += h
+	}
+	return out
 }
 
 func (m model) tableView(l layout) []string {
@@ -611,10 +631,9 @@ func (m model) tableView(l layout) []string {
 		}
 		out = append(out, "  "+dim(msg))
 	} else {
-		rows := m.rows(inner)
 		start := m.tableLineOffset(entries, l)
-		end := min(start+l.tableH-tableHeaderH, len(rows))
-		out = append(out, rows[start:end]...)
+		end := start + max(l.tableH-tableHeaderH, 0)
+		out = append(out, m.visibleRows(entries, inner, start, end)...)
 	}
 	for i := range out {
 		out[i] = padTo(out[i], l.tableW)

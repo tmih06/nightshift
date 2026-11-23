@@ -17,52 +17,52 @@ func (m model) inspectPageSize() int {
 
 func (m *model) refreshInspectCache() {
 	if !m.showingDocPane() {
-		m.inspect = inspectCache{}
+		m.inspect = nil
 		return
 	}
-	innerW := max(m.layout().docW, 1)
-	mode := m.effectivePane()
-	if m.inspect.lines != nil && m.inspect.pod == m.selected && m.inspect.mode == mode &&
-		m.inspect.width == innerW && m.inspect.rev == m.dataRev && m.inspect.logRev == m.logRev {
-		return
-	}
-	m.inspect = inspectCache{
-		pod:    m.selected,
-		mode:   mode,
-		width:  innerW,
-		rev:    m.dataRev,
-		logRev: m.logRev,
-		lines:  m.cachedInspectLines(innerW),
-	}
+	m.inspect = m.cachedInspectLines(max(m.layout().docW, 1))
 }
 
-// cachedInspectLines returns the selected pod's Configs or Logs document,
-// rendered once per pod, mode, width, and revision, so navigation stays fast.
+// cachedInspectLines reuses documents until their content, width, or theme
+// changes. Fleet refreshes and other pods' log replies do not invalidate them.
 func (m model) cachedInspectLines(innerW int) []string {
-	mode := m.effectivePane()
-	if m.inspect.lines != nil && m.inspect.pod == m.selected && m.inspect.mode == mode &&
-		m.inspect.width == innerW && m.inspect.rev == m.dataRev && m.inspect.logRev == m.logRev {
-		return m.inspect.lines
+	b := m.selectedBox()
+	if b == nil {
+		return []string{dim("nothing selected")}
 	}
-	cacheKey := fmt.Sprintf("%s:%d", m.selected, mode)
-	if m.inspectDocs != nil {
-		if c, ok := m.inspectDocs[cacheKey]; ok && c.width == innerW && c.rev == m.dataRev && c.logRev == m.logRev {
-			return c.lines
-		}
+	mode := m.effectivePane()
+	cacheKey := inspectKey{pod: m.selected, mode: mode}
+	cached, ok := m.inspectDocs[cacheKey]
+	matchesSize := ok && cached.width == innerW && cached.theme == themeRevision
+	if mode == paneConfigs && matchesSize && cached.rev == m.dataRev {
+		return cached.lines
+	}
+	var content inspectContent
+	if mode == paneLogs {
+		content.text, content.loaded = m.logs[b.Name]
+		content.logErr = m.logErr[b.Name]
+		content.loading = !content.loaded && m.loadingLogs == b.Name
+		content.role = b.PodRole()
+	} else {
+		content.text = buildPodMarkdown(m.pools[b.Owner], b)
+	}
+	if matchesSize && cached.content == content {
+		cached.rev = m.dataRev
+		m.inspectDocs[cacheKey] = cached
+		return cached.lines
 	}
 	var lines []string
 	if mode == paneLogs {
 		lines = m.podLogLines(innerW)
 	} else {
-		lines = m.podInspectLines(innerW)
+		lines = renderMarkdown(content.text, innerW)
 	}
 	if m.inspectDocs != nil {
 		if len(m.inspectDocs) > 64 {
 			clear(m.inspectDocs)
 		}
 		m.inspectDocs[cacheKey] = inspectCache{
-			pod: m.selected, mode: mode, width: innerW,
-			rev: m.dataRev, logRev: m.logRev, lines: lines,
+			content: content, width: innerW, theme: themeRevision, rev: m.dataRev, lines: lines,
 		}
 	}
 	return lines
@@ -70,7 +70,7 @@ func (m model) cachedInspectLines(innerW int) []string {
 
 func (m *model) scrollInspect(delta int) {
 	m.refreshInspectCache()
-	maxOffset := max(len(m.inspect.lines)-m.inspectPageSize(), 0)
+	maxOffset := max(len(m.inspect)-m.inspectPageSize(), 0)
 	if m.effectivePane() == paneLogs {
 		if m.logFollow && delta < 0 {
 			m.inspectScroll = maxOffset
@@ -114,21 +114,6 @@ func (m model) docInspectView(l layout) (lines []string, footerText string) {
 		return nil, strings.Join(footer, " · ")
 	}
 	return doc[offset:end], strings.Join(footer, " · ")
-}
-
-func (m model) podInspectLines(width int) []string {
-	if width < 1 {
-		width = 1
-	}
-	b := m.selectedBox()
-	if b == nil {
-		return []string{dim("nothing selected")}
-	}
-	return renderMarkdown(buildPodMarkdown(m.pools[b.Owner], b), width)
-}
-
-func (m model) warmInspectLines(width int) []string {
-	return m.podInspectLines(width)
 }
 
 func buildPodMarkdown(p cluster.Pool, b *cluster.Sandbox) string {

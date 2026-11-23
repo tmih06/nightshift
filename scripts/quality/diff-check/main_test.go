@@ -40,8 +40,6 @@ func TestCheck(t *testing.T) {
 		{"protected bootstrap", []*fileDiff{{path: ".golangci.yml", status: "A"}}, options{bootstrap: true}, ""},
 		{"go.mod in CI", []*fileDiff{{path: "go.mod", status: "M"}}, options{inCI: true}, "diff/go-mod-justification"},
 		{"go.mod justified", []*fileDiff{{path: "go.mod", status: "M"}}, options{inCI: true, prBody: "Go-Mod-Justification: need it"}, ""},
-		{"size cap", []*fileDiff{{path: "internal/a/a.go", status: "M", changed: sizeCap + 1}}, options{}, "diff/size-cap"},
-		{"vendored size ignored", []*fileDiff{{path: "internal/ghdash/a.go", status: "M", changed: sizeCap + 1}}, options{}, ""},
 		{"fix without guardrail", []*fileDiff{{path: "internal/a/a.go", status: "M"}}, options{prTitle: "fix(go): stop a crash"}, "diff/fix-needs-guardrail"},
 		{"fix with test", []*fileDiff{added(&fileDiff{path: "internal/a/a_test.go", status: "M"}, "func TestCrash(t *testing.T) {")}, options{prTitle: "fix(go): stop a crash"}, ""},
 		{"fix waived", []*fileDiff{{path: "internal/a/a.go", status: "M"}}, options{prTitle: "fix: typo", prBody: "No-guardrail: one-off typo"}, ""},

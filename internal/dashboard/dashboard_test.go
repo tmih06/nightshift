@@ -1386,7 +1386,7 @@ func TestWarmInspectScrollableMarkdownAndYAML(t *testing.T) {
 	m.boxes[0].ManifestYAML = "apiVersion: agents.x-k8s.io/v1beta1\nkind: Sandbox\nmetadata:\n  name: agent-pool-5ss7w"
 	m.boxes[0].PodYAML = "apiVersion: v1\nkind: Pod\nspec:\n  restartPolicy: OnFailure\n  containers:\n  - name: agent\n    resources:\n      limits:\n        cpu: 500m\n        memory: 256Mi"
 
-	lines := m.warmInspectLines(60)
+	lines := m.cachedInspectLines(60)
 	joined := strings.Join(lines, "\n")
 	for _, want := range []string{
 		"agent-pool · warm pool",
