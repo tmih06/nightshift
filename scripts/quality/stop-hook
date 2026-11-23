@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Claude Code Stop hook: the agent cannot finish while the gate fails.
+# Exit 2 returns stderr to the agent. After repeated failures it lets the
+# stop through with a warning, so a human takes over instead of a loop.
+set -uo pipefail
+
+MAX_SAME_FAILURES=3
+MAX_FAILURES=6
+
+input="$(cat)"
+cd "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}" || exit 0
+
+session="$(sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' <<<"$input" | tr -cd 'a-zA-Z0-9-')"
+state_dir="$(git rev-parse --absolute-git-dir)/quality-gate"
+state="$state_dir/${session:-default}"
+mkdir -p "$state_dir"
+
+base="${GATE_BASE:-origin/main}"
+merge_base="$(git merge-base "$base" HEAD 2>/dev/null)" || exit 0
+
+# Nothing to check when the branch and working tree match the base.
+if [ "$(git rev-parse HEAD)" = "$merge_base" ] && [ -z "$(git status --porcelain)" ]; then
+  exit 0
+fi
+
+fingerprint() {
+  {
+    git rev-parse HEAD
+    git diff HEAD
+    git ls-files --others --exclude-standard -z | xargs -0 -r sha256sum
+  } | sha256sum | cut -d' ' -f1
+}
+
+current="$(fingerprint)"
+if [ -f "$state.passed" ] && [ "$(cat "$state.passed")" = "$current" ]; then
+  exit 0
+fi
+
+log="$(mktemp)"
+trap 'rm -f "$log"' EXIT
+if scripts/quality/gate >"$log" 2>&1; then
+  echo "$current" >"$state.passed"
+  rm -f "$state.failures" "$state.last"
+  exit 0
+fi
+
+# Compare failures without timings, so the same failure hashes the same.
+failure="$(grep -v '^gate: ok' "$log" | sed -E 's/\([0-9.]+s\)//g; s/[0-9]+\.[0-9]+s//g' | sha256sum | cut -d' ' -f1)"
+failures=$(($(cat "$state.failures" 2>/dev/null || echo 0) + 1))
+same=1
+if [ -f "$state.last" ]; then
+  read -r last_hash last_count <"$state.last"
+  if [ "$last_hash" = "$failure" ]; then same=$((last_count + 1)); fi
+fi
+
+if [ "$same" -ge "$MAX_SAME_FAILURES" ] || [ "$failures" -ge "$MAX_FAILURES" ]; then
+  rm -f "$state.failures" "$state.last"
+  reason="$(grep -E 'gate: FAIL' "$log" | tail -1 | cut -c1-160)"
+  jq -n --arg msg "Quality gate still failing after $failures attempts, so a human needs to look. Do not merge this work. Last result: $reason. Run make gate to see it." \
+    '{systemMessage: $msg}'
+  exit 0
+fi
+
+echo "$failures" >"$state.failures"
+echo "$failure $same" >"$state.last"
+{
+  tail -n 60 "$log"
+  echo "The quality gate failed (attempt $failures), so this work is not done. Fix the root cause and finish again."
+} >&2
+exit 2

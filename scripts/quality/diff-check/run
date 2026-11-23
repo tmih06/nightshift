@@ -19,4 +19,8 @@ if ! git cat-file -e "$merge_base:scripts/quality/diff-check/main.go" 2>/dev/nul
   touch "$dir/bootstrap"
 fi
 
+if [ "${1:-}" = "--prepare" ]; then
+  exit 0
+fi
+
 GATE_DIFF_DIR="$dir" go run ./scripts/quality/diff-check
