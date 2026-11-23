@@ -36,8 +36,8 @@ are reported apart: its numbers would otherwise hide the code this team writes.
 
 ## 3. Baseline before any change
 
-Measured on a 4-core arm64 host with `KUBECONFIG` unset, so no test reached the
-live cluster.
+Measured on a 4-core arm64 host with `KUBECONFIG` pointed at a missing file, so
+no test reached the live cluster.
 
 | Check | Result | Duration |
 | --- | --- | --- |
