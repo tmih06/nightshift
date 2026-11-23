@@ -7,20 +7,25 @@ runs as the unprivileged `node` user in `/home/node/workspace`.
 
 `images/agent` builds on that base and installs one agent at an exact version:
 
-| `AGENT` | npm package | Command |
+| `AGENT` | Installs | Command |
 | --- | --- | --- |
-| `pi` | `@earendil-works/pi-coding-agent` | `pi` |
-| `codex` | `@openai/codex` | `codex` |
-| `claude-code` | `@anthropic-ai/claude-code` | `claude` |
-| `opencode` | `opencode-ai` | `opencode` |
+| `pi` | `@earendil-works/pi-coding-agent` from npm | `pi` |
+| `codex` | `@openai/codex` from npm | `codex` |
+| `claude-code` | `@anthropic-ai/claude-code` from npm | `claude` |
+| `opencode` | `opencode-ai` from npm | `opencode` |
+| `agy` | Antigravity CLI release download, checksum-verified | `agy` |
+| `ompig-slim` | [tmih06/ompig-slim](https://github.com/tmih06/ompig-slim) release, checksum-verified | `ompig-slim` |
 
-The build verifies the agent's version by running its command. Agent packages
-may execute their npm install scripts at build time. No credentials are baked
-into the images; supply provider credentials or log in at runtime.
+The build verifies the agent's version by running its command and stamps it
+into `/etc/nightshift-agent` as `<agent> <semver>` for the dashboard to read.
+npm packages may execute their install scripts at build time; the agy and
+ompig-slim downloads are checked against the checksum each release
+publishes. No credentials are baked into the images; supply provider
+credentials or log in at runtime.
 
 ## Cluster deployment
 
-The warm pool manifest references the four published GHCR `latest` images and
+The warm pool manifest references the published GHCR `latest` images and
 keeps one warm pod per agent. Ensure the cluster can pull them, then apply:
 
 ```sh
@@ -55,13 +60,15 @@ ghcr.io/tmih06/nightshift-base:latest
 ghcr.io/tmih06/nightshift-pi:<agent-version>
 ghcr.io/tmih06/nightshift-codex:<agent-version>
 ghcr.io/tmih06/nightshift-claude-code:<agent-version>
+ghcr.io/tmih06/nightshift-agy:<agent-version>
+ghcr.io/tmih06/nightshift-ompig-slim:<agent-version>
 ghcr.io/tmih06/nightshift-opencode:<agent-version>
 ```
 
 Each agent also has a `latest` tag. The workflow checks the npm registry's
-`latest` distribution tag for each package daily, accepts only plain stable
-`major.minor.patch` versions, and builds an agent image when that version tag
-is absent. It builds only the current `latest`, not every intermediate release
+`latest` distribution tag for the npm agents and each binary agent's own
+release feed daily, accepts only plain stable `major.minor.patch` versions,
+and builds an agent image when that version tag is absent. It builds only the current `latest`, not every intermediate release
 or prerelease. A failed build is retried on the next run. Changes to image
 files on `main`, or a manual workflow dispatch on `main`, rebuild all current
 agent versions against the new base. Consequently version tags are mutable;

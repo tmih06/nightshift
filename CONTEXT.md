@@ -23,17 +23,20 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
 ## What lives here
 
 - `k8s/` holds the Kubernetes manifests and cluster scripts: `warmpool.yaml`
-  creates the namespace `nightshift` and four template/pool pairs, each keeping
-  one Pi, Codex, Claude Code, or OpenCode sandbox warm. Each pod is capped at
+  creates the namespace `nightshift` and six template/pool pairs, each keeping
+  one Pi, Codex, Claude Code, Antigravity (`agy`), OMPi slim
+  (`ompig-slim`), or OpenCode sandbox warm. Each pod is capped at
   1000m CPU and 2Gi memory. `claim.yaml` claims a Pi sandbox by default.
   `sbx.sh` wraps that loop in one command and is installed as `sbx` through
   a symlink in `~/.local/bin`. `egress.yaml` and `egress-setup.sh` deploy the
   single-pod Go egress + credential-injection proxy in the separate
   `nightshift-egress` namespace with default-deny `NetworkPolicy` enforcement.
 - `images/base/` defines the common sandbox tools and Herdr; `images/agent/`
-  adds one versioned Pi, Codex, Claude Code, or OpenCode agent; `images/egress/`
+  adds one versioned Pi, Codex, Claude Code, Antigravity, OMPi slim, or
+  OpenCode agent and stamps it into `/etc/nightshift-agent`; `images/egress/`
   builds the static distroless container for `cmd/egress-proxy`. The image
-  workflow watches stable npm releases and publishes to GHCR. Check
+  workflow watches stable npm releases and the agy and ompig-slim release
+  feeds, and publishes to GHCR. Check
   registry access before applying `k8s/warmpool.yaml`; see
   `images/agent/README.md`.
 - `cmd/nightshift` is the entrypoint of the Go program, a Bubble Tea v2

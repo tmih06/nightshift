@@ -45,26 +45,51 @@ jobs:
       matrix:
         include:
           - agent: pi
+            release: npm
             package: '@earendil-works/pi-coding-agent'
             command: pi
           - agent: codex
+            release: npm
             package: '@openai/codex'
             command: codex
           - agent: claude-code
+            release: npm
             package: '@anthropic-ai/claude-code'
             command: claude
           - agent: opencode
+            release: npm
             package: opencode-ai
             command: opencode
+          - agent: agy
+            release: agy
+            command: agy
+          - agent: ompig-slim
+            release: ompig-slim
+            command: ompig-slim
     steps:
       - uses: actions/checkout@v7
       - name: Build and smoke test
         env:
           AGENT: ${{ matrix.agent }}
+          RELEASE: ${{ matrix.release }}
           PACKAGE: ${{ matrix.package }}
           COMMAND: ${{ matrix.command }}
         run: |
-          version=$(npm view "$PACKAGE" version)
+          case "$RELEASE" in
+            npm)
+              version=$(npm view "$PACKAGE" version)
+              ;;
+            agy)
+              version=$(curl -fsSL "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_amd64.json" | jq -er .version)
+              ;;
+            ompig-slim)
+              version=$(curl -fsSL "https://api.github.com/repos/tmih06/ompig-slim/releases/latest" | jq -er '.tag_name | sub("^v";"")')
+              ;;
+            *)
+              echo "unknown release source: $RELEASE" >&2
+              exit 1
+              ;;
+          esac
           docker build -t nightshift-base:local images/base
           docker build --build-arg AGENT="$AGENT" --build-arg AGENT_VERSION="$version" -t nightshift-test images/agent
           docker run --rm nightshift-test "$COMMAND" --version

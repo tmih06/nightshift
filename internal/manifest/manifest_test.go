@@ -75,6 +75,8 @@ func TestWarmPools(t *testing.T) {
 		{"pi-pool", "pi-template", "pi", quantities{"100m", "128Mi"}, quantities{"1000m", "2Gi"}},
 		{"codex-pool", "codex-template", "codex", quantities{"100m", "128Mi"}, quantities{"1000m", "2Gi"}},
 		{"claude-code-pool", "claude-code-template", "claude-code", quantities{"100m", "128Mi"}, quantities{"1000m", "2Gi"}},
+		{"agy-pool", "agy-template", "agy", quantities{"100m", "128Mi"}, quantities{"1000m", "2Gi"}},
+		{"ompig-slim-pool", "ompig-slim-template", "ompig-slim", quantities{"100m", "128Mi"}, quantities{"1000m", "2Gi"}},
 		{"opencode-pool", "opencode-template", "opencode", quantities{"100m", "512Mi"}, quantities{"1000m", "2Gi"}},
 	}
 	if len(pools) != len(agents) || len(templates) != len(agents) {

@@ -102,6 +102,33 @@ func matchHarness(s string) (Harness, bool) {
 				{ID: "", Label: "default", Note: "harness default"},
 			},
 		}, true
+	case hasToken(low, "agy"):
+		return Harness{
+			Name:    "agy",
+			Label:   "Antigravity",
+			Command: "agy",
+			Models: []ModelOption{
+				{ID: "gemini-3.8-flash-high", Label: "gemini-3.8-flash-high", Note: "gemini"},
+				{ID: "gemini-3.8-flash-medium", Label: "gemini-3.8-flash-medium", Note: "gemini"},
+				{ID: "claude-sonnet-4-6", Label: "claude-sonnet-4-6", Note: "anthropic"},
+				{ID: "claude-opus-4-6-thinking", Label: "claude-opus-4-6-thinking", Note: "anthropic"},
+				{ID: "gpt-oss-120b-medium", Label: "gpt-oss-120b-medium", Note: "openai"},
+				{ID: "", Label: "default", Note: "harness default"},
+			},
+		}, true
+	case strings.Contains(low, "ompig"):
+		return Harness{
+			Name:    "ompig-slim",
+			Label:   "OMPi slim",
+			Command: "ompig-slim",
+			Models: []ModelOption{
+				{ID: "anthropic/claude-sonnet-5-5", Label: "anthropic/claude-sonnet-5-5", Note: "anthropic"},
+				{ID: "anthropic/claude-opus-5-5", Label: "anthropic/claude-opus-5-5", Note: "anthropic"},
+				{ID: "openai/gpt-5.3-codex", Label: "openai/gpt-5.3-codex", Note: "openai"},
+				{ID: "google/gemini-2.5-pro", Label: "google/gemini-2.5-pro", Note: "google"},
+				{ID: "", Label: "default", Note: "harness default"},
+			},
+		}, true
 	case hasToken(low, "pi"):
 		return Harness{
 			Name:    "pi",

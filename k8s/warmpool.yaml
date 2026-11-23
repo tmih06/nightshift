@@ -113,6 +113,74 @@ spec:
 apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxTemplate
 metadata:
+  name: agy-template
+  namespace: nightshift
+spec:
+  podTemplate:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: agent
+        image: ghcr.io/tmih06/nightshift-agy:latest
+        imagePullPolicy: Always
+        command: ["sleep", "infinity"]
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+---
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxWarmPool
+metadata:
+  name: agy-pool
+  namespace: nightshift
+spec:
+  updateStrategy:
+    type: Recreate
+  replicas: 1
+  sandboxTemplateRef:
+    name: agy-template
+---
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxTemplate
+metadata:
+  name: ompig-slim-template
+  namespace: nightshift
+spec:
+  podTemplate:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: agent
+        image: ghcr.io/tmih06/nightshift-ompig-slim:latest
+        imagePullPolicy: Always
+        command: ["sleep", "infinity"]
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+---
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxWarmPool
+metadata:
+  name: ompig-slim-pool
+  namespace: nightshift
+spec:
+  updateStrategy:
+    type: Recreate
+  replicas: 1
+  sandboxTemplateRef:
+    name: ompig-slim-template
+---
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxTemplate
+metadata:
   name: opencode-template
   namespace: nightshift
 spec:

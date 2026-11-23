@@ -57,13 +57,21 @@ jobs:
       matrix:
         include:
           - agent: pi
+            release: npm
             package: '@earendil-works/pi-coding-agent'
           - agent: codex
+            release: npm
             package: '@openai/codex'
           - agent: claude-code
+            release: npm
             package: '@anthropic-ai/claude-code'
           - agent: opencode
+            release: npm
             package: opencode-ai
+          - agent: agy
+            release: agy
+          - agent: ompig-slim
+            release: ompig-slim
     steps:
       - uses: actions/checkout@v7
       - name: Find the latest stable release
@@ -71,9 +79,24 @@ jobs:
         env:
           PACKAGE: ${{ matrix.package }}
           AGENT: ${{ matrix.agent }}
+          RELEASE: ${{ matrix.release }}
           REPOSITORY: ${{ github.repository }}
         run: |
-          version=$(curl --fail --silent --show-error --retry 3 "https://registry.npmjs.org/${PACKAGE}/latest" | jq -er '.version')
+          case "$RELEASE" in
+            npm)
+              version=$(curl --fail --silent --show-error --retry 3 "https://registry.npmjs.org/${PACKAGE}/latest" | jq -er '.version')
+              ;;
+            agy)
+              version=$(curl --fail --silent --show-error --retry 3 "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_amd64.json" | jq -er '.version')
+              ;;
+            ompig-slim)
+              version=$(curl --fail --silent --show-error --retry 3 "https://api.github.com/repos/tmih06/ompig-slim/releases/latest" | jq -er '.tag_name | sub("^v";"")')
+              ;;
+            *)
+              echo "unknown release source: $RELEASE" >&2
+              exit 1
+              ;;
+          esac
           if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Refusing non-stable version: $version" >&2
             exit 1

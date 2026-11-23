@@ -21,16 +21,20 @@ flowchart LR
   Pi[Pi pool: 1 warm] -->|restocks| Claim
   Codex[Codex pool: 1 warm] -->|restocks| Claim
   Claude[Claude Code pool: 1 warm] -->|restocks| Claim
+  Agy[Antigravity pool: 1 warm] -->|restocks| Claim
+  Ompig[OMPi slim pool: 1 warm] -->|restocks| Claim
   OpenCode[OpenCode pool: 1 warm] -->|restocks| Claim
 ```
 
-`k8s/warmpool.yaml` defines four templates and pools, each with one standby:
+`k8s/warmpool.yaml` defines six templates and pools, each with one standby:
 
 | Agent | Pool | Template | Image |
 | --- | --- | --- | --- |
 | Pi | `pi-pool` | `pi-template` | `ghcr.io/tmih06/nightshift-pi:latest` |
 | Codex | `codex-pool` | `codex-template` | `ghcr.io/tmih06/nightshift-codex:latest` |
 | Claude Code | `claude-code-pool` | `claude-code-template` | `ghcr.io/tmih06/nightshift-claude-code:latest` |
+| Antigravity | `agy-pool` | `agy-template` | `ghcr.io/tmih06/nightshift-agy:latest` |
+| OMPi slim | `ompig-slim-pool` | `ompig-slim-template` | `ghcr.io/tmih06/nightshift-ompig-slim:latest` |
 | OpenCode | `opencode-pool` | `opencode-template` | `ghcr.io/tmih06/nightshift-opencode:latest` |
 
 Every pod requests 100m CPU and is
@@ -44,9 +48,10 @@ and the limits of this budget.
 
 Select a warm sandbox in the dashboard and press `c` to claim its pool. When
 no warm sandbox is selected, `c` defaults to Pi. Alternatively, `sbx` defaults
-to Pi and accepts `POOL=codex-pool`, `POOL=claude-code-pool`, or
-`POOL=opencode-pool`; `k8s/claim.yaml` is a Pi example. A claim adopts any
-available sandbox in the chosen pool, not necessarily the exact selected pod.
+to Pi and accepts `POOL=codex-pool`, `POOL=claude-code-pool`, `POOL=agy-pool`,
+`POOL=ompig-slim-pool`, or `POOL=opencode-pool`; `k8s/claim.yaml` is a Pi
+example. A claim adopts any available sandbox in the chosen pool, not
+necessarily the exact selected pod.
 The controller replenishes that pool. Deleting a claim destroys its sandbox
 and pod because its shutdown policy is `Delete`.
 
