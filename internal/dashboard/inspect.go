@@ -16,39 +16,54 @@ func (m model) inspectPageSize() int {
 }
 
 func (m *model) refreshInspectCache() {
-	if !m.isWarmSelected() {
+	if !m.showingDocPane() {
 		m.inspect = inspectCache{}
 		return
 	}
 	innerW := max(m.layout().docW, 1)
-	if m.inspect.lines != nil && m.inspect.pod == m.selected && m.inspect.width == innerW && m.inspect.rev == m.dataRev {
+	mode := m.effectivePane()
+	if m.inspect.lines != nil && m.inspect.pod == m.selected && m.inspect.mode == mode &&
+		m.inspect.width == innerW && m.inspect.rev == m.dataRev && m.inspect.logRev == m.logRev {
 		return
 	}
 	m.inspect = inspectCache{
-		pod:   m.selected,
-		width: innerW,
-		rev:   m.dataRev,
-		lines: m.cachedInspectLines(innerW),
+		pod:    m.selected,
+		mode:   mode,
+		width:  innerW,
+		rev:    m.dataRev,
+		logRev: m.logRev,
+		lines:  m.cachedInspectLines(innerW),
 	}
 }
 
-// cachedInspectLines returns the selected sandbox's document, rendered once
-// per sandbox, width, and fleet refresh, so moving the selection is cheap.
+// cachedInspectLines returns the selected pod's Configs or Logs document,
+// rendered once per pod, mode, width, and revision, so navigation stays fast.
 func (m model) cachedInspectLines(innerW int) []string {
-	if m.inspect.lines != nil && m.inspect.pod == m.selected && m.inspect.width == innerW && m.inspect.rev == m.dataRev {
+	mode := m.effectivePane()
+	if m.inspect.lines != nil && m.inspect.pod == m.selected && m.inspect.mode == mode &&
+		m.inspect.width == innerW && m.inspect.rev == m.dataRev && m.inspect.logRev == m.logRev {
 		return m.inspect.lines
 	}
+	cacheKey := fmt.Sprintf("%s:%d", m.selected, mode)
 	if m.inspectDocs != nil {
-		if c, ok := m.inspectDocs[m.selected]; ok && c.width == innerW && c.rev == m.dataRev {
+		if c, ok := m.inspectDocs[cacheKey]; ok && c.width == innerW && c.rev == m.dataRev && c.logRev == m.logRev {
 			return c.lines
 		}
 	}
-	lines := m.warmInspectLines(innerW)
+	var lines []string
+	if mode == paneLogs {
+		lines = m.podLogLines(innerW)
+	} else {
+		lines = m.podInspectLines(innerW)
+	}
 	if m.inspectDocs != nil {
 		if len(m.inspectDocs) > 64 {
 			clear(m.inspectDocs)
 		}
-		m.inspectDocs[m.selected] = inspectCache{pod: m.selected, width: innerW, rev: m.dataRev, lines: lines}
+		m.inspectDocs[cacheKey] = inspectCache{
+			pod: m.selected, mode: mode, width: innerW,
+			rev: m.dataRev, logRev: m.logRev, lines: lines,
+		}
 	}
 	return lines
 }
@@ -56,18 +71,33 @@ func (m model) cachedInspectLines(innerW int) []string {
 func (m *model) scrollInspect(delta int) {
 	m.refreshInspectCache()
 	maxOffset := max(len(m.inspect.lines)-m.inspectPageSize(), 0)
+	if m.effectivePane() == paneLogs {
+		if m.logFollow && delta < 0 {
+			m.inspectScroll = maxOffset
+			m.logFollow = false
+		}
+		m.inspectScroll = clamp(m.inspectScroll+delta, 0, maxOffset)
+		if delta > 0 && m.inspectScroll >= maxOffset {
+			m.logFollow = true
+		}
+		return
+	}
 	m.inspectScroll = clamp(m.inspectScroll+delta, 0, maxOffset)
 }
 
-// warmInspectView returns the visible page of the warm sandbox's document
+// docInspectView returns the visible page of the pod's Configs or Logs view
 // and the pane footer naming the position and how to focus it.
-func (m model) warmInspectView(l layout) ([]string, string) {
+func (m model) docInspectView(l layout) (lines []string, footerText string) {
 	innerW := max(l.docW, 1)
 	pageH := max(l.docH, 1)
 
 	doc := m.cachedInspectLines(innerW)
 	total := len(doc)
-	offset := clamp(m.inspectScroll, 0, max(total-pageH, 0))
+	maxOffset := max(total-pageH, 0)
+	offset := clamp(m.inspectScroll, 0, maxOffset)
+	if m.effectivePane() == paneLogs && m.logFollow {
+		offset = maxOffset
+	}
 	end := min(offset+pageH, total)
 
 	var footer []string
@@ -86,7 +116,7 @@ func (m model) warmInspectView(l layout) ([]string, string) {
 	return doc[offset:end], strings.Join(footer, " · ")
 }
 
-func (m model) warmInspectLines(width int) []string {
+func (m model) podInspectLines(width int) []string {
 	if width < 1 {
 		width = 1
 	}
@@ -94,7 +124,32 @@ func (m model) warmInspectLines(width int) []string {
 	if b == nil {
 		return []string{dim("nothing selected")}
 	}
-	return renderMarkdown(buildWarmMarkdown(m.pools[b.Owner], b), width)
+	return renderMarkdown(buildPodMarkdown(m.pools[b.Owner], b), width)
+}
+
+func (m model) warmInspectLines(width int) []string {
+	return m.podInspectLines(width)
+}
+
+func buildPodMarkdown(p cluster.Pool, b *cluster.Sandbox) string {
+	switch b.PodRole() {
+	case cluster.RoleWarm:
+		return buildWarmMarkdown(p, b)
+	case cluster.RoleEgress:
+		return buildEgressMarkdown(b)
+	default:
+		return buildGenericPodMarkdown(b)
+	}
+}
+
+func appendYAMLSection(sections *[]string, kind, name, body string) {
+	if body == "" {
+		return
+	}
+	if name != "" {
+		kind += " · " + name
+	}
+	*sections = append(*sections, "## "+kind+"\n```yaml\n"+body+"\n```")
 }
 
 func buildWarmMarkdown(p cluster.Pool, b *cluster.Sandbox) string {
@@ -114,20 +169,67 @@ func buildWarmMarkdown(p cluster.Pool, b *cluster.Sandbox) string {
 	intro.WriteString("\nPress `c` to claim a warm sandbox and start its bash.")
 	sections = append(sections, intro.String())
 
-	addYAML := func(kind, name, body string) {
-		if body == "" {
-			return
-		}
-		if name != "" {
-			kind += " · " + name
-		}
-		sections = append(sections, "## "+kind+"\n```yaml\n"+body+"\n```")
-	}
-	addYAML("SandboxTemplate", p.Template, p.TemplateYAML)
-	addYAML("SandboxWarmPool", p.Name, p.ManifestYAML)
-	addYAML("Sandbox", b.Name, b.ManifestYAML)
-	addYAML("Pod", b.Name, b.PodYAML)
+	appendYAMLSection(&sections, "SandboxTemplate", p.Template, p.TemplateYAML)
+	appendYAMLSection(&sections, "SandboxWarmPool", p.Name, p.ManifestYAML)
+	appendYAMLSection(&sections, "Sandbox", b.Name, b.ManifestYAML)
+	appendYAMLSection(&sections, "Pod", b.Name, b.PodYAML)
 
+	return strings.Join(sections, "\n\n---\n\n")
+}
+
+func buildEgressMarkdown(b *cluster.Sandbox) string {
+	var sections []string
+	var intro strings.Builder
+	fmt.Fprintf(&intro, "# %s · egress proxy\n", b.Name)
+	fmt.Fprintf(&intro, "- **namespace** `%s`\n", b.EffectiveNamespace())
+	if b.PodIP != "" {
+		fmt.Fprintf(&intro, "- **pod IP** `%s`\n", b.PodIP)
+	}
+	if len(b.Ports) > 0 {
+		fmt.Fprintf(&intro, "- **ports** `%s`\n", strings.Join(b.Ports, ", "))
+	}
+	if b.Image != "" {
+		fmt.Fprintf(&intro, "- **image** `%s`\n", b.Image)
+	}
+	intro.WriteString("\nHolds real API/GitHub credentials outside sandboxes and enforces default-deny egress rules. Switch to `Logs` (`L`) to inspect live ALLOW/DENY audit events.")
+	sections = append(sections, intro.String())
+
+	if b.ExtraYAML != "" {
+		sections = append(sections, b.ExtraYAML)
+	}
+	appendYAMLSection(&sections, "Pod", b.Name, b.PodYAML)
+	return strings.Join(sections, "\n\n---\n\n")
+}
+
+func buildGenericPodMarkdown(b *cluster.Sandbox) string {
+	sections := make([]string, 0, 3)
+	kind, _ := kindName(b)
+	var intro strings.Builder
+	fmt.Fprintf(&intro, "# %s · %s\n", b.Name, strings.ToLower(kind))
+	fmt.Fprintf(&intro, "- **namespace** `%s`\n", b.EffectiveNamespace())
+	if b.Owner != "" {
+		owner := b.Owner
+		if b.OwnerKind != "" {
+			owner = b.OwnerKind + "/" + owner
+		}
+		fmt.Fprintf(&intro, "- **owner** `%s`\n", owner)
+	}
+	if b.PodIP != "" {
+		fmt.Fprintf(&intro, "- **pod IP** `%s`\n", b.PodIP)
+	}
+	if b.NodeName != "" {
+		fmt.Fprintf(&intro, "- **node** `%s`\n", b.NodeName)
+	}
+	if b.Image != "" {
+		fmt.Fprintf(&intro, "- **image** `%s`\n", b.Image)
+	}
+	if len(b.Ports) > 0 {
+		fmt.Fprintf(&intro, "- **ports** `%s`\n", strings.Join(b.Ports, ", "))
+	}
+	sections = append(sections, intro.String())
+
+	appendYAMLSection(&sections, "Sandbox", b.Name, b.ManifestYAML)
+	appendYAMLSection(&sections, "Pod", b.Name, b.PodYAML)
 	return strings.Join(sections, "\n\n---\n\n")
 }
 

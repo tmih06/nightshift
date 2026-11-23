@@ -37,7 +37,7 @@ const (
 )
 
 var tabLabels = [...]string{
-	TabSandboxes: "Sandboxes",
+	TabSandboxes: "Pods",
 	TabGitHub:    "GitHub",
 }
 

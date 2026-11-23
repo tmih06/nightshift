@@ -575,9 +575,10 @@ func elapsed(d time.Duration) string {
 // focusCheckout shows pod's shell, in the clone, in the All section if pod's
 // section would hide it.
 func (m model) focusCheckout(pod string, c Checkout) (Model, tea.Cmd) {
-	if m.section == sectionWarm {
+	if m.section == sectionWarm || m.section == sectionInfra {
 		m.section = sectionAll
 	}
+	m.sidebarMode = paneShell
 	m.focus = focusShell
 	m.prefix = false
 	if summary := c.harnessSummary(); summary != "" {
@@ -585,5 +586,6 @@ func (m model) focusCheckout(pod string, c Checkout) (Model, tea.Cmd) {
 	} else {
 		m.flash(c.String() + " is in " + c.MountPath() + " — C-b q leaves bash")
 	}
-	return m, tea.Batch(fetchCmd(m.agentVersions), m.watchShell())
+	cmd := m.watchShell()
+	return m, tea.Batch(fetchCmd(m.agentVersions), cmd)
 }

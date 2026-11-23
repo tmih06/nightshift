@@ -106,3 +106,30 @@ func useTheme(t ghtheme.Theme) {
 }
 
 func dim(s string) string { return dimStyle.Render(s) }
+
+func egressAccentColor() color.Color { return styles.Colors.MergedPR }
+func systemAccentColor() color.Color { return th.WarningText }
+
+func egressTextStyle() lipgloss.Style { return lipgloss.NewStyle().Foreground(egressAccentColor()) }
+func groupHeadTextStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Bold(true).Foreground(th.FaintText)
+}
+
+func subTabTextStyle(active, focused bool) lipgloss.Style {
+	if !active {
+		return lipgloss.NewStyle().Foreground(th.FaintText)
+	}
+	fg := th.PrimaryText
+	if focused {
+		fg = th.SuccessText
+	}
+	return lipgloss.NewStyle().Bold(true).Underline(true).Foreground(fg)
+}
+
+func logActionStyle(deny bool) lipgloss.Style {
+	fg := th.SuccessText
+	if deny {
+		fg = th.ErrorText
+	}
+	return lipgloss.NewStyle().Foreground(fg).Bold(true)
+}

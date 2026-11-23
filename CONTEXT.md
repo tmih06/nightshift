@@ -75,7 +75,7 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
 
 ## The dashboard
 
-- A view switcher runs across the top in gh-dash's footer style: Sandboxes,
+- A view switcher runs across the top in gh-dash's footer style: Pods,
   with its count, and GitHub, the active one bold with a green icon,
   and the NIGHTSHIFT logo in the corner. `tab` and `shift+tab` cycle the
   tabs, and a click on a tab opens it. While a tab holds the keyboard for text
@@ -146,21 +146,31 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
   kept volume with its work (switching to the requested branch on an issue or
   repository), or returns to the sandbox already on it. The image carries no
   `gh` and no credentials, so the clone only reaches public repositories.
-- The Sandboxes tab is laid out like gh-dash and painted from gh-dash's
-  theme. Section tabs (All, Warm, Claimed; `h`/`l` or a click) sit over a
-  table with gh-dash's header row, two lines per sandbox (node and owner,
-  then name), its template, a session dot, CPU and memory with braille history,
-  and age (at narrower widths the session dot moves under the template and
-  age hides),
-  each row ruled off and the selection highlighted. On the right, behind one
-  rule, the preview sidebar heads the sandbox like a pull request, without
-  gh-dash's blank rows around the title (namespace
-  and owner, the name block, a Warm or Claimed pill with phase, node, and
-  age, its usage as a two-row table with fixed columns or its spec, the Herdr session), then shows the shell for a
-  claimed sandbox or the configs and manifests for a warm one. The footer
-  bar carries key hints and the update time and position, or the latest
-  message. `?` opens the full key list under the footer, as it does in
-  gh-dash.
+- The Pods tab is laid out like gh-dash and painted from gh-dash's
+  theme. Section tabs (`All`, `Claimed`, `Warm`, `Infra`; `h`/`l` or a click)
+  sit over a grouped table showing Nightshift's essential cluster pods:
+  claimed sandboxes, warm pool standbys, the `nightshift-egress` proxy pod,
+  core cluster pods (`agent-sandbox-controller`, `metrics-server`,
+  `local-path-provisioner`), and transient clone Jobs. The right side of the
+  section bar summarizes running pods and egress proxy health. In `All` and
+  `Infra`, pods are grouped under compact headings (`CLAIMED`, `WARM POOLS`,
+  `EGRESS PROXY`, `CLUSTER CORE`, `JOBS & OTHER`). Each pod row shows a role
+  icon and live health dot, the pod name and role-aware subtitle (session
+  count/owner/template/version or namespace/IP/readiness/restarts), state and
+  readiness (at medium/wide widths), CPU and memory with braille history, and
+  age (at wide widths). On the right, behind one rule, the preview sidebar
+  heads the pod (namespace and owner, pod name, role pill with phase,
+  readiness, restarts, Pod IP/node, and age, live CPU/MEM usage table, image
+  and ports/volume spec, and for claimed sandboxes the Herdr session and
+  window tab bar), followed by clickable sidebar view tabs (`Shell`, `Logs`,
+  `Configs`; `v` cycles views, `L` jumps to Logs). Claimed sandboxes default
+  to `Shell`, warm sandboxes default to `Configs` (pool, template, sandbox,
+  and pod YAML), and egress/core/job pods default to `Logs` (formatting
+  `egress-proxy` JSON audit events into colorized `ALLOW`/`DENY` lines, while
+  `Configs` shows the `egress-policy` ConfigMap, `Service`, `NetworkPolicy`,
+  and `Pod` YAML). The footer bar carries key hints and the update time and
+  position, or the latest message. `?` opens the full key list under the
+  footer, as it does in gh-dash.
 - The sidebar takes half the width and resizes by dragging its rule. Under
   90 columns it moves under the table, as gh-dash's bottom preview does.
 - Usage refreshes every 2 seconds. A claimed sandbox's numbers come from its

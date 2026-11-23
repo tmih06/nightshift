@@ -119,7 +119,7 @@ func TestTheBarIsGhDashsViewSwitcher(t *testing.T) {
 	if len(rows) != 40 {
 		t.Fatalf("frame is %d rows, want 40", len(rows))
 	}
-	for _, want := range []string{"Sandboxes", "GitHub", "NIGHTSHIFT", "│"} {
+	for _, want := range []string{"Pods", "GitHub", "NIGHTSHIFT", "│"} {
 		if !strings.Contains(rows[0], want) {
 			t.Errorf("bar %q is missing %q", rows[0], want)
 		}

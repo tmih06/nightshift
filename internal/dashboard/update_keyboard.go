@@ -13,31 +13,54 @@ func (m model) updateKeyboard(msg tea.KeyPressMsg) (model, tea.Cmd) {
 		return m, tea.Quit
 	case "up", "k":
 		m.moveSelection(-1)
+		cmd := m.maybeFetchLogs()
+		return m, cmd
 	case "down", "j":
 		m.moveSelection(1)
+		cmd := m.maybeFetchLogs()
+		return m, cmd
 	case "h", "left", "[":
 		m.setSection(m.section - 1)
+		cmd := m.maybeFetchLogs()
+		return m, cmd
 	case "l", "right", "]":
 		m.setSection(m.section + 1)
+		cmd := m.maybeFetchLogs()
+		return m, cmd
 	case "g":
 		if order := m.navigationIndices(); len(order) > 0 {
 			m.selectPod(m.boxes[order[0]].Name)
+			cmd := m.maybeFetchLogs()
+			return m, cmd
 		}
 	case "G":
 		if order := m.navigationIndices(); len(order) > 0 {
 			m.selectPod(m.boxes[order[len(order)-1]].Name)
+			cmd := m.maybeFetchLogs()
+			return m, cmd
 		}
+	case "v":
+		cmd := m.cycleSidebarMode()
+		return m, cmd
+	case "L":
+		cmd := m.setSidebarMode(paneLogs)
+		return m, cmd
 	case "r":
 		m.status, m.statusTTL = "", 0
-		return m, fetchCmd(m.agentVersions)
+		cmds := []tea.Cmd{fetchCmd(m.agentVersions)}
+		if logCmd := m.maybeFetchLogs(); logCmd != nil {
+			cmds = append(cmds, logCmd)
+		}
+		return m, tea.Batch(cmds...)
 	case "c":
 		pool := m.claimPool()
 		m.flash("claiming from " + pool + "…")
 		return m, claimCmd(pool)
 	case "enter":
-		if m.isWarmSelected() {
-			m.focusWarmInspect()
-			return m, nil
+		if m.showingDocPane() {
+			m.focusDocPane()
+			cmd := m.maybeFetchLogs()
+			return m, cmd
 		}
 		fallthrough
 	case "b":
@@ -45,14 +68,19 @@ func (m model) updateKeyboard(msg tea.KeyPressMsg) (model, tea.Cmd) {
 		if b == nil {
 			return m, nil
 		}
-		if !b.Claimed() {
+		if b.Warm() {
 			m.flash("warm pool sandbox — claim it with c, bash starts with the claim")
+			return m, nil
+		}
+		if !b.Claimed() {
+			m.flash("infra pod — view logs or configs with enter")
 			return m, nil
 		}
 		if b.Phase != "Running" {
 			m.flash("pod is " + b.Phase + ", no bash to enter")
 			return m, nil
 		}
+		m.sidebarMode = paneShell
 		m.flash("starting bash in " + b.Name)
 		return m, attachCmd(b.Name)
 	case "F":
@@ -60,8 +88,12 @@ func (m model) updateKeyboard(msg tea.KeyPressMsg) (model, tea.Cmd) {
 		if b == nil || b.Phase != "Running" {
 			return m, nil
 		}
-		if !b.Claimed() {
+		if b.Warm() {
 			m.flash("warm pool sandbox — claim it with c first")
+			return m, nil
+		}
+		if !b.Claimed() {
+			m.flash("only a claimed sandbox can open fullscreen bash")
 			return m, nil
 		}
 		m.flash("opening fullscreen bash, detach with Ctrl-\\")
@@ -88,7 +120,7 @@ func (m model) updateKeyboard(msg tea.KeyPressMsg) (model, tea.Cmd) {
 }
 
 func (m model) updateInspectKeys(msg tea.KeyPressMsg) (model, tea.Cmd) {
-	if !m.isWarmSelected() {
+	if !m.showingDocPane() {
 		m.focus = focusNav
 		return m, nil
 	}
@@ -109,9 +141,16 @@ func (m model) updateInspectKeys(msg tea.KeyPressMsg) (model, tea.Cmd) {
 	case "pgdown", "ctrl+d":
 		m.scrollInspect(page)
 	case "g", "home":
+		m.logFollow = false
 		m.inspectScroll = 0
 	case "G", "end":
 		m.scrollInspect(1 << 20)
+	case "v":
+		cmd := m.cycleSidebarMode()
+		return m, cmd
+	case "L":
+		cmd := m.setSidebarMode(paneLogs)
+		return m, cmd
 	case "c":
 		m.focus = focusNav
 		pool := m.claimPool()
@@ -119,7 +158,11 @@ func (m model) updateInspectKeys(msg tea.KeyPressMsg) (model, tea.Cmd) {
 		return m, claimCmd(pool)
 	case "r":
 		m.status, m.statusTTL = "", 0
-		return m, fetchCmd(m.agentVersions)
+		cmds := []tea.Cmd{fetchCmd(m.agentVersions)}
+		if logCmd := m.maybeFetchLogs(); logCmd != nil {
+			cmds = append(cmds, logCmd)
+		}
+		return m, tea.Batch(cmds...)
 	}
 	return m, nil
 }

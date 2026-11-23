@@ -38,14 +38,14 @@ func baseModel() model {
 		loaded: true, width: 140, height: 30}
 }
 
-// The table draws gh-dash's header and two lines plus a rule per sandbox.
+// The table draws gh-dash's header, group dividers, and two lines plus a rule per pod.
 func TestLeftLinesTree(t *testing.T) {
 	m := baseModel()
 	m.sessions["agent-pool-bkl2p"] = true
 	l := m.layout()
 	table := m.tableView(l)
 	plain := ansi.Strip(strings.Join(table, "\n"))
-	for _, want := range []string{"Sandbox", "CPU", "MEM", "agent-pool-5ss7w", "agent-pool-bkl2p", "unassigned · my-ag…", "2m/500m", "6Mi/256Mi"} {
+	for _, want := range []string{"Pod", "CPU", "MEM", "CLAIMED (1)", "WARM POOLS (2)", "agent-pool-5ss7w", "agent-pool-bkl2p", "my-agent", "2m/500m", "6Mi/256Mi"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("table missing %q:\n%s", want, plain)
 		}
@@ -67,20 +67,21 @@ func TestLeftLinesTree(t *testing.T) {
 		t.Errorf("dead session row = %q, want ○", rows[warm])
 	}
 	if !strings.Contains(rows[claimed+2], "───") {
-		t.Errorf("row under a sandbox = %q, want gh-dash's separator", rows[claimed+2])
+		t.Errorf("row under a pod = %q, want gh-dash's separator", rows[claimed+2])
 	}
 }
 
-func TestTemplateColumn(t *testing.T) {
+func TestTemplateSubtitle(t *testing.T) {
 	for _, width := range []int{68, 100} {
 		m := baseModel()
 		m.boxes[0].Template = "pi-template"
 		m.boxes[1].Template = "claude-code-template"
 		m.boxes[2].Template = "opencode-template"
-		for i, want := range []string{"pi-template", "claude-code-template", "opencode-template"} {
+		wants := []string{"pi-template", "claude-code-template", "opencode"}
+		for i, want := range wants {
 			row := m.renderRow(i, width, false)
-			if !strings.Contains(ansi.Strip(row[0]), want) {
-				t.Errorf("width %d row %d missing template %q: %s", width, i, want, ansi.Strip(row[0]))
+			if !strings.Contains(ansi.Strip(row[1]), want) {
+				t.Errorf("width %d row %d missing template %q: %s", width, i, want, ansi.Strip(row[1]))
 			}
 			for _, line := range row {
 				if ansi.StringWidth(line) != width+1 {
@@ -88,8 +89,8 @@ func TestTemplateColumn(t *testing.T) {
 				}
 			}
 		}
-		if !strings.Contains(ansi.Strip(m.tableHeader(width)), "Template") {
-			t.Errorf("width %d missing Template header", width)
+		if !strings.Contains(ansi.Strip(m.tableHeader(width)), "Pod") {
+			t.Errorf("width %d missing Pod header", width)
 		}
 	}
 }
@@ -179,19 +180,20 @@ func TestNodeTreeOrderingAndNavigation(t *testing.T) {
 	for _, i := range m.navigationIndices() {
 		order = append(order, m.boxes[i].Name)
 	}
-	want := []string{"agent-pool-lqbmx", "agent-pool-5ss7w", "agent-pool-bkl2p"}
+	// Claimed group appears first, then Warm sorted by node and name.
+	want := []string{"agent-pool-bkl2p", "agent-pool-lqbmx", "agent-pool-5ss7w"}
 	if strings.Join(order, ",") != strings.Join(want, ",") {
 		t.Fatalf("order = %v, want %v", order, want)
 	}
 
-	m.selected = "agent-pool-lqbmx"
+	m.selected = "agent-pool-bkl2p"
+	m.moveSelection(1)
+	if m.selected != "agent-pool-lqbmx" {
+		t.Errorf("j moved to %q, want node-a's warm sandbox", m.selected)
+	}
 	m.moveSelection(1)
 	if m.selected != "agent-pool-5ss7w" {
 		t.Errorf("j moved to %q, want node-b's warm sandbox", m.selected)
-	}
-	m.moveSelection(1)
-	if m.selected != "agent-pool-bkl2p" {
-		t.Errorf("j moved to %q, want the claimed sandbox", m.selected)
 	}
 	m = m.clickTable(5, rowOf(t, m, "agent-pool-lqbmx")+1)
 	if m.selected != "agent-pool-lqbmx" {
@@ -203,26 +205,26 @@ func TestNodeTreeOrderingAndNavigation(t *testing.T) {
 func TestSectionsFilterTheTable(t *testing.T) {
 	m := baseModel()
 	tabs := ansi.Strip(m.tabsView())
-	for _, want := range []string{"All (3)", "Warm (2)", "Claimed (1)", "ns nightshift", "━"} {
+	for _, want := range []string{"All (3)", "Claimed (1)", "Warm (2)", "Infra (0)", "3/3 running", "━"} {
 		if !strings.Contains(tabs, want) {
 			t.Errorf("section tabs %q missing %q", tabs, want)
 		}
 	}
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
-	if next.section != sectionWarm || len(next.navigationIndices()) != 2 || next.selected != "agent-pool-5ss7w" {
+	if next.section != sectionClaimed || len(next.navigationIndices()) != 1 || next.selected != "agent-pool-bkl2p" {
 		t.Errorf("l = section %d, %d rows, selected %q", next.section, len(next.navigationIndices()), next.selected)
-	}
-	next, _ = next.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
-	if next.section != sectionClaimed || next.selected != "agent-pool-bkl2p" {
-		t.Errorf("second l = section %d, selected %q; want claimed and its sandbox", next.section, next.selected)
 	}
 	if plain := ansi.Strip(strings.Join(next.tableView(next.layout()), "\n")); strings.Contains(plain, "agent-pool-5ss7w") {
 		t.Error("the claimed section still lists a warm sandbox")
 	}
+	next, _ = next.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
+	if next.section != sectionWarm || len(next.navigationIndices()) != 2 || next.selected != "agent-pool-5ss7w" {
+		t.Errorf("second l = section %d, %d rows, selected %q; want warm", next.section, len(next.navigationIndices()), next.selected)
+	}
 	next, _ = next.Update(tea.KeyPressMsg{Code: 'h', Text: "h"})
-	if next.section != sectionWarm {
-		t.Errorf("h = section %d, want warm", next.section)
+	if next.section != sectionClaimed {
+		t.Errorf("h = section %d, want claimed", next.section)
 	}
 
 	// A click on a section tab opens it.
@@ -234,7 +236,7 @@ func TestSectionsFilterTheTable(t *testing.T) {
 	empty := baseModel()
 	empty.boxes = empty.boxes[:2]
 	empty.setSection(sectionClaimed)
-	if plain := ansi.Strip(strings.Join(empty.tableView(empty.layout()), "\n")); !strings.Contains(plain, "No claimed sandboxes") {
+	if plain := ansi.Strip(strings.Join(empty.tableView(empty.layout()), "\n")); !strings.Contains(plain, "No claimed pods") {
 		t.Errorf("empty section = %q", plain)
 	}
 }
@@ -380,13 +382,13 @@ func TestBrailleGraph(t *testing.T) {
 func TestUsageCells(t *testing.T) {
 	plain := func(c [2]string) string { return ansi.Strip(c[0] + "|" + c[1]) }
 	same := func(s lipgloss.Style) lipgloss.Style { return s }
-	if got := plain(usageCell(true, 250, 500, "m", []float64{0, 0.5, 1}, same)); !strings.Contains(got, "250m/500m") || !strings.Contains(got, "50%") {
+	if got := plain(usageCell(usageRow{usage: 250, limit: 500, unit: "m", hist: []float64{0, 0.5, 1}}, true, same)); !strings.Contains(got, "250m/500m") || !strings.Contains(got, "50%") {
 		t.Errorf("usage cell = %q", got)
 	}
-	if got := plain(usageCell(false, 0, 256, "Mi", nil, same)); !strings.Contains(got, "--/256Mi") || !strings.Contains(got, "·") {
+	if got := plain(usageCell(usageRow{usage: 0, limit: 256, unit: "Mi"}, false, same)); !strings.Contains(got, "--/256Mi") || !strings.Contains(got, "·") {
 		t.Errorf("unknown usage cell = %q", got)
 	}
-	if got := plain(usageCell(true, 4, 0, "m", nil, same)); !strings.Contains(got, "no limit") {
+	if got := plain(usageCell(usageRow{usage: 4, limit: 0, unit: "m"}, true, same)); !strings.Contains(got, "4m") || !strings.Contains(got, "no limit") {
 		t.Errorf("limitless cell = %q", got)
 	}
 }
@@ -558,11 +560,11 @@ func TestUpdateMessages(t *testing.T) {
 	// nearest entry instead of pointing at whatever shuffled into its
 	// old index.
 	short := m
-	short.selected = "agent-pool-bkl2p" // index 2, destroyed
+	short.selected = "agent-pool-bkl2p" // position 0 in All (Claimed group), destroyed
 	shrunk := append([]cluster.Sandbox{}, m.boxes[0], m.boxes[1])
 	newM, _ := short.Update(loadedMsg{boxes: shrunk, sessions: map[string]bool{}})
-	if newM.selected != "agent-pool-lqbmx" {
-		t.Errorf("selection after shrink = %q, want the neighbor agent-pool-lqbmx", newM.selected)
+	if newM.selected != "agent-pool-5ss7w" {
+		t.Errorf("selection after shrink = %q, want the neighbor agent-pool-5ss7w", newM.selected)
 	}
 
 	newM, _ = m.Update(claimMsg{err: errFixture})
@@ -591,10 +593,10 @@ func TestViewFrame(t *testing.T) {
 	m.sessions["agent-pool-5ss7w"] = true
 	got := m.plainView()
 	for _, want := range []string{
-		"All (3)", "Warm (2)", "Claimed (1)", "Sandbox", "CPU", "MEM",
+		"All (3)", "Claimed (1)", "Warm (2)", "Infra (0)", "Pod", "CPU", "MEM",
 		"nightshift · agent-pool", "agent-pool-5ss7w", "Warm", "● Running", "herdr live",
-		"debian:12-slim", "cpu 100/500m", "mem 128Mi/256Mi", "Configs",
-		"agent-pool-lqbmx", "agent-pool-bkl2p", "Sandbox 1/3",
+		"debian:12-slim", "cpu 100/500m", "mem 128Mi/256Mi", "Configs", "Logs",
+		"agent-pool-lqbmx", "agent-pool-bkl2p", "Pod 2/3",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("view missing %q", want)
@@ -639,7 +641,7 @@ func TestViewStates(t *testing.T) {
 
 	m = baseModel()
 	m.boxes = nil
-	if got := m.plainView(); !strings.Contains(got, "No sandboxes") {
+	if got := m.plainView(); !strings.Contains(got, "No pods") {
 		t.Errorf("empty view = %q", got)
 	}
 
@@ -681,11 +683,11 @@ func TestAgeString(t *testing.T) {
 func TestMoveSelectionClamps(t *testing.T) {
 	m := baseModel()
 	m.moveSelection(-5)
-	if m.selected != "agent-pool-5ss7w" {
+	if m.selected != "agent-pool-bkl2p" {
 		t.Errorf("selected = %q above the top, want the first entry", m.selected)
 	}
 	m.moveSelection(99)
-	if m.selected != "agent-pool-bkl2p" {
+	if m.selected != "agent-pool-lqbmx" {
 		t.Errorf("selected = %q below the bottom, want the last entry", m.selected)
 	}
 	empty := model{}
@@ -1078,13 +1080,16 @@ func TestAttachFocusesShellInsteadOfFullscreen(t *testing.T) {
 
 var errFixture = errors.New("cluster unreachable")
 
-// rowOf is the frame row of the first line of the named sandbox's table row.
+// rowOf is the frame row of the first line of the named pod's table row.
 func rowOf(t *testing.T, m model, name string) int {
 	t.Helper()
 	l := m.layout()
-	for pos, i := range m.navigationIndices() {
-		if m.boxes[i].Name == name {
-			return l.bodyTop + tableHeaderH + (pos-m.tableOffset(l))*itemH
+	entries := m.tableEntries()
+	starts, _ := entryLineStarts(entries)
+	offset := m.tableLineOffset(entries, l)
+	for i, e := range entries {
+		if !e.isHeading && m.boxes[e.boxIdx].Name == name {
+			return l.bodyTop + tableHeaderH + starts[i] - offset
 		}
 	}
 	t.Fatalf("%s is not in the table", name)

@@ -15,7 +15,7 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		if m.isWarmSelected() {
+		if m.showingDocPane() {
 			m.refreshInspectCache()
 			m.scrollInspect(0)
 		}
@@ -44,7 +44,32 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 		}
 		return m.updateMouse(msg)
 	case tickMsg:
-		return m, tea.Batch(fetchCmd(m.agentVersions), tickCmd())
+		cmds := []tea.Cmd{fetchCmd(m.agentVersions), tickCmd()}
+		if logCmd := m.maybeFetchLogs(); logCmd != nil {
+			cmds = append(cmds, logCmd)
+		}
+		return m, tea.Batch(cmds...)
+	case logsMsg:
+		if m.loadingLogs == msg.pod {
+			m.loadingLogs = ""
+		}
+		if m.logs == nil {
+			m.logs = map[string]string{}
+		}
+		if m.logErr == nil {
+			m.logErr = map[string]string{}
+		}
+		if msg.err != nil {
+			m.logErr[msg.pod] = msg.err.Error()
+		} else {
+			delete(m.logErr, msg.pod)
+			m.logs[msg.pod] = msg.out
+		}
+		m.logRev++
+		if m.selected == msg.pod && m.effectivePane() == paneLogs {
+			m.refreshInspectCache()
+		}
+		return m, nil
 	case shellTickMsg:
 		return m, tea.Batch(shellTickCmd(), m.watchShell())
 	case shellMsg:
@@ -131,6 +156,9 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 				break
 			}
 		}
+		if logCmd := m.maybeFetchLogs(); logCmd != nil {
+			return m, logCmd
+		}
 	case claimMsg:
 		if msg.err != nil {
 			m.fail("claim failed: " + msg.err.Error())
@@ -177,10 +205,12 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 			m.windows[msg.pod] = msg.terms
 		}
 		if b := m.selectedBox(); b != nil && b.Name == msg.pod && b.Claimed() {
+			m.sidebarMode = paneShell
 			m.focus = focusShell
 			m.prefix = false
 			m.flash("bash ready — C-b q or click sidebar to leave")
-			return m, m.watchShell()
+			cmd := m.watchShell()
+			return m, cmd
 		}
 		return m, nil
 	case windowCreatedMsg:

@@ -34,11 +34,11 @@ roadmap below.
 ```mermaid
 flowchart LR
   User --> Dashboard["Nightshift dashboard<br/>Bubble Tea"]
-  Dashboard --> Sandboxes["Sandboxes tab"]
+  Dashboard --> Pods["Pods tab"]
   Dashboard --> GitHubTab["GitHub tab<br/>gh-dash + zen-octo"]
   GitHubTab <--> GitHub
-  Sandboxes -->|manage claims| Pool
-  Sandboxes <-->|terminal| Session
+  Pods -->|manage claims| Pool
+  Pods <-->|terminal| Session
 
   subgraph Kubernetes["Kubernetes cluster"]
     Pool["agent-sandbox warm pool"] -->|claim a workspace| Workspace["Claimed sandbox"]

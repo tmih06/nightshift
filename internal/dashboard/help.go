@@ -26,7 +26,7 @@ func (helpKeys) ShortHelp() []key.Binding { return []key.Binding{keyHelp} }
 
 func (helpKeys) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{keyMove, keyEnds, keySection, keyDrag},
+		{keyMove, keyEnds, keySection, viewKeyBinding(), logsKeyBinding(), keyDrag},
 		{keyOpen, keyClaim, keyBash, keyDestroy2, keyFull},
 		{keyWinNew, keyWinSwitch, keyWinClose, keyLeave},
 		{keyScroll, keyPage, keyBack, keyRefresh, keyTabs, keyHelp, keyQuit},

@@ -24,11 +24,22 @@ const (
 	focusInspect
 )
 
+type sidebarMode int
+
+const (
+	paneAuto sidebarMode = iota
+	paneShell
+	paneLogs
+	paneConfigs
+)
+
 type inspectCache struct {
-	pod   string
-	width int
-	rev   int
-	lines []string
+	pod    string
+	mode   sidebarMode
+	width  int
+	rev    int
+	logRev int
+	lines  []string
 }
 
 // liveUsage is a claimed sandbox's usage from its own cgroup counters:
@@ -68,10 +79,16 @@ type model struct {
 
 	focus          focusPane
 	prefix         bool
+	sidebarMode    sidebarMode
 	inspectScroll  int
+	logFollow      bool
 	dataRev        int
+	logRev         int
 	inspect        inspectCache
 	inspectDocs    map[string]inspectCache // shared by every copy of the model
+	logs           map[string]string       // pod name -> raw container logs
+	logErr         map[string]string       // pod name -> last log fetch error
+	loadingLogs    string                  // pod currently fetching logs
 	shellLines     []string
 	shellPod       string
 	shellTerm      string
@@ -103,7 +120,7 @@ type model struct {
 // embedded shell or warm-pool inspector.
 type Model = model
 
-// New returns the sandbox tab painted from gh-dash's theme t.
+// New returns the pods tab painted from gh-dash's theme t.
 func New(t ghtheme.Theme) Model {
 	useTheme(t)
 	return model{
@@ -112,6 +129,9 @@ func New(t ghtheme.Theme) Model {
 		activeWindow: map[string]string{},
 		rowCache:     &rowCacheEntry{},
 		inspectDocs:  map[string]inspectCache{},
+		logs:         map[string]string{},
+		logErr:       map[string]string{},
+		logFollow:    true,
 	}
 }
 
@@ -167,7 +187,8 @@ func (m model) FocusPod(pod string) (Model, tea.Cmd) {
 	}
 	m.confirmDestroy = false
 	m.selectPod(target.Name)
-	if target.Claimed() && target.Phase == "Running" {
+	if target.Claimed() && target.Phase == cluster.PodPhaseRunning {
+		m.sidebarMode = paneShell
 		if m.hasSession(target.Name) {
 			m.focus = focusShell
 			m.prefix = false
@@ -175,7 +196,8 @@ func (m model) FocusPod(pod string) (Model, tea.Cmd) {
 		}
 		return m, attachCmd(target.Name)
 	}
-	return m, nil
+	cmd := m.maybeFetchLogs()
+	return m, cmd
 }
 
 func (m model) Init() tea.Cmd {
@@ -262,7 +284,7 @@ type sentMsg struct {
 // offer it to anything else. The shell refresh sends several a second.
 func Owns(msg tea.Msg) bool {
 	switch msg.(type) {
-	case tickMsg, shellTickMsg, loadedMsg, claimMsg, claimAdoptedMsg, deletedMsg,
+	case tickMsg, shellTickMsg, loadedMsg, logsMsg, claimMsg, claimAdoptedMsg, deletedMsg,
 		attachReadyMsg, fullReadyMsg, windowCreatedMsg, windowKilledMsg,
 		resumeMsg, shellMsg, sentMsg, checkoutMsg:
 		return true
@@ -285,14 +307,16 @@ func fetchCmd(known map[string]string) tea.Cmd {
 		boxes, pools, metricsOK, err := cluster.Fetch()
 		var claimed, unprobed []string
 		for _, b := range boxes {
-			if b.Phase != "Running" {
+			if b.Phase != cluster.PodPhaseRunning {
 				continue
 			}
 			if b.Claimed() {
 				claimed = append(claimed, b.Name)
 			}
-			if _, ok := known[b.Name]; !ok {
-				unprobed = append(unprobed, b.Name)
+			if b.IsSandbox() {
+				if _, ok := known[b.Name]; !ok {
+					unprobed = append(unprobed, b.Name)
+				}
 			}
 		}
 		var (
@@ -650,23 +674,132 @@ func (m model) selectedIndex() int {
 
 func (m model) isWarmSelected() bool {
 	b := m.selectedBox()
-	return b != nil && !b.Claimed()
+	return b != nil && b.Warm()
+}
+
+func (m model) effectivePane() sidebarMode {
+	b := m.selectedBox()
+	if b == nil {
+		return paneConfigs
+	}
+	mode := m.sidebarMode
+	if mode == paneAuto {
+		switch b.PodRole() {
+		case cluster.RoleClaimed:
+			return paneShell
+		case cluster.RoleWarm:
+			return paneConfigs
+		default:
+			return paneLogs
+		}
+	}
+	if mode == paneShell && !b.Claimed() {
+		if b.Warm() {
+			return paneConfigs
+		}
+		return paneLogs
+	}
+	return mode
+}
+
+func availablePanes(b *cluster.Sandbox) []sidebarMode {
+	if b == nil {
+		return nil
+	}
+	switch b.PodRole() {
+	case cluster.RoleClaimed:
+		return []sidebarMode{paneShell, paneLogs, paneConfigs}
+	case cluster.RoleWarm:
+		return []sidebarMode{paneConfigs, paneLogs}
+	default:
+		return []sidebarMode{paneLogs, paneConfigs}
+	}
+}
+
+func (m model) showingDocPane() bool {
+	p := m.effectivePane()
+	return p == paneConfigs || p == paneLogs
 }
 
 func (m model) canFocusShell() bool {
 	b := m.selectedBox()
-	return b != nil && b.Claimed() && m.hasSession(b.Name)
+	return b != nil && b.Claimed() && m.effectivePane() == paneShell && m.hasSession(b.Name)
 }
 
-func (m *model) focusWarmInspect() {
+func (m *model) focusDocPane() {
 	m.focus = focusInspect
 	m.refreshInspectCache()
+}
+
+func (m *model) syncFocusForMode(mode sidebarMode) {
+	if mode != paneShell && m.focus == focusShell {
+		m.focus = focusNav
+		m.prefix = false
+	}
+	if mode == paneShell && m.focus == focusInspect {
+		m.focus = focusNav
+	}
+}
+
+func (m *model) setSidebarMode(mode sidebarMode) tea.Cmd {
+	b := m.selectedBox()
+	if b == nil || (mode == paneShell && !b.Claimed()) {
+		return nil
+	}
+	if m.effectivePane() == mode && m.sidebarMode == mode {
+		if mode == paneLogs {
+			return m.maybeFetchLogs()
+		}
+		return nil
+	}
+	m.sidebarMode = mode
+	m.inspectScroll = 0
+	m.logFollow = true
+	m.syncFocusForMode(mode)
+	m.refreshInspectCache()
+	if mode == paneLogs {
+		return m.maybeFetchLogs()
+	}
+	if mode == paneShell {
+		m.shellW, m.shellH = 0, 0
+		return m.watchShell()
+	}
+	return nil
+}
+
+func (m *model) cycleSidebarMode() tea.Cmd {
+	b := m.selectedBox()
+	panes := availablePanes(b)
+	if len(panes) <= 1 {
+		return nil
+	}
+	cur := m.effectivePane()
+	for i, p := range panes {
+		if p == cur {
+			return m.setSidebarMode(panes[(i+1)%len(panes)])
+		}
+	}
+	return m.setSidebarMode(panes[0])
+}
+
+func (m *model) maybeFetchLogs() tea.Cmd {
+	if m.hidden {
+		return nil
+	}
+	b := m.selectedBox()
+	if b == nil || m.effectivePane() != paneLogs || m.loadingLogs == b.Name {
+		return nil
+	}
+	m.loadingLogs = b.Name
+	return fetchLogsCmd(b.EffectiveNamespace(), b.Name)
 }
 
 func (m *model) selectPod(name string) {
 	if m.selected != name {
 		m.selected = name
+		m.sidebarMode = paneAuto
 		m.inspectScroll = 0
+		m.logFollow = true
 		m.shellW, m.shellH = 0, 0
 		m.shellTerm = ""
 	}
@@ -674,7 +807,7 @@ func (m *model) selectPod(name string) {
 		m.focus = focusNav
 		m.prefix = false
 	}
-	if m.focus == focusInspect && !m.isWarmSelected() {
+	if m.focus == focusInspect && !m.showingDocPane() {
 		m.focus = focusNav
 	}
 	m.refreshInspectCache()
@@ -682,7 +815,7 @@ func (m *model) selectPod(name string) {
 
 // setSection shows section, keeping the selection when it is in it.
 func (m *model) setSection(section int) {
-	m.section = (section + len(sectionTitles)) % len(sectionTitles)
+	m.section = (section + sectionCount) % sectionCount
 	order := m.navigationIndices()
 	for _, i := range order {
 		if m.boxes[i].Name == m.selected {

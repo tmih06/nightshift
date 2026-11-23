@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"image/color"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
@@ -21,7 +20,7 @@ const (
 	tabsH        = 2 // gh-dash's section tabs and their rule
 	footerH      = 1
 	tableHeaderH = 2 // titles and a blank, as gh-dash heads its tables
-	itemH        = 3 // two lines and a separator per sandbox
+	itemH        = 3 // two lines and a separator per pod
 	infoRows     = 8
 	stackedBelow = 90
 	minTableW    = 56
@@ -29,27 +28,22 @@ const (
 	sparkW       = 5
 )
 
-// Sections are gh-dash-style filters over the fleet, one tab each.
-const (
-	sectionAll = iota
-	sectionWarm
-	sectionClaimed
-)
-
-var sectionTitles = [...]string{"All", "Warm", "Claimed"}
-
 // Glyphs from Nerd Fonts, which gh-dash already needs.
 const (
 	glyphSandbox = "\uf1b2" // fa-cube
 	glyphShell   = "\uf120" // fa-terminal
 	glyphClock   = "\uf017" // fa-clock-o
 	glyphConfigs = "\uf15c" // fa-file-text
+	glyphLogs    = "\uf1ea" // fa-newspaper-o
+	glyphEgress  = "\uf132" // fa-shield
+	glyphCore    = "\uf013" // fa-cog
+	glyphJob     = "\uf085" // fa-cogs
 )
 
-// layout places gh-dash's chrome: section tabs on top, the sandbox table on
-// the left, the preview sidebar on the right (below it when narrow), and the
-// footer. docTop, docW, and docH are the sidebar's scrolling body, the shell
-// or the configs.
+// layout places gh-dash's chrome: section tabs on top, the pods table on the
+// left, the preview sidebar on the right (below it when narrow), and the
+// footer. docTop, docW, and docH are the sidebar's scrolling body: the shell,
+// logs, or configs.
 type layout struct {
 	bodyTop, bodyH int
 	tableW, tableH int
@@ -61,7 +55,7 @@ type layout struct {
 }
 
 func (m model) infoRowCount() int {
-	if b := m.selectedBox(); b != nil && b.Claimed() && b.Volume != "" {
+	if b := m.selectedBox(); b != nil && b.Claimed() && m.effectivePane() == paneShell {
 		return infoRows + 1
 	}
 	return infoRows
@@ -99,141 +93,9 @@ func (m model) layout() layout {
 	return l
 }
 
-type nodeGroup struct {
-	name  string
-	boxes []int
-}
-
-func (m model) nodeGroups(ownerRank int) []nodeGroup {
-	byNode := make(map[string][]int)
-	for i, b := range m.boxes {
-		if cluster.OwnerRank(b) == ownerRank {
-			byNode[b.NodeName] = append(byNode[b.NodeName], i)
-		}
-	}
-	nodes := make([]string, 0, len(byNode))
-	for node := range byNode {
-		nodes = append(nodes, node)
-	}
-	sort.Slice(nodes, func(i, j int) bool {
-		if nodes[i] == "" {
-			return false
-		}
-		if nodes[j] == "" {
-			return true
-		}
-		return nodes[i] < nodes[j]
-	})
-
-	groups := make([]nodeGroup, 0, len(nodes))
-	for _, node := range nodes {
-		indices := byNode[node]
-		sort.SliceStable(indices, func(i, j int) bool {
-			return m.boxes[indices[i]].Name < m.boxes[indices[j]].Name
-		})
-		groups = append(groups, nodeGroup{name: node, boxes: indices})
-	}
-	return groups
-}
-
-// navigationIndices is the table's order for the current section: warm,
-// claimed, then other, each by node and name.
-func (m model) navigationIndices() []int {
-	indices := make([]int, 0, len(m.boxes))
-	for rank := 0; rank < 3; rank++ {
-		if (m.section == sectionWarm && rank != 0) || (m.section == sectionClaimed && rank != 1) {
-			continue
-		}
-		for _, group := range m.nodeGroups(rank) {
-			indices = append(indices, group.boxes...)
-		}
-	}
-	return indices
-}
-
-func (m model) sectionCount(section int) int {
-	n := 0
-	for _, b := range m.boxes {
-		rank := cluster.OwnerRank(b)
-		if section == sectionAll || (section == sectionWarm && rank == 0) || (section == sectionClaimed && rank == 1) {
-			n++
-		}
-	}
-	return n
-}
-
 func (m model) shellPaneSize() (int, int) {
 	l := m.layout()
 	return l.docW, l.docH
-}
-
-// ---- section tabs -------------------------------------------------------
-
-type span struct{ from, to int }
-
-// sectionSpans gives each section tab's columns in the tabs row.
-func (m model) sectionSpans() []span {
-	spans := make([]span, 0, len(sectionTitles))
-	x := 0
-	for i := range sectionTitles {
-		w := lipgloss.Width(styles.Tabs.Tab.Render(m.sectionLabel(i)))
-		spans = append(spans, span{from: x, to: x + w})
-		x += w + 1
-	}
-	return spans
-}
-
-func (m model) sectionLabel(i int) string {
-	return fmt.Sprintf("%s (%d)", sectionTitles[i], m.sectionCount(i))
-}
-
-func (m model) tabsView() string {
-	parts := make([]string, 0, 2*len(sectionTitles))
-	for i := range sectionTitles {
-		if i > 0 {
-			parts = append(parts, styles.Tabs.TabSeparator.Render("|"))
-		}
-		style := styles.Tabs.Tab
-		if i == m.section {
-			style = styles.Tabs.ActiveTab
-		}
-		parts = append(parts, style.Render(m.sectionLabel(i)))
-	}
-	left := strings.Join(parts, "")
-	right := lipgloss.NewStyle().Foreground(th.SecondaryText).Render("ns "+cluster.Namespace) + " "
-	gap := max(0, m.width-lipgloss.Width(left)-lipgloss.Width(right))
-	row := truncateANSI(left+strings.Repeat(" ", gap)+right, m.width)
-	return row + "\n" + lipgloss.NewStyle().Foreground(th.PrimaryBorder).Render(strings.Repeat("━", m.width))
-}
-
-// ---- table --------------------------------------------------------------
-
-type column struct {
-	title string
-	width int // 0 grows
-	right bool
-}
-
-// tableColumns resolves the sandbox column against the inner table width.
-func tableColumns(inner int) []column {
-	cols := []column{
-		{title: glyphSandbox, width: 4},
-		{title: "Sandbox"},
-		{title: "Template", width: 22},
-	}
-	if inner < 80 {
-		cols[2].width = clamp(inner-4-10-11-8, 8, 22)
-		cols = append(cols, column{title: "CPU", width: 10, right: true}, column{title: "MEM", width: 11, right: true})
-	} else {
-		cols = append(cols, column{title: glyphShell, width: 4}, column{title: "CPU", width: 12, right: true},
-			column{title: "MEM", width: 13, right: true}, column{title: glyphClock, width: 5, right: true})
-	}
-	used := 0
-	for _, c := range cols {
-		used += c.width
-	}
-	cols[1].width = max(inner-used, 8)
-	return cols
 }
 
 func cell(style lipgloss.Style, width int, text string, right bool) string {
@@ -261,106 +123,6 @@ func (m model) tableHeader(inner int) string {
 	return header
 }
 
-// renderRow draws one sandbox as gh-dash draws a pull request: two lines per
-// cell, the selection as a background, and a faint rule under the row.
-func (m model) renderRow(i, inner int, selected bool) []string {
-	b := m.boxes[i]
-	style := styles.Table.CellStyle
-	if selected {
-		style = styles.Table.SelectedCellStyle
-	}
-	bg := func(s lipgloss.Style) lipgloss.Style {
-		if selected {
-			return s.Background(th.SelectedBackground)
-		}
-		return s
-	}
-
-	_, kindColor := kindName(&b)
-	node := b.NodeName
-	if node == "" {
-		node = "unassigned"
-	}
-	where := node
-	if b.OwnerKind != "SandboxWarmPool" && b.Owner != "" {
-		where += " · " + b.Owner
-	}
-	session := bg(lipgloss.NewStyle().Foreground(th.FaintText)).Render("○")
-	if wins := m.podWindows(b.Name); len(wins) > 1 {
-		session = bg(lipgloss.NewStyle().Foreground(th.SuccessText)).Render(fmt.Sprintf("●%d", len(wins)))
-	} else if len(wins) == 1 {
-		session = bg(lipgloss.NewStyle().Foreground(th.SuccessText)).Render("●")
-	}
-	h := m.hist[b.Name]
-
-	template := b.Template
-	if template == "" {
-		template = "—"
-	}
-	version := agentSemver(m.agentVersions[b.Name])
-	cells := [][2]string{
-		{bg(lipgloss.NewStyle().Foreground(kindColor)).Render(glyphSandbox), ""},
-		{bg(lipgloss.NewStyle().Foreground(th.SecondaryText)).Render(where),
-			bg(lipgloss.NewStyle().Foreground(th.PrimaryText)).Render(b.Name)},
-		{bg(lipgloss.NewStyle().Foreground(th.PrimaryText)).Render(template), ""},
-	}
-	if inner >= 80 {
-		cells[2][1] = bg(lipgloss.NewStyle().Foreground(th.SecondaryText)).Render(version)
-		cells = append(cells, [2]string{session, ""})
-	} else {
-		cells[2][1] = session
-		if version != "" {
-			cells[2][1] += bg(lipgloss.NewStyle().Foreground(th.FaintText)).Render(" " + version)
-		}
-	}
-	cells = append(cells,
-		usageCell(m.usageKnown(b.Name), b.CPUUsageMC, b.CPULimitMC, "m", h.cpu, bg),
-		usageCell(m.usageKnown(b.Name), b.MemUsageMiB, b.MemLimitMiB, "Mi", h.mem, bg),
-	)
-	if inner >= 80 {
-		cells = append(cells, [2]string{bg(lipgloss.NewStyle().Foreground(th.SecondaryText)).Render(ageString(b.Created)), ""})
-	}
-	var top, bottom strings.Builder
-	for c, col := range tableColumns(inner) {
-		top.WriteString(cell(style, col.width, cells[c][0], col.right))
-		bottom.WriteString(cell(style, col.width, cells[c][1], col.right))
-	}
-	rule := lipgloss.NewStyle().Foreground(th.FaintBorder).Render(strings.Repeat("─", inner))
-	return []string{" " + top.String(), " " + bottom.String(), " " + rule}
-}
-
-func usageCell(known bool, usage, limit int64, unit string, hist []float64, bg func(lipgloss.Style) lipgloss.Style) [2]string {
-	if limit <= 0 {
-		return [2]string{bg(lipgloss.NewStyle().Foreground(th.FaintText)).Render("no limit"), ""}
-	}
-	num, ratio := "--", 0.0
-	if known {
-		num = fmt.Sprintf("%d%s", usage, unit)
-		ratio = float64(usage) / float64(limit)
-	}
-	value := bg(lipgloss.NewStyle().Foreground(th.PrimaryText)).Render(num) +
-		bg(lipgloss.NewStyle().Foreground(th.FaintText)).Render(fmt.Sprintf("/%d%s", limit, unit))
-	pct := bg(lipgloss.NewStyle().Foreground(levelColor(ratio))).Render(fmt.Sprintf("%4.0f%%", ratio*100))
-	return [2]string{value, usageGraph(hist, sparkW) + pct}
-}
-
-// rows returns the rendered table body, cached until the data, selection,
-// focus, or width changes, so a frame that only moves the shell pays nothing.
-func (m model) rows(inner int) []string {
-	key := rowKey{rev: m.dataRev, selected: m.selected, section: m.section, width: inner}
-	if m.rowCache != nil && m.rowCache.lines != nil && m.rowCache.key == key {
-		return m.rowCache.lines
-	}
-	var lines []string
-	for _, i := range m.navigationIndices() {
-		lines = append(lines, m.renderRow(i, inner, m.boxes[i].Name == m.selected)...)
-	}
-	if m.rowCache != nil {
-		m.rowCache.key, m.rowCache.lines = key, lines
-	}
-	return lines
-}
-
 type rowKey struct {
 	rev      int
 	selected string
@@ -378,59 +140,11 @@ type rowCacheEntry struct {
 	headerTheme uint64
 }
 
-// tableOffset is the first visible item, keeping the selection on screen.
-func (m model) tableOffset(l layout) int {
-	visible := max((l.tableH-tableHeaderH)/itemH, 1)
-	sel := m.selectedIndex()
-	return clamp(sel-visible+1, 0, max(len(m.navigationIndices())-visible, 0))
-}
-
-func (m model) tableView(l layout) []string {
-	inner := max(l.tableW-2, 1)
-	out := make([]string, 0, l.tableH)
-	out = append(out, m.tableHeader(inner), "")
-	order := m.navigationIndices()
-	if len(order) == 0 {
-		msg := "No sandboxes"
-		if len(m.boxes) > 0 {
-			msg = "No " + strings.ToLower(sectionTitles[m.section]) + " sandboxes"
-		}
-		out = append(out, "  "+dim(msg))
-	} else {
-		rows := m.rows(inner)
-		start := m.tableOffset(l) * itemH
-		end := min(start+l.tableH-tableHeaderH, len(rows))
-		out = append(out, rows[start:end]...)
-	}
-	for i := range out {
-		out[i] = padTo(out[i], l.tableW)
-	}
-	for len(out) < l.tableH {
-		out = append(out, strings.Repeat(" ", l.tableW))
-	}
-	return out[:l.tableH]
-}
-
-// rowAt maps a frame row inside the table body to the sandbox drawn there.
-func (m model) rowAt(y int) (int, bool) {
-	l := m.layout()
-	body := y - l.bodyTop - tableHeaderH
-	if body < 0 || y >= l.bodyTop+l.tableH {
-		return 0, false
-	}
-	pos := m.tableOffset(l) + body/itemH
-	order := m.navigationIndices()
-	if body%itemH == itemH-1 || pos >= len(order) {
-		return 0, false
-	}
-	return order[pos], true
-}
-
 // ---- sidebar ------------------------------------------------------------
 
 func phaseColor(phase string) color.Color {
 	switch phase {
-	case "Running", "Succeeded":
+	case cluster.PodPhaseRunning, "Succeeded":
 		return th.SuccessText
 	case "Pending", "":
 		return th.WarningText
@@ -439,103 +153,211 @@ func phaseColor(phase string) color.Color {
 	}
 }
 
-func kindName(b *cluster.Sandbox) (string, color.Color) {
-	switch {
-	case b.OwnerKind == "SandboxWarmPool":
-		return "Warm", warmColor
-	case b.Claimed():
-		return "Claimed", claimColor
-	}
-	return b.OwnerKind, warnColor
+type subTabSpan struct {
+	from, to int
+	mode     sidebarMode
 }
 
-// infoLines is the head of the preview, laid out as gh-dash heads a pull
-// request: the location bar, the title block, a pill with the state, the
-// facts, and the heading of the body below.
+func (m model) subTabRow() int {
+	if m.selectedBox() == nil {
+		return -1
+	}
+	return m.layout().docTop - 1
+}
+
+func (m model) subTabSpans() []subTabSpan {
+	l := m.layout()
+	inner := l.sideW - 1
+	startX := 1
+	if !l.stacked {
+		startX = l.sideX + 2
+	}
+	_, spans := m.subTabBar(inner-1, startX)
+	return spans
+}
+
+func subTabLabel(mode sidebarMode) string {
+	switch mode {
+	case paneShell:
+		return glyphShell + " Shell"
+	case paneLogs:
+		return glyphLogs + " Logs"
+	default:
+		return glyphConfigs + " Configs"
+	}
+}
+
+func (m model) subTabBar(width, startX int) (string, []subTabSpan) {
+	b := m.selectedBox()
+	panes := availablePanes(b)
+	if len(panes) == 0 {
+		return "", nil
+	}
+	active := m.effectivePane()
+	focused := (active == paneShell && m.focus == focusShell) || (active != paneShell && m.focus == focusInspect)
+
+	var left strings.Builder
+	spans := make([]subTabSpan, 0, len(panes))
+	x := startX
+	for i, mode := range panes {
+		if i > 0 {
+			sep := "  "
+			left.WriteString(sep)
+			x += len(sep)
+		}
+		label := subTabLabel(mode)
+		rendered := subTabTextStyle(mode == active, focused).Render(label)
+		w := ansi.StringWidth(rendered)
+		left.WriteString(rendered)
+		spans = append(spans, subTabSpan{from: x, to: x + w, mode: mode})
+		x += w
+	}
+
+	hint := m.sidebarFocusHint(b, active, focused)
+	return spread(left.String(), dim(hint), width), spans
+}
+
+func (m model) sidebarFocusHint(b *cluster.Sandbox, active sidebarMode, focused bool) string {
+	if focused {
+		if active == paneShell {
+			return "C-b q leaves"
+		}
+		return "esc leaves"
+	}
+	if active == paneShell && len(m.podWindows(b.Name)) == 0 {
+		return ""
+	}
+	return "⏎ or click to focus"
+}
+
+func (m model) podContextLine(b *cluster.Sandbox, width int) string {
+	if b.Claimed() && b.Volume != "" {
+		return truncateANSI(dim("volume ")+b.Volume+dim(" · kept when destroyed"), max(width, 1))
+	}
+	parts := make([]string, 0, 3)
+	if b.Image != "" {
+		parts = append(parts, dim("image ")+imageLabel(b.Image, m.agentVersions[b.Name]))
+	}
+	if len(b.Ports) > 0 {
+		parts = append(parts, dim("ports ")+strings.Join(b.Ports, ", "))
+	}
+	if len(parts) == 0 {
+		return dim("spec unavailable")
+	}
+	return truncateANSI(strings.Join(parts, dim(" · ")), max(width, 1))
+}
+
+func (m model) podMetaLine(b *cluster.Sandbox, width int) string {
+	var parts []string
+	if b.Warm() && len(m.podWindows(b.Name)) > 0 {
+		parts = append(parts, warmStyle.Render("● herdr live"))
+	}
+	if b.CPUReqMC > 0 || b.CPULimitMC > 0 {
+		parts = append(parts, dim("cpu ")+fmt.Sprintf("%d/%dm", b.CPUReqMC, b.CPULimitMC))
+	}
+	if b.MemReqMiB > 0 || b.MemLimitMiB > 0 {
+		parts = append(parts, dim("mem ")+fmt.Sprintf("%dMi/%dMi", b.MemReqMiB, b.MemLimitMiB))
+	}
+	if b.RestartPolicy != "" {
+		parts = append(parts, dim("restart ")+b.RestartPolicy)
+	}
+	if b.NodeName != "" {
+		parts = append(parts, dim("node ")+b.NodeName)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return fitParts(parts, width)
+}
+
+func (m model) podStateLine(b *cluster.Sandbox, width int) string {
+	kind, kindColor := kindName(b)
+	pill := styles.PrView.PillStyle.Background(kindColor).Render(" " + roleGlyph(b.PodRole()) + " " + kind + " ")
+	phaseText := b.Phase
+	phaseCol := phaseColor(b.Phase)
+	if b.Waiting != "" {
+		phaseText = b.Waiting
+		phaseCol = warnColor
+	}
+	status := lipgloss.NewStyle().Foreground(phaseCol).Render("● " + phaseText)
+	if b.Ready != "" {
+		status += " " + dim(b.Ready)
+	}
+	if b.Restarts > 0 {
+		status += " " + warnStyle.Render(fmt.Sprintf("%d↺", b.Restarts))
+	}
+	var extra []string
+	if b.PodIP != "" {
+		extra = append(extra, b.PodIP)
+	} else {
+		node := b.NodeName
+		if node == "" {
+			node = podUnassigned
+		}
+		extra = append(extra, dim("node ")+node)
+	}
+	extra = append(extra, dim(ageString(b.Created)))
+	return truncateANSI(pill+" "+status+dim(" · ")+strings.Join(extra, dim(" · ")), max(width, 1))
+}
+
+func podHeaderLocation(b *cluster.Sandbox) string {
+	ns := b.EffectiveNamespace()
+	if b.Owner != "" {
+		return ns + " · " + b.Owner
+	}
+	return ns
+}
+
+func (m model) claimedSessionLines(b *cluster.Sandbox, width int) []string {
+	wins := m.podWindows(b.Name)
+	session := dim("○ herdr off")
+	if len(wins) > 0 {
+		session = warmStyle.Render("● herdr live")
+		if len(wins) > 1 {
+			session += dim(fmt.Sprintf(" · %d windows", len(wins)))
+		}
+	}
+	bar, _ := m.windowTabBar(width-1, 0)
+	if bar != "" {
+		bar = " " + bar
+	}
+	return []string{" " + session, bar}
+}
+
+// infoLines is the head of the preview sidebar: location bar, pod name,
+// role/health pill, live CPU/MEM usage table, spec/context, optional Herdr
+// window bar (for Claimed sandboxes on Shell), and clickable sidebar tabs.
 func (m model) infoLines(width int) []string {
 	b := m.selectedBox()
 	if b == nil {
 		return []string{common.RenderPreviewHeader(th, width, truncateANSI(cluster.Namespace, max(width-2, 1)))}
 	}
-	kind, kindColor := kindName(b)
-	header := common.RenderPreviewHeader(th, width, truncateANSI(cluster.Namespace+" · "+b.Owner, max(width-2, 1)))
+	header := common.RenderPreviewHeader(th, width, truncateANSI(podHeaderLocation(b), max(width-2, 1)))
 	title := strings.Split(common.RenderPreviewTitle(th, styles.Common, width, truncateANSI(b.Name, max(width-2, 1))), "\n")
 
-	pill := styles.PrView.PillStyle.Background(kindColor).Render(" " + glyphSandbox + " " + kind + " ")
-	node := b.NodeName
-	if node == "" {
-		node = "unassigned"
-	}
-	state := pill + " " + lipgloss.NewStyle().Foreground(phaseColor(b.Phase)).Render("● "+b.Phase) +
-		dim(" · node ") + node + dim(" · "+ageString(b.Created))
+	h := m.hist[b.Name]
+	usage := usageTable([]usageRow{
+		{colCPU, b.CPUUsageMC, b.CPULimitMC, "m", h.cpu},
+		{colMEM, b.MemUsageMiB, b.MemLimitMiB, "Mi", h.mem},
+	}, m.usageKnown(b.Name), width-1)
 
-	var facts []string
-	if b.Claimed() {
-		h := m.hist[b.Name]
-		facts = usageTable([]usageRow{
-			{"CPU", b.CPUUsageMC, b.CPULimitMC, "m", h.cpu},
-			{"MEM", b.MemUsageMiB, b.MemLimitMiB, "Mi", h.mem},
-		}, m.usageKnown(b.Name), width-1)
-		if b.Volume != "" {
-			facts = append(facts, truncateANSI(dim("volume ")+b.Volume+dim(" · kept when destroyed"), max(width-1, 1)))
-		}
+	lines := []string{
+		header,
+		title[0],
+		" " + m.podStateLine(b, width-1),
+		" " + usage[0],
+		" " + usage[1],
+		" " + m.podContextLine(b, width-1),
+	}
+
+	if b.Claimed() && m.effectivePane() == paneShell {
+		lines = append(lines, m.claimedSessionLines(b, width)...)
 	} else {
-		facts = []string{
-			truncateANSI(dim("image ")+imageLabel(b.Image, m.agentVersions[b.Name]), max(width-1, 1)),
-			fitParts([]string{
-				dim("cpu ") + fmt.Sprintf("%d/%dm", b.CPUReqMC, b.CPULimitMC),
-				dim("mem ") + fmt.Sprintf("%dMi/%dMi", b.MemReqMiB, b.MemLimitMiB),
-				dim("restart ") + b.RestartPolicy,
-			}, width-1),
-		}
-	}
-	wins := m.podWindows(b.Name)
-	session := dim("○ herdr off")
-	if len(wins) > 0 {
-		session = warmStyle.Render("● herdr live")
-		if b.Claimed() && len(wins) > 1 {
-			session += dim(fmt.Sprintf(" · %d windows", len(wins)))
-		}
+		lines = append(lines, " "+m.podMetaLine(b, width-1))
 	}
 
-	heading, hint := glyphConfigs+" Configs", "⏎ or click to focus"
-	focused := m.focus == focusInspect
-	if !m.isWarmSelected() {
-		heading, focused = glyphShell+" Shell", m.focus == focusShell
-		if len(wins) == 0 {
-			hint = ""
-		}
-	}
-	if focused {
-		hint = "esc leaves"
-		if m.focus == focusShell {
-			hint = "C-b q leaves"
-		}
-	}
-	headStyle := lipgloss.NewStyle().Bold(true).Underline(true).Foreground(th.PrimaryText)
-	if focused {
-		headStyle = headStyle.Foreground(th.SuccessText)
-	}
-	head := spread(headStyle.Render(heading), dim(hint), width)
-
-	lines := []string{header}
-	lines = append(lines, title[0])
-	lines = append(lines, " "+state)
-	for _, f := range facts {
-		lines = append(lines, " "+f)
-	}
-	lines = append(lines, " "+session)
-	if b.Claimed() {
-		bar, _ := m.windowTabBar(width-1, 0)
-		if bar != "" {
-			lines = append(lines, " "+bar)
-		} else {
-			lines = append(lines, "")
-		}
-	} else {
-		lines = append(lines, "")
-	}
-	return append(lines, " "+head)
+	subBar, _ := m.subTabBar(width, 0)
+	return append(lines, " "+subBar)
 }
 
 type windowAction int
@@ -557,11 +379,11 @@ type windowTabSpan struct {
 // directly below the "● herdr live" line, or -1 if none is shown.
 func (m model) windowTabRow() int {
 	b := m.selectedBox()
-	if b == nil || !b.Claimed() {
+	if b == nil || !b.Claimed() || m.effectivePane() != paneShell {
 		return -1
 	}
 	l := m.layout()
-	// infoLines ends with [..., session, windowTabBar, heading], so the tab bar
+	// infoLines ends with [..., session, windowTabBar, subTabBar], so the tab bar
 	// sits two rows above docTop.
 	return l.docTop - 2
 }
@@ -760,7 +582,11 @@ func usageTable(rows []usageRow, known bool, width int) []string {
 	out := make([]string, len(rows))
 	for i, r := range rows {
 		if r.limit <= 0 {
-			out[i] = dim(r.label + " no limit")
+			if known {
+				out[i] = dim(fmt.Sprintf("%-*s ", labelW, r.label)) + formatQuantity(r.usage, r.unit) + dim(" (no limit)")
+			} else {
+				out[i] = dim(r.label + " no limit")
+			}
 			continue
 		}
 		used, ratio := "--", 0.0
@@ -823,8 +649,8 @@ func fitParts(parts []string, room int) string {
 }
 
 func (m model) docLines(l layout) []string {
-	if m.isWarmSelected() {
-		lines, _ := m.warmInspectView(l)
+	if m.showingDocPane() {
+		lines, _ := m.docInspectView(l)
 		return lines
 	}
 	return m.shellLinesView(l)
@@ -902,11 +728,19 @@ var (
 	keyLeaveShell = key.NewBinding(key.WithKeys("ctrl+b"), key.WithHelp("C-b q", "leaves bash"))
 )
 
+func viewKeyBinding() key.Binding {
+	return key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "view"))
+}
+
+func logsKeyBinding() key.Binding {
+	return key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "logs"))
+}
+
 func (m model) hints() []key.Binding {
 	if m.focus == focusInspect {
-		return []key.Binding{keyScroll, keyPage, keyBack, keyClaim, keyTabs, keyQuit, keyHelp}
+		return []key.Binding{keyScroll, keyPage, viewKeyBinding(), keyBack, keyClaim, keyTabs, keyQuit, keyHelp}
 	}
-	return []key.Binding{keyMove, keySection, keyOpen, keyClaim, keyDestroy, keyFull, keyRefresh, keyTabs, keyQuit, keyHelp}
+	return []key.Binding{keyMove, keySection, keyOpen, viewKeyBinding(), keyClaim, keyDestroy, keyFull, keyRefresh, keyTabs, keyQuit, keyHelp}
 }
 
 // renderHints draws key hints on the footer's background, dropping from the
@@ -960,7 +794,7 @@ func (m model) pagerText() string {
 	if !m.updatedAt.IsZero() {
 		updated = "~" + ageString(m.updatedAt) + " ago"
 	}
-	return fmt.Sprintf("%s Updated %s • Sandbox %d/%d", glyphClock, updated, pos, len(order))
+	return fmt.Sprintf("%s Updated %s • Pod %d/%d", glyphClock, updated, pos, len(order))
 }
 
 func (m model) statusLine() string {
@@ -1006,7 +840,7 @@ func (m model) Count() int { return len(m.boxes) }
 // View renders the tab at exactly its width and height.
 func (m model) View() string {
 	if !m.loaded && m.err == nil {
-		return fill(dim(" loading sandboxes…"), m.width, m.height)
+		return fill(dim(" loading pods…"), m.width, m.height)
 	}
 	l := m.layout()
 	var b strings.Builder

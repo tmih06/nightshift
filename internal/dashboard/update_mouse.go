@@ -7,6 +7,9 @@ func (m model) updateMouse(msg tea.MouseMsg) (model, tea.Cmd) {
 	x, y := mouse.X, mouse.Y
 	if m.focus == focusShell && !m.dragging {
 		if click, ok := msg.(tea.MouseClickMsg); ok {
+			if next, cmd, handled := m.clickSubTabs(x, y, click.Button); handled {
+				return next, cmd
+			}
 			if next, cmd, handled := m.clickWindowBar(x, y, click.Button); handled {
 				return next, cmd
 			}
@@ -16,6 +19,8 @@ func (m model) updateMouse(msg tea.MouseMsg) (model, tea.Cmd) {
 					m.dragging = true
 				case m.inTable(x, y) || m.inTabs(y):
 					m = m.clickTable(x, y)
+					cmd := m.maybeFetchLogs()
+					return m, cmd
 				}
 			}
 		}
@@ -32,12 +37,17 @@ func (m model) updateMouse(msg tea.MouseMsg) (model, tea.Cmd) {
 		default:
 			return m, nil
 		}
-		if m.isWarmSelected() && (m.inSidebar(x, y) || (m.focus == focusInspect && !m.inTable(x, y))) {
+		if m.showingDocPane() && (m.inSidebar(x, y) || (m.focus == focusInspect && !m.inTable(x, y))) {
 			m.scrollInspect(3 * delta)
 		} else {
 			m.moveSelection(delta)
+			cmd := m.maybeFetchLogs()
+			return m, cmd
 		}
 	case tea.MouseClickMsg:
+		if next, cmd, handled := m.clickSubTabs(x, y, mouse.Button); handled {
+			return next, cmd
+		}
 		if next, cmd, handled := m.clickWindowBar(x, y, mouse.Button); handled {
 			return next, cmd
 		}
@@ -57,6 +67,23 @@ func (m model) updateMouse(msg tea.MouseMsg) (model, tea.Cmd) {
 		m.dragging = false
 	}
 	return m, nil
+}
+
+func (m model) clickSubTabs(x, y int, button tea.MouseButton) (model, tea.Cmd, bool) {
+	if button != tea.MouseLeft {
+		return m, nil, false
+	}
+	row := m.subTabRow()
+	if row < 0 || y != row {
+		return m, nil, false
+	}
+	for _, s := range m.subTabSpans() {
+		if x >= s.from && x < s.to {
+			cmd := m.setSidebarMode(s.mode)
+			return m, cmd, true
+		}
+	}
+	return m, nil, false
 }
 
 // clickWindowBar handles clicks on the sandbox's Herdr window tab bar:
@@ -138,10 +165,11 @@ func (m model) applyDrag(x, y int) model {
 
 func (m model) applyClick(x, y int) (model, tea.Cmd) {
 	if m.inSidebar(x, y) {
-		if m.isWarmSelected() {
-			m.focusWarmInspect()
+		if m.showingDocPane() {
+			m.focusDocPane()
 			m.prefix = false
-			return m, nil
+			cmd := m.maybeFetchLogs()
+			return m, cmd
 		}
 		if m.canFocusShell() {
 			m.focus = focusShell
@@ -154,7 +182,9 @@ func (m model) applyClick(x, y int) (model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	return m.clickTable(x, y), nil
+	m = m.clickTable(x, y)
+	cmd := m.maybeFetchLogs()
+	return m, cmd
 }
 
 func (m model) inTabs(y int) bool { return y >= 0 && y < tabsH }
