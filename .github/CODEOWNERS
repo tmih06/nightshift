@@ -1,0 +1,12 @@
+# Changes to the quality gate need owner review, so an agent cannot weaken
+# the gate to get past it.
+/.golangci.yml        @tmih06
+/.semgrep/            @tmih06
+/.semgrepignore       @tmih06
+/scripts/quality/     @tmih06
+/.github/workflows/   @tmih06
+/.github/CODEOWNERS   @tmih06
+/docs/quality-baseline.json @tmih06
+/Makefile             @tmih06
+/.agents/settings.json @tmih06
+/AGENTS.md            @tmih06

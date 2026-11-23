@@ -1,0 +1,6 @@
+# Replaces Semgrep's defaults so test files are scanned too.
+.agents/
+.git/
+.semgrep/
+.tools/
+**/testdata/
