@@ -29,7 +29,7 @@ func (m model) updateKeyboard(msg tea.KeyPressMsg) (model, tea.Cmd) {
 		}
 	case "r":
 		m.status, m.statusTTL = "", 0
-		return m, fetchCmd()
+		return m, fetchCmd(m.agentVersions)
 	case "c":
 		pool := m.claimPool()
 		m.flash("claiming from " + pool + "…")
@@ -119,7 +119,7 @@ func (m model) updateInspectKeys(msg tea.KeyPressMsg) (model, tea.Cmd) {
 		return m, claimCmd(pool)
 	case "r":
 		m.status, m.statusTTL = "", 0
-		return m, fetchCmd()
+		return m, fetchCmd(m.agentVersions)
 	}
 	return m, nil
 }

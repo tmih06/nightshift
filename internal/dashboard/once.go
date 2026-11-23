@@ -6,6 +6,6 @@ import ghtheme "github.com/tmih06/nightshift/internal/ghdash/tui/theme"
 // printing a single frame without a terminal.
 func Fetched(t ghtheme.Theme) Model {
 	m := New(t)
-	m, _ = m.Update(fetchCmd()())
+	m, _ = m.Update(fetchCmd(nil)())
 	return m
 }

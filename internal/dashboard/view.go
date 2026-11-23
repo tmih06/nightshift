@@ -3,6 +3,7 @@ package dashboard
 import (
 	"fmt"
 	"image/color"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -296,6 +297,7 @@ func (m model) renderRow(i, inner int, selected bool) []string {
 	if template == "" {
 		template = "—"
 	}
+	version := agentSemver(m.agentVersions[b.Name])
 	cells := [][2]string{
 		{bg(lipgloss.NewStyle().Foreground(kindColor)).Render(glyphSandbox), ""},
 		{bg(lipgloss.NewStyle().Foreground(th.SecondaryText)).Render(where),
@@ -303,9 +305,13 @@ func (m model) renderRow(i, inner int, selected bool) []string {
 		{bg(lipgloss.NewStyle().Foreground(th.PrimaryText)).Render(template), ""},
 	}
 	if inner >= 80 {
+		cells[2][1] = bg(lipgloss.NewStyle().Foreground(th.SecondaryText)).Render(version)
 		cells = append(cells, [2]string{session, ""})
 	} else {
 		cells[2][1] = session
+		if version != "" {
+			cells[2][1] += bg(lipgloss.NewStyle().Foreground(th.FaintText)).Render(" " + version)
+		}
 	}
 	cells = append(cells,
 		usageCell(m.usageKnown(b.Name), b.CPUUsageMC, b.CPULimitMC, "m", h.cpu, bg),
@@ -475,7 +481,7 @@ func (m model) infoLines(width int) []string {
 		}
 	} else {
 		facts = []string{
-			truncateANSI(dim("image ")+b.Image, max(width-1, 1)),
+			truncateANSI(dim("image ")+imageLabel(b.Image, m.agentVersions[b.Name]), max(width-1, 1)),
 			fitParts([]string{
 				dim("cpu ") + fmt.Sprintf("%d/%dm", b.CPUReqMC, b.CPULimitMC),
 				dim("mem ") + fmt.Sprintf("%dMi/%dMi", b.MemReqMiB, b.MemLimitMiB),
@@ -771,6 +777,32 @@ func usageTable(rows []usageRow, known bool, width int) []string {
 		out[i] = truncateANSI(line+pct, max(width, 1))
 	}
 	return out
+}
+
+// imageLabel shows the tag a pod actually runs: with the CLI version
+// probed inside it, :latest resolves to :<semver>; other answers append.
+func imageLabel(image, agentVersion string) string {
+	if v := agentSemver(agentVersion); v != "" {
+		if strings.HasSuffix(image, ":latest") {
+			return strings.TrimSuffix(image, "latest") + v
+		}
+		if !strings.HasSuffix(image, ":"+v) {
+			return image + " · " + v
+		}
+		return image
+	}
+	if agentVersion != "" {
+		return image + " · " + agentVersion
+	}
+	return image
+}
+
+var semverPattern = regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+`)
+
+// agentSemver extracts the first x.y.z from a CLI's --version answer, so
+// outputs like "codex-cli 0.171.0" still name the version.
+func agentSemver(raw string) string {
+	return semverPattern.FindString(raw)
 }
 
 // fitParts joins as many leading parts as fit in room, dot-separated.

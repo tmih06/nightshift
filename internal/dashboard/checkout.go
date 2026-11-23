@@ -471,13 +471,13 @@ func (m model) checkoutEvent(msg checkoutMsg) (model, tea.Cmd) {
 	case ev.err != nil:
 		m.checkout = nil
 		m.fail(strings.ToLower(stepTitles[ev.step]) + " failed for " + run.co.String() + ": " + ev.err.Error())
-		return m, fetchCmd()
+		return m, fetchCmd(m.agentVersions)
 	case ev.done:
 		m.checkout = nil
 		co := run.co
 		m.pendingPod, m.pendingCheckout = ev.pod, &co
 		m.flash(co.String() + " is ready in " + ev.pod)
-		return m, fetchCmd()
+		return m, fetchCmd(m.agentVersions)
 	case ev.finished:
 		run.notes[ev.step] = ev.detail
 	default:
@@ -585,5 +585,5 @@ func (m model) focusCheckout(pod string, c Checkout) (Model, tea.Cmd) {
 	} else {
 		m.flash(c.String() + " is in " + c.MountPath() + " — C-b q leaves bash")
 	}
-	return m, tea.Batch(fetchCmd(), m.watchShell())
+	return m, tea.Batch(fetchCmd(m.agentVersions), m.watchShell())
 }

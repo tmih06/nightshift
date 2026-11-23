@@ -94,6 +94,46 @@ func TestTemplateColumn(t *testing.T) {
 	}
 }
 
+// The probed CLI version shows next to the template and resolves :latest in
+// the sidebar's image line to the version the pod actually runs.
+func TestAgentVersionShown(t *testing.T) {
+	for _, width := range []int{68, 100} {
+		m := baseModel()
+		m.agentVersions = map[string]string{"agent-pool-5ss7w": "1.6.0"}
+		row := m.renderRow(0, width, false)
+		if !strings.Contains(ansi.Strip(row[1]), "1.6.0") {
+			t.Errorf("width %d second line missing the version: %s", width, ansi.Strip(row[1]))
+		}
+	}
+
+	m := baseModel()
+	m.agentVersions = map[string]string{"agent-pool-5ss7w": "codex-cli 0.171.0"}
+	m.boxes[0].Image = "ghcr.io/tmih06/nightshift-codex:latest"
+	head := ansi.Strip(strings.Join(m.infoLines(60), "\n"))
+	if !strings.Contains(head, "nightshift-codex:0.171.0") || strings.Contains(head, ":latest") {
+		t.Errorf("image line did not resolve :latest: %q", head)
+	}
+}
+
+func TestImageLabel(t *testing.T) {
+	cases := []struct {
+		image, version, want string
+	}{
+		{"ghcr.io/x/pi:latest", "1.6.0", "ghcr.io/x/pi:1.6.0"},
+		{"ghcr.io/x/codex:latest", "codex-cli 0.171.0", "ghcr.io/x/codex:0.171.0"},
+		{"ghcr.io/x/pi:latest", "", "ghcr.io/x/pi:latest"},
+		{"ghcr.io/x/pi:1.6.0", "1.6.0", "ghcr.io/x/pi:1.6.0"},
+		{"ghcr.io/x/pi:1.5.2", "1.6.0", "ghcr.io/x/pi:1.5.2 · 1.6.0"},
+		{"local/test:dev", "odd-answer", "local/test:dev · odd-answer"},
+		{"local/test:dev", "", "local/test:dev"},
+	}
+	for _, tc := range cases {
+		if got := imageLabel(tc.image, tc.version); got != tc.want {
+			t.Errorf("imageLabel(%q, %q) = %q, want %q", tc.image, tc.version, got, tc.want)
+		}
+	}
+}
+
 func TestTableHeaderCacheTracksWidthAndTheme(t *testing.T) {
 	m := baseModel()
 	m.rowCache = &rowCacheEntry{}

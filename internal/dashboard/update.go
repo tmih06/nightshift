@@ -44,7 +44,7 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 		}
 		return m.updateMouse(msg)
 	case tickMsg:
-		return m, tea.Batch(fetchCmd(), tickCmd())
+		return m, tea.Batch(fetchCmd(m.agentVersions), tickCmd())
 	case shellTickMsg:
 		return m, tea.Batch(shellTickCmd(), m.watchShell())
 	case shellMsg:
@@ -103,6 +103,7 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 		m.updatedAt = time.Now()
 		m.applyLive(msg.cgroups)
 		m.appendHistory()
+		m.mergeAgentVersions(msg.agentVersions)
 		if order := m.navigationIndices(); m.selectedBox() == nil && len(order) > 0 {
 			// The selection is gone (destroyed, say): take its neighbour in
 			// the section, which may itself now be empty.
@@ -125,7 +126,7 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 				}
 				if m.hasSession(b.Name) {
 					m.flash("bash ready in " + b.Name + " — enter attaches")
-					return m, fetchCmd()
+					return m, fetchCmd(m.agentVersions)
 				}
 				break
 			}
@@ -140,11 +141,11 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 	case claimAdoptedMsg:
 		if msg.err != nil {
 			m.fail("claim failed: " + msg.err.Error())
-			return m, fetchCmd()
+			return m, fetchCmd(m.agentVersions)
 		}
 		m.pendingPod = msg.pod
 		m.flash("bash ready in " + msg.pod)
-		return m, fetchCmd()
+		return m, fetchCmd(m.agentVersions)
 	case deletedMsg:
 		if msg.err != nil {
 			m.fail("destroy failed: " + msg.err.Error())
@@ -159,7 +160,7 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 			m.flash("destroyed claim " + msg.claim + ", pool is restocking")
 		}
 		m.confirmDestroy = false
-		return m, fetchCmd()
+		return m, fetchCmd(m.agentVersions)
 	case attachReadyMsg:
 		if msg.err != nil {
 			m.fail("session failed: " + msg.err.Error())
@@ -216,7 +217,7 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 			m.focus = focusShell
 			m.prefix = false
 		}
-		return m, tea.Batch(cmd, fetchCmd())
+		return m, tea.Batch(cmd, fetchCmd(m.agentVersions))
 	case windowKilledMsg:
 		if msg.err != nil {
 			m.fail("close window failed: " + msg.err.Error())
@@ -249,16 +250,16 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 			}
 			m.dataRev++
 			m.flash("closed last window in " + msg.pod)
-			return m, fetchCmd()
+			return m, fetchCmd(m.agentVersions)
 		}
 		m.windows[msg.pod] = next
 		m.dataRev++
 		m.flash("closed window")
 		pick := next[clamp(removedIdx, 0, len(next)-1)].Address
 		if m.activeWindow[msg.pod] == msg.term || m.activeWindow[msg.pod] == "" {
-			return m, tea.Batch(m.selectWindow(msg.pod, pick), fetchCmd())
+			return m, tea.Batch(m.selectWindow(msg.pod, pick), fetchCmd(m.agentVersions))
 		}
-		return m, fetchCmd()
+		return m, fetchCmd(m.agentVersions)
 	case fullReadyMsg:
 		if msg.err != nil {
 			m.fail("session failed: " + msg.err.Error())
@@ -277,7 +278,7 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 		} else {
 			m.flash("back from fullscreen, session still running")
 		}
-		return m, fetchCmd()
+		return m, fetchCmd(m.agentVersions)
 	case checkoutMsg:
 		return m.checkoutEvent(msg)
 	case sentMsg:

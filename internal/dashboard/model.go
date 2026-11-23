@@ -90,6 +90,7 @@ type model struct {
 	pendingCheckout *Checkout
 	hist            map[string]usageHistory
 	live            map[string]liveUsage
+	agentVersions   map[string]string // pod -> coding CLI version, probed once
 
 	// hidden stops shell screen renders while another tab is on screen.
 	hidden bool
@@ -178,20 +179,21 @@ func (m model) FocusPod(pod string) (Model, tea.Cmd) {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(fetchCmd(), tickCmd(), shellTickCmd())
+	return tea.Batch(fetchCmd(nil), tickCmd(), shellTickCmd())
 }
 
 type tickMsg struct{}
 type shellTickMsg struct{}
 
 type loadedMsg struct {
-	boxes     []cluster.Sandbox
-	pools     map[string]cluster.Pool
-	sessions  map[string]bool
-	windows   map[string][]session.Terminal
-	metricsOK bool
-	cgroups   map[string]cluster.CgroupSample
-	err       error
+	boxes         []cluster.Sandbox
+	pools         map[string]cluster.Pool
+	sessions      map[string]bool
+	windows       map[string][]session.Terminal
+	metricsOK     bool
+	cgroups       map[string]cluster.CgroupSample
+	agentVersions map[string]string
+	err           error
 }
 
 type claimMsg struct {
@@ -276,23 +278,33 @@ func shellTickCmd() tea.Cmd {
 	return tea.Tick(shellRefreshEvery, func(time.Time) tea.Msg { return shellTickMsg{} })
 }
 
-func fetchCmd() tea.Cmd {
+// fetchCmd reloads the fleet. known holds pod versions already probed, so
+// each pod's coding CLI is asked for its version only once per lifetime.
+func fetchCmd(known map[string]string) tea.Cmd {
 	return func() tea.Msg {
 		boxes, pools, metricsOK, err := cluster.Fetch()
-		var claimed []string
+		var claimed, unprobed []string
 		for _, b := range boxes {
-			if b.Claimed() && b.Phase == "Running" {
+			if b.Phase != "Running" {
+				continue
+			}
+			if b.Claimed() {
 				claimed = append(claimed, b.Name)
+			}
+			if _, ok := known[b.Name]; !ok {
+				unprobed = append(unprobed, b.Name)
 			}
 		}
 		var (
 			windows map[string][]session.Terminal
 			cgroups map[string]cluster.CgroupSample
+			probed  map[string]string
 			wg      sync.WaitGroup
 		)
-		wg.Add(2)
+		wg.Add(3)
 		go func() { defer wg.Done(); windows = session.LiveTerminals(boxes) }()
 		go func() { defer wg.Done(); cgroups = cluster.ReadCgroups(claimed) }()
+		go func() { defer wg.Done(); probed = cluster.AgentVersions(unprobed) }()
 		wg.Wait()
 		sessions := make(map[string]bool, len(windows))
 		for pod, terms := range windows {
@@ -301,13 +313,14 @@ func fetchCmd() tea.Cmd {
 			}
 		}
 		return loadedMsg{
-			boxes:     boxes,
-			pools:     pools,
-			sessions:  sessions,
-			windows:   windows,
-			metricsOK: metricsOK,
-			cgroups:   cgroups,
-			err:       err,
+			boxes:         boxes,
+			pools:         pools,
+			sessions:      sessions,
+			windows:       windows,
+			metricsOK:     metricsOK,
+			cgroups:       cgroups,
+			agentVersions: probed,
+			err:           err,
 		}
 	}
 }
@@ -542,6 +555,26 @@ func (m *model) applyLive(samples map[string]cluster.CgroupSample) {
 		next[b.Name] = st
 	}
 	m.live = next
+}
+
+// mergeAgentVersions records freshly probed CLI versions and drops the ones
+// whose pods left the fleet.
+func (m *model) mergeAgentVersions(probed map[string]string) {
+	if m.agentVersions == nil {
+		m.agentVersions = map[string]string{}
+	}
+	live := make(map[string]bool, len(m.boxes))
+	for _, b := range m.boxes {
+		live[b.Name] = true
+	}
+	for pod := range m.agentVersions {
+		if !live[pod] {
+			delete(m.agentVersions, pod)
+		}
+	}
+	for pod, v := range probed {
+		m.agentVersions[pod] = v
+	}
 }
 
 // usageKnown is whether b's numbers are real: metrics-server answered, or

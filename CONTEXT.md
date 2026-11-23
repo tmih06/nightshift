@@ -162,7 +162,9 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
   own cgroup counters, read with one `kubectl exec` per refresh: memory from
   the first read, CPU as the rate between two. Warm sandboxes use
   metrics-server, which the cluster samples every 15 seconds and
-  averages over 15 to 30.
+  averages over 15 to 30. Each running pod's coding CLI is asked its
+  `--version` once (with `/etc/nightshift-agent` as fallback), so the table
+  and the sidebar's image line show the real version, not `:latest`.
 - A tab out of sight keeps refreshing, but the sandbox tab stops rendering the
   shell's screen until it is shown again. Its viewer still processes output so
   the screen stays current. Table rows and warm-sandbox documents are rendered
