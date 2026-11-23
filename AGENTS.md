@@ -24,6 +24,81 @@ project context, the layout, and the verify commands.
 - Keep build output, binaries, and credentials out of the repo. Never bake
   secrets into the sandbox image.
 
+## Quality gate
+
+Run `make quality-tools` once, then `make gate` before calling work done.
+
+- Build and test: `go build ./...`, `go test ./...`.
+- One linter: `.tools/bin/golangci-lint run --enable-only errcheck ./internal/app/...`.
+- Semgrep rules: `semgrep scan --metrics=off --config .semgrep/slop.yml internal`.
+- Debt fell: `make quality-baseline`, then commit the lower counts.
+
+Never bypass the gate. Never add `//nolint`, `t.Skip`, or disable a rule to make it pass. Never edit gate config to loosen it. If a rule seems wrong, stop and ask a human.
+
+## Go conventions
+
+- Wrap errors with `%w` and surface them as UI status (`internal/cluster/volume.go`).
+- Keep stdout clear: it belongs to the TUI. Log through `log`, which
+  `cmd/nightshift/main.go` discards unless `NIGHTSHIFT_DEBUG` names a file.
+- Take `ctx` first. Commands with no parent start from `context.WithTimeout`
+  (`internal/repoview/model.go`).
+- Respect the layers: `cluster`, `egress`, and `manifest` are leaves, `session`
+  imports only `cluster`, tabs talk through `internal/app`, and vendored code
+  imports nothing first-party. `depguard` enforces this.
+- Give every goroutine an owner: a `sync.WaitGroup`, done channel, or context
+  (`internal/dashboard/model.go`).
+- Write first-party tests with the standard library and plain `t.Errorf`
+  (`internal/dashboard/dashboard_test.go`).
+- Reuse `internal/cluster` for `kubectl`, `internal/session` for Herdr,
+  `internal/dialog` for dialogs, and gh-dash's `tui/theme` for styling.
+
+## Guardrails
+
+### Root-cause fixes must leave a guardrail
+
+Whenever you fix a bug or defect by finding its root cause, you MUST also add a rule that prevents the same class of problem from recurring, in the same PR. Do this in order of preference:
+
+1. **Mechanical enforcement**: a new or tightened golangci-lint setting, a Semgrep rule (with positive and negative fixtures), a forbidigo/depguard entry, or a regression test that fails without the fix.
+2. **A written rule** in the "Learned rules" section below, when it cannot be enforced mechanically.
+
+Every entry in "Learned rules" must follow this format, be specific and testable, and be checked for duplicates first (merge with or sharpen an existing rule instead of adding near-copies):
+
+- **Rule**: one imperative sentence.
+- **Why**: the incident or bug that caused it (PR, commit, or issue link).
+- **Enforced by**: the lint rule, Semgrep id, or test name, or "manual" if none.
+
+A fix PR that adds no rule must say why in its description (for example, "one-off typo, no recurring class"). Do not add vague rules like "be careful with errors". If a rule can't be made specific enough to check, don't add it.
+
+### Maintaining the rules
+
+When a learned rule becomes mechanically enforced, update its "Enforced by".
+Prune rules that no longer apply. Past about 200 lines, move older detail into
+`docs/rules/` and link to it.
+
+## Learned rules
+
+- **Rule**: Give every external command a deadline.
+  - **Why**: A `git clone` stalled forever on a hung stream (`82ea704`).
+  - **Enforced by**: `noctx`.
+- **Rule**: Assign a mutating model command to a variable before `return m, cmd`.
+  - **Why**: Go leaves the order unspecified, so 8 sites may return stale state (`docs/quality-discovery.md`).
+  - **Enforced by**: `gocritic` `evalOrder`.
+- **Rule**: Build render output in one `strings.Builder` pass, never by repeated joins.
+  - **Why**: An O(N^2) join made the commits tab lag (`4b3e2f4`).
+  - **Enforced by**: `perfsprint`, `BenchmarkPRCommitsTab`.
+- **Rule**: Send all input to the shell while it holds focus.
+  - **Why**: Wheel and click events leaked past the focused shell (`28619be`).
+  - **Enforced by**: `TestNoInputLeaksFromShell`.
+- **Rule**: Drain shell input as one ordered batch at a time.
+  - **Why**: Concurrent sends reordered fast typing (`b18d72a`).
+  - **Enforced by**: `TestShellInputQueue`.
+- **Rule**: Scale usage graphs against the sandbox limit, not the window's peak.
+  - **Why**: A 45% load drew as a full graph (`e14c24f`).
+  - **Enforced by**: `TestBrailleGraph`.
+- **Rule**: Keep `k8s/` YAML lines within 80 columns.
+  - **Why**: A long comment failed Lint on `main` (`9ee64a4`).
+  - **Enforced by**: `make lint`.
+
 ## Commit messages
 
 Every commit message follows [Conventional Commits 1.0.0](https://www.conventionalcommits.org/). The format is `type(scope): subject`.
