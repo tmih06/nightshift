@@ -2,6 +2,7 @@ package repoview
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
@@ -341,19 +342,19 @@ func (m *Model) scopeCountBadge(repo string, sc Scope) string {
 	switch sc {
 	case ScopeBranches:
 		if rc.branchesLoaded {
-			return fmt.Sprintf("%d", len(rc.branches))
+			return strconv.Itoa(len(rc.branches))
 		}
 	case ScopePRs:
 		if rc.prsLoaded {
-			return fmt.Sprintf("%d", len(rc.prs))
+			return strconv.Itoa(len(rc.prs))
 		}
 	case ScopeIssues:
 		if rc.issuesLoaded {
-			return fmt.Sprintf("%d", len(rc.issues))
+			return strconv.Itoa(len(rc.issues))
 		}
 	case ScopeActions:
 		if rc.runsLoaded {
-			return fmt.Sprintf("%d", len(rc.runs))
+			return strconv.Itoa(len(rc.runs))
 		}
 	}
 	return ""

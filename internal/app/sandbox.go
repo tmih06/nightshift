@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
@@ -481,7 +482,7 @@ func (p *picker) volumeLine() string {
 }
 
 func (m Model) pickerInputWidthFor(p *picker, nameW, tmplW int, title, vol string) int {
-	digits := len(fmt.Sprintf("%d", len(p.pools)))
+	digits := len(strconv.Itoa(len(p.pools)))
 	optW := 1 + digits + 2 + nameW + 2 + tmplW + 2 + 1 + 1 // trailing "  › "
 	inner := max(44, lipgloss.Width(title), lipgloss.Width(vol), lipgloss.Width(issuePickerHint), optW)
 	inner = min(inner, max(1, m.width-4))

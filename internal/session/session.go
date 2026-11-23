@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -247,7 +248,7 @@ func (c *podConn) writeFrame(channel uint32, kind byte, payload []byte) error {
 	closed := c.closed
 	c.mu.Unlock()
 	if closed {
-		return fmt.Errorf("hc connection closed")
+		return errors.New("hc connection closed")
 	}
 	return writeFrame(c.in, channel, kind, payload)
 }
@@ -269,7 +270,7 @@ func (c *podConn) callHook(method string, params any, onResult func(json.RawMess
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
-		return rpcOutcome{}, fmt.Errorf("hc connection closed")
+		return rpcOutcome{}, errors.New("hc connection closed")
 	}
 	id := c.nextID
 	c.nextID++
@@ -305,7 +306,7 @@ func (c *podConn) callHook(method string, params any, onResult func(json.RawMess
 		err := c.closeErr
 		c.mu.Unlock()
 		if err == nil {
-			err = fmt.Errorf("hc connection closed")
+			err = errors.New("hc connection closed")
 		}
 		return rpcOutcome{}, err
 	case <-timer.C:
@@ -344,7 +345,7 @@ func (c *podConn) readLoop() {
 		for _, pc := range pending {
 			err := readErr
 			if err == nil {
-				err = fmt.Errorf("hc connection closed")
+				err = errors.New("hc connection closed")
 			}
 			pc.done <- rpcOutcome{err: err}
 		}
@@ -383,7 +384,7 @@ func (c *podConn) readLoop() {
 				var credit [4]byte
 				binary.LittleEndian.PutUint32(credit[:], uint32(len(payload)))
 				if c.writeFrame(channel, 1, credit[:]) != nil {
-					readErr = fmt.Errorf("hc credit write failed")
+					readErr = errors.New("hc credit write failed")
 					return
 				}
 			}
@@ -826,7 +827,7 @@ func (v *viewer) send(kind byte, payload []byte) error {
 	closed := v.closed
 	v.mu.Unlock()
 	if closed {
-		return fmt.Errorf("hc viewer closed")
+		return errors.New("hc viewer closed")
 	}
 	if v.conn != nil {
 		return v.conn.writeFrame(v.channel, kind, payload)

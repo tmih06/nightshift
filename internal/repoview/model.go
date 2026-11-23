@@ -2,7 +2,7 @@ package repoview
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -655,7 +655,7 @@ func (m *Model) setNotice(text string, isErr bool) tea.Cmd {
 
 func defaultOpenBrowser(targetURL string) error {
 	if targetURL == "" {
-		return fmt.Errorf("nothing to open")
+		return errors.New("nothing to open")
 	}
 	if _, err := exec.LookPath("gh"); err == nil {
 		// Use gh browse only when no full URL; for full URLs use platform opener.

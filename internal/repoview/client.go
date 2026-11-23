@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -475,7 +477,7 @@ func (c *githubClient) CreateBranch(ctx context.Context, repo, name, baseRef str
 	}
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return fmt.Errorf("branch name cannot be empty")
+		return errors.New("branch name cannot be empty")
 	}
 	baseRef = strings.TrimSpace(baseRef)
 	if baseRef == "" {
@@ -768,7 +770,7 @@ func (c *githubClient) ListIssueComments(ctx context.Context, repo string, numbe
 			author = r.User.Login
 		}
 		out = append(out, IssueComment{
-			ID:        fmt.Sprint(r.ID),
+			ID:        strconv.FormatInt(r.ID, 10),
 			Author:    author,
 			Body:      r.Body,
 			CreatedAt: r.CreatedAt,
@@ -847,7 +849,7 @@ func (c *githubClient) CommentIssue(ctx context.Context, repo string, number int
 		author = raw.User.Login
 	}
 	return IssueComment{
-		ID:        fmt.Sprint(raw.ID),
+		ID:        strconv.FormatInt(raw.ID, 10),
 		Author:    author,
 		Body:      raw.Body,
 		CreatedAt: raw.CreatedAt,

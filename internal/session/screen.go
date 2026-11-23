@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -27,7 +28,7 @@ func WatchScreen(pod, term string, w, h int, resize bool, wait time.Duration) ([
 		select {
 		case <-v.dirty:
 		case <-v.done:
-			return nil, fmt.Errorf("hc viewer closed")
+			return nil, errors.New("hc viewer closed")
 		case <-timer.C:
 			return nil, nil
 		}
