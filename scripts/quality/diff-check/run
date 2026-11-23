@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Saves the change against the merge base, then runs the diff rules on it.
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+base="${GATE_BASE:-origin/main}"
+dir=".tools/gate/diff"
+rm -rf "$dir"
+mkdir -p "$dir"
+
+merge_base="$(git merge-base "$base" HEAD)"
+git diff --name-status --no-renames "$merge_base" >"$dir/status"
+git diff -U0 --no-renames --no-color "$merge_base" >"$dir/diff"
+git ls-files --others --exclude-standard >"$dir/untracked"
+git log --format=%s "$merge_base..HEAD" >"$dir/subjects"
+
+# Before the gate exists on the base branch, its own files cannot need approval.
+if ! git cat-file -e "$merge_base:scripts/quality/diff-check/main.go" 2>/dev/null; then
+  touch "$dir/bootstrap"
+fi
+
+if [ "${1:-}" = "--prepare" ]; then
+  exit 0
+fi
+
+GATE_DIFF_DIR="$dir" go run ./scripts/quality/diff-check

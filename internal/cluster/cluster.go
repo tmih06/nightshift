@@ -3,6 +3,7 @@ package cluster
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"sort"
@@ -459,7 +460,7 @@ spec:
 func cpuMillicores(q string) (int64, error) {
 	s := strings.TrimSpace(q)
 	if s == "" {
-		return 0, fmt.Errorf("empty cpu quantity")
+		return 0, errors.New("empty cpu quantity")
 	}
 	mult, div := int64(1000), int64(1)
 	switch {
@@ -478,7 +479,7 @@ func cpuMillicores(q string) (int64, error) {
 func memMiB(q string) (int64, error) {
 	s := strings.TrimSpace(q)
 	if s == "" {
-		return 0, fmt.Errorf("empty memory quantity")
+		return 0, errors.New("empty memory quantity")
 	}
 	mult, div := int64(1), int64(1024*1024)
 	switch {

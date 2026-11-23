@@ -3,6 +3,7 @@ package repoview
 import (
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -680,7 +681,7 @@ func (m *Model) renderFileDetails(entry TreeEntry, width int) []string {
 	}
 
 	tokenLines := m.syntax.Lines(entry.Path, fc.Content)
-	gutterW := len(fmt.Sprintf("%d", max(1, len(tokenLines))))
+	gutterW := len(strconv.Itoa(max(1, len(tokenLines))))
 
 	for i, toks := range tokenLines {
 		var b strings.Builder

@@ -5,6 +5,7 @@
 package egress
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -106,7 +107,7 @@ func ParseConfig(data []byte) (Config, error) {
 func (c *Config) Validate() error {
 	for name, b := range c.Secrets {
 		if strings.TrimSpace(name) == "" {
-			return fmt.Errorf("secret binding has empty name")
+			return errors.New("secret binding has empty name")
 		}
 		if b.Placeholder == "" {
 			b.Placeholder = DefaultPlaceholderPrefix + name

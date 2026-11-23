@@ -56,7 +56,7 @@ func (m *Model) paletteCommands() []paletteCommand {
 			bName := row.branch.Name
 			cmds = append(cmds, paletteCommand{
 				Category: "Branches",
-				Label:    fmt.Sprintf("Delete branch %s", bName),
+				Label:    "Delete branch " + bName,
 				Key:      "d",
 				Run:      func(m *Model) tea.Cmd { return m.promptDeleteBranch(bName) },
 			})
@@ -191,7 +191,7 @@ func (m *Model) paletteCommands() []paletteCommand {
 
 	// Scope navigation commands.
 	for _, sc := range allScopes {
-		sc := sc
+
 		cmds = append(cmds, paletteCommand{
 			Category: "Scope",
 			Label:    "Switch to " + sc.String(),

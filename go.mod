@@ -32,6 +32,7 @@ require (
 	github.com/shurcooL/githubv4 v0.0.0-20260209031235-2402fdf4a9ed
 	github.com/stretchr/testify v1.11.1
 	github.com/yuin/goldmark-emoji v1.0.6
+	go.uber.org/goleak v1.3.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 

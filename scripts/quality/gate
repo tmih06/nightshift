@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+# The quality gate: one entry point for agents and CI, cheapest checks first.
+# Usage: scripts/quality/gate [collect]
+#   collect only gathers the tool output that the ratchet reads.
+# Env: GATE_BASE (default origin/main), GATE_PROFILE (fast or full).
+# Local runs default to fast: build, lint on changed packages, diff rules.
+# CI defaults to full, which adds tests and every slower check.
+set -uo pipefail
+
+cd "$(git rev-parse --show-toplevel)" || exit 2
+
+export GATE_BASE="${GATE_BASE:-origin/main}"
+# Tests must never reach a real cluster.
+export KUBECONFIG=/nonexistent
+# Analysis tools need the module's toolchain first, not the system go.
+PATH="$(go env GOROOT)/bin:$PWD/.tools/bin:$HOME/.local/bin:$PATH"
+export PATH
+
+OUT=.tools/gate
+PROFILE="${GATE_PROFILE:-}"
+if [ -z "$PROFILE" ]; then
+  if [ -n "${CI:-}" ]; then PROFILE=full; else PROFILE=fast; fi
+fi
+if [ "${1:-}" = collect ]; then PROFILE=full; fi
+LINT_TARGETS=(./...)
+JSCPD_VERSION=5.4.3
+
+require_tools() {
+  local missing=() tools=(golangci-lint)
+  if [ "$PROFILE" = full ]; then tools+=(govulncheck deadcode semgrep npx); fi
+  for tool in "${tools[@]}"; do
+    command -v "$tool" >/dev/null || missing+=("$tool")
+  done
+  if [ "${#missing[@]}" -gt 0 ]; then
+    echo "gate: missing tools: ${missing[*]}. Fix: run make quality-tools." >&2
+    exit 2
+  fi
+}
+
+# Prints the packages that hold changed Go files.
+changed_packages() {
+  local changed
+  changed="$(cut -f2 "$OUT/diff/status"; cat "$OUT/diff/untracked")"
+  # go list leaves out fixtures in dot-directories, which are not real packages.
+  comm -12 \
+    <(grep -E '\.go$' <<<"$changed" | sed -E 's#/testdata(/.*)?$##; s#/[^/]*$##' | sort -u) \
+    <(go list -e -f '{{.Dir}}' ./... | sed "s#^$PWD/##" | sort -u) |
+    sed 's#^#./#'
+}
+
+lint_json() {
+  local rc=0
+  golangci-lint run --output.json.path "$1" --output.text.path /dev/null \
+    --show-stats=false "${@:2}" "${LINT_TARGETS[@]}" || rc=$?
+  # Exit 1 means findings, which the report step prints. Anything else is a crash.
+  [ "$rc" -le 1 ]
+}
+
+step_build() { go build ./...; }
+
+step_lint() {
+  if [ "$PROFILE" = fast ]; then
+    mapfile -t LINT_TARGETS < <(changed_packages)
+    if [ "${#LINT_TARGETS[@]}" -eq 0 ]; then
+      echo "no changed Go packages"
+      return 0
+    fi
+  else
+    golangci-lint config verify || return 1
+  fi
+  lint_json "$OUT/lint-new.json" --new-from-merge-base="$GATE_BASE" &&
+    go run ./scripts/quality/ratchet report lint
+}
+
+step_vet() { go vet ./...; }
+
+semgrep_scan() {
+  semgrep scan --metrics=off --disable-version-check --strict --quiet \
+    --config .semgrep/slop.yml --json --output "$OUT/semgrep.json" cmd internal scripts
+}
+
+step_semgrep() {
+  local dir rc=0
+  dir="$(mktemp -d)"
+  cp .semgrep/slop.yml .semgrep/tests/slop.go "$dir/"
+  semgrep scan --test --metrics=off --disable-version-check \
+    --config "$dir/slop.yml" "$dir/slop.go" || rc=$?
+  rm -rf "$dir"
+  [ "$rc" -eq 0 ] && semgrep_scan && go run ./scripts/quality/ratchet report semgrep
+}
+
+step_test() {
+  go test -race -shuffle=on -count=1 -timeout=30m -covermode=atomic \
+    -coverprofile="$OUT/cover.out" ./...
+}
+
+step_diff() { scripts/quality/diff-check/run; }
+
+step_coverage() { go run ./scripts/quality/changed-coverage; }
+
+collect_debt() {
+  lint_json "$OUT/lint-full.json" &&
+    deadcode -test ./... >"$OUT/deadcode.txt" &&
+    npx --yes "jscpd@$JSCPD_VERSION" --silent --reporters json --output "$OUT/jscpd" \
+      --format go --min-lines 10 --min-tokens 100 --ignore '**/*_test.go' internal cmd
+}
+
+step_duplication() { collect_debt && go run ./scripts/quality/ratchet check; }
+
+step_vuln() { govulncheck ./...; }
+
+step_tidy() { go mod tidy -diff; }
+
+run_step() {
+  local name="$1" fn="$2" start elapsed
+  start="$(date +%s.%N)"
+  if "$fn" >"$OUT/step.log" 2>&1; then
+    elapsed="$(awk -v a="$start" -v b="$(date +%s.%N)" 'BEGIN { printf "%.1f", b - a }')"
+    printf '%s\t%s\n' "$name" "$elapsed" >>"$OUT/timings.tsv"
+    echo "gate: ok   $name (${elapsed}s)"
+    return 0
+  fi
+  elapsed="$(awk -v a="$start" -v b="$(date +%s.%N)" 'BEGIN { printf "%.1f", b - a }')"
+  {
+    cat "$OUT/step.log"
+    echo "gate: FAIL $name (${elapsed}s). Fix the cause. Never bypass the gate, add //nolint or t.Skip, or loosen its config. If a rule seems wrong, stop and ask a human."
+  } >&2
+  exit 1
+}
+
+mkdir -p "$OUT"
+require_tools
+scripts/quality/diff-check/run --prepare || exit 2
+
+if [ "${1:-}" = collect ]; then
+  semgrep_scan && collect_debt
+  exit
+fi
+
+: >"$OUT/timings.tsv"
+run_step build step_build
+run_step golangci-lint step_lint
+if [ "$PROFILE" = fast ]; then
+  run_step diff-check step_diff
+  echo "gate: passed (fast). CI runs the full gate, or run make gate-full."
+  exit 0
+fi
+run_step vet step_vet
+run_step semgrep step_semgrep
+run_step test step_test
+run_step diff-check step_diff
+run_step changed-coverage step_coverage
+run_step duplication-and-ratchet step_duplication
+run_step govulncheck step_vuln
+run_step mod-tidy step_tidy
+echo "gate: passed"

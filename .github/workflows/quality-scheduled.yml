@@ -1,0 +1,32 @@
+---
+name: Quality scheduled
+
+on:
+  schedule:
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mutation:
+    name: Mutation (${{ matrix.package }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [egress, session, cluster]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Install gate tools
+        run: make quality-tools
+      - name: Run gremlins
+        env:
+          PACKAGE: ${{ matrix.package }}
+        run: .tools/bin/gremlins unleash --workers 2 --timeout-coefficient 10 "./internal/$PACKAGE"

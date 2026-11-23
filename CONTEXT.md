@@ -64,6 +64,11 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
   `docs/session-manager.md` describes session behavior.
   `docs/sandbox-egress-and-secrets.md` surveys open-source network egress
   control and credential-isolation proxies for coding agent sandboxes.
+- `scripts/quality/`, `.golangci.yml`, and `.semgrep/` are the quality gate,
+  run with `make gate` locally, by the agent Stop hook in
+  `.agents/settings.json`, and in `.github/workflows/quality-gate.yml`.
+  `docs/quality-discovery.md` holds the measurements behind its thresholds and
+  `docs/quality-baseline.md` the recorded debt.
 - `.agents/skills/` holds the agent skills for this repo. `.claude/` is a
   symlink to `.agents/`, so Claude Code reads the same skills.
 - `ARCHITECTURE.md` explains how the parts connect, with diagrams.
@@ -222,5 +227,7 @@ toolchain on demand, and the repo needs no other Go config.
 - Run `make lint` for shellcheck, yamllint on `k8s/`, and markdownlint on
   `*.md` and `docs/*.md`. It requires shellcheck, pipx, and npx; CI runs the
   same target and also checks workflow files with actionlint.
+- Run `make quality-tools` once, then `make gate` for the fast local checks.
+  CI runs `make gate-full`, which takes about ten minutes for its race tests.
 - Run `make fmt` to format Go files or `make fmt-check` to check formatting
   without changing files. CI also checks commit subjects against `AGENTS.md`.

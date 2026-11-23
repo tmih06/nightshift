@@ -2,6 +2,7 @@ package repoview
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1303,7 +1304,7 @@ func (m *Model) copySelection(alt bool) tea.Cmd {
 					text = fmt.Sprintf("%s#%d", m.selectedRepo, row.issue.Number)
 					label = "issue ref"
 				case listRun:
-					text = fmt.Sprintf("%d", row.run.ID)
+					text = strconv.FormatInt(row.run.ID, 10)
 					label = "run ID"
 				case listFile:
 					text = row.entry.Path

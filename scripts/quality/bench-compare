@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Compares the render benchmarks between the base branch and HEAD.
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+PATH="$PWD/.tools/bin:$PATH"
+base="${GATE_BASE:-origin/main}"
+packages=(./internal/dashboard ./internal/repoview ./internal/session)
+flags=(-run '^$' -bench . -benchmem -count=6 -benchtime=20x)
+
+work="$(mktemp -d)"
+cleanup() {
+  git worktree remove --force "$work/base" 2>/dev/null || true
+  rm -rf "$work"
+}
+trap cleanup EXIT
+
+git worktree add --quiet --detach "$work/base" "$(git merge-base "$base" HEAD)"
+(cd "$work/base" && go test "${flags[@]}" "${packages[@]}") >"$work/old.txt"
+go test "${flags[@]}" "${packages[@]}" >"$work/new.txt"
+benchstat "$work/old.txt" "$work/new.txt"

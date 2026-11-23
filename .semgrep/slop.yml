@@ -1,0 +1,83 @@
+# Repo-specific slop rules, derived from docs/quality-discovery.md.
+# Each message says what to do instead. Fixtures live in .semgrep/tests/.
+rules:
+  - id: slop-error-assigned-to-blank
+    languages: [go]
+    severity: ERROR
+    message: >-
+      This discards an error. Return it wrapped with fmt.Errorf("...: %w", err),
+      or surface it through the model's status message.
+    pattern-either:
+      - pattern: _ = err
+      - pattern: _ = $X.Close()
+      - pattern: _ = $X.Shutdown(...)
+      - pattern: _ = $X.Run()
+      - pattern: _ = $X.Wait()
+      - pattern: _ = os.Remove(...)
+      - pattern: _ = os.WriteFile(...)
+      - pattern: _ = json.Unmarshal(...)
+      - pattern: _, _ = io.Copy(...)
+
+  - id: slop-empty-error-block
+    languages: [go]
+    severity: ERROR
+    message: >-
+      This error branch does nothing. Return the wrapped error, or handle the
+      failure explicitly.
+    patterns:
+      - pattern: |
+          if $ERR != nil {
+          }
+      - metavariable-regex:
+          metavariable: $ERR
+          regex: (?i).*err.*
+
+  - id: slop-floating-goroutine
+    languages: [go]
+    severity: ERROR
+    message: >-
+      Nothing can wait for or stop this goroutine. Tie it to a sync.WaitGroup, a
+      done channel, or a context so its lifetime has an owner.
+    patterns:
+      - pattern: |
+          go func(...) {
+            $...BODY
+          }(...)
+      # A body that signals completion, receives, or closes a channel has an owner.
+      - metavariable-regex:
+          metavariable: $...BODY
+          regex: (?s)^(?!.*(\.Done\(\)|<-|\bclose\()).*$
+
+  - id: slop-kubectl-outside-cluster
+    languages: [go]
+    severity: ERROR
+    message: >-
+      Do not shell out to kubectl here. Add or reuse a helper in
+      internal/cluster, which owns cluster access.
+    paths:
+      exclude:
+        - "**/internal/cluster/**"
+        - "**/internal/session/**"
+    pattern-either:
+      - pattern: exec.Command("kubectl", ...)
+      - pattern: exec.CommandContext($CTX, "kubectl", ...)
+
+  - id: slop-background-context-in-request-path
+    languages: [go]
+    severity: ERROR
+    message: >-
+      This drops the caller's deadline and cancellation. Derive from the ctx
+      parameter or r.Context() instead.
+    patterns:
+      - pattern-either:
+          - pattern: context.Background()
+          - pattern: context.TODO()
+      - pattern-either:
+          - pattern-inside: |
+              func $F(..., $C context.Context, ...) { ... }
+          - pattern-inside: |
+              func ($S $T) $F(..., $C context.Context, ...) { ... }
+          - pattern-inside: |
+              func $F(..., $R *http.Request, ...) { ... }
+          - pattern-inside: |
+              func ($S $T) $F(..., $R *http.Request, ...) { ... }

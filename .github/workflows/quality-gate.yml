@@ -1,0 +1,75 @@
+---
+name: Quality gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  pull_request_review:
+    types: [submitted]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: quality-gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: Quality gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Install Semgrep
+        run: pipx install semgrep==1.180.0
+      - name: Install gate tools
+        run: make quality-tools
+      - name: Check code owner approval
+        if: github.event.pull_request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: scripts/quality/owner-approved >> "$GITHUB_ENV"
+      - name: Accept reviewed changes on main
+        if: github.event_name != 'pull_request' && github.event_name != 'pull_request_review'
+        run: echo "GATE_OWNER_APPROVED=1" >> "$GITHUB_ENV"
+      - name: Run the gate
+        env:
+          GATE_BASE: ${{ github.event.pull_request && format('origin/{0}', github.event.pull_request.base.ref) || 'HEAD~1' }}
+          GATE_PROFILE: full
+          GATE_CI: ${{ github.event.pull_request && '1' || '' }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: make gate-full
+
+  benchmarks:
+    name: Benchmarks (non-blocking)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Install gate tools
+        run: make quality-tools
+      - name: Compare with the base branch
+        env:
+          GATE_BASE: origin/${{ github.event.pull_request.base.ref }}
+        run: scripts/quality/bench-compare

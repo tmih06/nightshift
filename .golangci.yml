@@ -1,0 +1,184 @@
+# Quality gate lint rules. Thresholds come from docs/quality-discovery.md,
+# measured on first-party production code. Changing this file needs CODEOWNERS
+# approval. Existing debt is ratcheted in docs/quality-baseline.json.
+version: "2"
+
+run:
+  timeout: 10m
+  tests: true
+
+issues:
+  # Report everything: the ratchet needs true per-rule totals.
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  # The default hides issues that share a line, which undercounted debt by half.
+  uniq-by-line: false
+
+linters:
+  default: none
+  enable:
+    # Correctness
+    - govet # compiler-adjacent bug patterns
+    - staticcheck # broad, low-noise bug detection
+    - errcheck # unchecked errors hide failed kubectl and git calls
+    - errorlint # %w wrapping is the repo convention; compare with errors.Is
+    - nilerr # returning nil after a failed check swallows the failure
+    - ineffassign # dead assignments usually mean a lost result
+    - copyloopvar # removes pre-1.22 loop variable copies
+    - exhaustive # enum switches drive TUI focus state (28619be)
+    # Error and context hygiene
+    - wrapcheck # errors crossing packages need context for the status bar
+    - contextcheck # keeps the caller's deadline on the call chain
+    - noctx # an exec with no deadline stalled clones forever (82ea704)
+    - bodyclose # the egress proxy must not leak upstream responses
+    # Workaround detectors
+    - nolintlint # every suppression must be specific and explained
+    - godox # first-party code has zero TODOs; keep it that way
+    - forbidigo # bans stdout writes, sleeps, and panics in a TUI
+    - gochecknoglobals # shared mutable state breaks concurrent refresh
+    - gochecknoinits # hidden startup order
+    - nakedret # naked returns obscure values in long update functions
+    # Complexity and duplication
+    - gocognit # update loops are the main complexity risk
+    - cyclop # second view of branching, per function
+    - funlen # long functions hide state transitions
+    - nestif # deep conditionals caused focus-state bugs
+    - dupl # first-party production code has no dupl hits today
+    - goconst # repeated literals drift apart
+    - revive # only for parameter count and nesting depth limits
+    # Dead code
+    - unused # unreferenced identifiers
+    - unparam # parameters that never vary
+    # Performance: render latency is the top fix class in history
+    - prealloc # avoids regrowth on render paths
+    - perfsprint # cheaper conversions on render paths
+    - gocritic # diagnostics, performance, and evaluation order
+    # Security
+    - gosec # the egress proxy handles credentials
+    # Tests
+    - testifylint # vendored tests use testify
+    - thelper # failures point at the caller
+    - tparallel # keeps t.Parallel use consistent
+    # Architecture
+    - depguard # encodes the import layering
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+    exhaustive:
+      # A deliberate default branch is an explicit decision.
+      default-signifies-exhaustive: true
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+      allow-unused: false
+    godox:
+      keywords: [TODO, FIXME, HACK, XXX, WORKAROUND]
+    forbidigo:
+      forbid:
+        - pattern: '^time\.Sleep$'
+          msg: Wait on a channel, timer, or context so the wait can be cancelled.
+        - pattern: '^fmt\.Print.*$'
+          msg: Stdout corrupts the TUI. Return the text or write to an io.Writer.
+        - pattern: '^panic$'
+          msg: Return an error so the UI can show it.
+        - pattern: '^context\.TODO$'
+          msg: Pass the caller's context, or use context.WithTimeout.
+    funlen:
+      lines: 60 # p90 is 55
+      statements: 35 # p90 is 32
+      ignore-comments: true
+    cyclop:
+      max-complexity: 12 # p90 is 12
+    gocognit:
+      min-complexity: 15 # p90 is 14
+    nestif:
+      min-complexity: 4 # p95 is 3
+    nakedret:
+      max-func-lines: 0 # first-party code has no naked returns
+    dupl:
+      threshold: 150 # zero first-party hits at this size
+    goconst:
+      min-len: 3
+      min-occurrences: 3
+    revive:
+      rules:
+        - name: argument-limit
+          arguments: [5] # p99 is 5
+        - name: max-control-nesting
+          arguments: [5] # p99 is 5
+    gocritic:
+      enabled-tags: [diagnostic, performance, style]
+      disabled-checks:
+        # Bubble Tea models are value receivers by design (202 hits).
+        - hugeParam
+    depguard:
+      rules:
+        leaf-packages:
+          files: ["**/internal/cluster/**", "**/internal/egress/**", "**/internal/manifest/**"]
+          deny:
+            - pkg: github.com/tmih06/nightshift/internal
+              desc: This package is a leaf. Move shared code here instead of importing upward.
+        session:
+          files: ["**/internal/session/**"]
+          deny:
+            - pkg: github.com/tmih06/nightshift/internal/app
+              desc: session sits below the UI and may import only cluster.
+            - pkg: github.com/tmih06/nightshift/internal/dashboard
+              desc: session sits below the UI and may import only cluster.
+            - pkg: github.com/tmih06/nightshift/internal/repoview
+              desc: session sits below the UI and may import only cluster.
+            - pkg: github.com/tmih06/nightshift/internal/dialog
+              desc: session sits below the UI and may import only cluster.
+            - pkg: github.com/tmih06/nightshift/internal/ghdash
+              desc: session sits below the UI and may import only cluster.
+            - pkg: github.com/tmih06/nightshift/internal/zenocto
+              desc: session sits below the UI and may import only cluster.
+        dialog:
+          files: ["**/internal/dialog/**"]
+          deny:
+            - pkg: github.com/tmih06/nightshift/internal/app
+              desc: dialog is a shared widget and must not import its callers.
+            - pkg: github.com/tmih06/nightshift/internal/dashboard
+              desc: dialog is a shared widget and must not import its callers.
+            - pkg: github.com/tmih06/nightshift/internal/repoview
+              desc: dialog is a shared widget and must not import its callers.
+        tabs-stay-separate:
+          files: ["**/internal/dashboard/**"]
+          deny:
+            - pkg: github.com/tmih06/nightshift/internal/app
+              desc: Tabs talk through messages routed by internal/app.
+            - pkg: github.com/tmih06/nightshift/internal/repoview
+              desc: Tabs talk through messages routed by internal/app.
+        repoview-stays-separate:
+          files: ["**/internal/repoview/**"]
+          deny:
+            - pkg: github.com/tmih06/nightshift/internal/app
+              desc: Tabs talk through messages routed by internal/app.
+            - pkg: github.com/tmih06/nightshift/internal/dashboard
+              desc: Tabs talk through messages routed by internal/app.
+            - pkg: github.com/tmih06/nightshift/internal/session
+              desc: Only the sandbox tab owns Herdr sessions.
+        vendored-stays-upstream:
+          files: ["**/internal/ghdash/**", "**/internal/zenocto/**"]
+          deny:
+            - pkg: github.com/tmih06/nightshift/internal/app
+              desc: Vendored code must not depend on Nightshift.
+            - pkg: github.com/tmih06/nightshift/internal/dashboard
+              desc: Vendored code must not depend on Nightshift.
+            - pkg: github.com/tmih06/nightshift/internal/repoview
+              desc: Vendored code must not depend on Nightshift.
+            - pkg: github.com/tmih06/nightshift/internal/session
+              desc: Vendored code must not depend on Nightshift.
+            - pkg: github.com/tmih06/nightshift/internal/cluster
+              desc: Vendored code must not depend on Nightshift.
+            - pkg: github.com/tmih06/nightshift/internal/dialog
+              desc: Vendored code must not depend on Nightshift.
+
+  exclusions:
+    generated: strict
+    rules:
+      # Table-driven tests are long and repetitive by design.
+      - path: _test\.go
+        linters: [funlen, gocognit, cyclop, dupl, goconst, wrapcheck]

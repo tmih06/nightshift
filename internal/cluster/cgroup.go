@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -79,7 +80,7 @@ func parseCgroup(out string) (CgroupSample, error) {
 		}
 	}
 	if !haveUptime || !haveCPU || current < 0 {
-		return s, fmt.Errorf("cgroup counters incomplete")
+		return s, errors.New("cgroup counters incomplete")
 	}
 	s.MemBytes = max(current-inactive, 0)
 	return s, nil

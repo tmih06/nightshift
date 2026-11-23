@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -141,9 +142,9 @@ func volumeManifest(name string, target VolumeFor) []byte {
 	}
 	switch target.Kind {
 	case VolumePR:
-		annotations[prAnnotation] = fmt.Sprint(target.Number)
+		annotations[prAnnotation] = strconv.Itoa(target.Number)
 	case VolumeIssue:
-		annotations[issueAnnotation] = fmt.Sprint(target.Number)
+		annotations[issueAnnotation] = strconv.Itoa(target.Number)
 	case VolumeRepo:
 		// Repo volumes only carry repo and branch annotations.
 	}
