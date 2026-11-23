@@ -227,7 +227,7 @@ toolchain on demand, and the repo needs no other Go config.
 - Run `make lint` for shellcheck, yamllint on `k8s/`, and markdownlint on
   `*.md` and `docs/*.md`. It requires shellcheck, pipx, and npx; CI runs the
   same target and also checks workflow files with actionlint.
-- Run `make quality-tools` once, then `make gate` for the full quality gate. It
-  tests changed packages locally and every package in CI.
+- Run `make quality-tools` once, then `make gate` for the fast local checks.
+  CI runs `make gate-full`, which takes about ten minutes for its race tests.
 - Run `make fmt` to format Go files or `make fmt-check` to check formatting
   without changing files. CI also checks commit subjects against `AGENTS.md`.

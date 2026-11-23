@@ -1,4 +1,4 @@
-.PHONY: lint fmt fmt-check gate quality-tools quality-baseline
+.PHONY: lint fmt fmt-check gate gate-full quality-tools quality-baseline
 
 GO_VERSION := $(shell sed -n 's/^go //p' go.mod)
 TOOLS_BIN := $(CURDIR)/.tools/bin
@@ -18,9 +18,13 @@ fmt:
 fmt-check:
 	test -z "$$(gofmt -l .)"
 
-# Runs every quality check, failing fast. See AGENTS.md.
+# Fast local checks: build, lint on changed packages, and the diff rules.
 gate:
-	@scripts/quality/gate
+	@GATE_PROFILE=fast scripts/quality/gate
+
+# Every check, as CI runs it. The race tests take about ten minutes.
+gate-full:
+	@GATE_PROFILE=full scripts/quality/gate
 
 # Installs the gate's pinned tools into .tools/bin, built with the module's Go.
 quality-tools:

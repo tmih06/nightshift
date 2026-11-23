@@ -48,11 +48,11 @@ jobs:
       - name: Run the gate
         env:
           GATE_BASE: ${{ github.event.pull_request && format('origin/{0}', github.event.pull_request.base.ref) || 'HEAD~1' }}
-          GATE_SCOPE: full
+          GATE_PROFILE: full
           GATE_CI: ${{ github.event.pull_request && '1' || '' }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
-        run: make gate
+        run: make gate-full
 
   benchmarks:
     name: Benchmarks (non-blocking)

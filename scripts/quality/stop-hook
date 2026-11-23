@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Claude Code Stop hook: the agent cannot finish while the gate fails.
+# Claude Code Stop hook: the agent cannot finish while the fast gate fails.
 # Exit 2 returns stderr to the agent. After repeated failures it lets the
 # stop through with a warning, so a human takes over instead of a loop.
 set -uo pipefail

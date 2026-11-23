@@ -26,7 +26,10 @@ project context, the layout, and the verify commands.
 
 ## Quality gate
 
-Run `make quality-tools` once, then `make gate` before calling work done.
+Run `make quality-tools` once, then `make gate` before calling work done. It
+builds, lints changed packages, and runs the diff rules in seconds. CI runs
+`make gate-full`, which adds race tests, Semgrep, coverage, the debt ratchet,
+and vulnerability scans.
 
 - Build and test: `go build ./...`, `go test ./...`.
 - One linter: `.tools/bin/golangci-lint run --enable-only errcheck ./internal/app/...`.

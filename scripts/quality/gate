@@ -2,7 +2,9 @@
 # The quality gate: one entry point for agents and CI, cheapest checks first.
 # Usage: scripts/quality/gate [collect]
 #   collect only gathers the tool output that the ratchet reads.
-# Env: GATE_BASE (default origin/main), GATE_SCOPE (changed or full).
+# Env: GATE_BASE (default origin/main), GATE_PROFILE (fast or full).
+# Local runs default to fast: build, lint on changed packages, diff rules.
+# CI defaults to full, which adds tests and every slower check.
 set -uo pipefail
 
 cd "$(git rev-parse --show-toplevel)" || exit 2
@@ -15,15 +17,18 @@ PATH="$(go env GOROOT)/bin:$PWD/.tools/bin:$HOME/.local/bin:$PATH"
 export PATH
 
 OUT=.tools/gate
-SCOPE="${GATE_SCOPE:-}"
-if [ -z "$SCOPE" ]; then
-  if [ -n "${CI:-}" ]; then SCOPE=full; else SCOPE=changed; fi
+PROFILE="${GATE_PROFILE:-}"
+if [ -z "$PROFILE" ]; then
+  if [ -n "${CI:-}" ]; then PROFILE=full; else PROFILE=fast; fi
 fi
+if [ "${1:-}" = collect ]; then PROFILE=full; fi
+LINT_TARGETS=(./...)
 JSCPD_VERSION=5.4.3
 
 require_tools() {
-  local missing=()
-  for tool in golangci-lint govulncheck deadcode semgrep npx; do
+  local missing=() tools=(golangci-lint)
+  if [ "$PROFILE" = full ]; then tools+=(govulncheck deadcode semgrep npx); fi
+  for tool in "${tools[@]}"; do
     command -v "$tool" >/dev/null || missing+=("$tool")
   done
   if [ "${#missing[@]}" -gt 0 ]; then
@@ -32,14 +37,10 @@ require_tools() {
   fi
 }
 
-# Prints the packages to test: all of them, or those holding changed Go files.
-test_packages() {
+# Prints the packages that hold changed Go files.
+changed_packages() {
   local changed
   changed="$(cut -f2 "$OUT/diff/status"; cat "$OUT/diff/untracked")"
-  if [ "$SCOPE" = full ] || grep -qxE 'go\.(mod|sum)' <<<"$changed"; then
-    echo ./...
-    return
-  fi
   grep -E '\.go$' <<<"$changed" | sed -E 's#/testdata(/.*)?$##; s#/[^/]*$##' | sort -u |
     while read -r dir; do
       if compgen -G "$dir/*.go" >/dev/null; then echo "./$dir"; fi
@@ -49,7 +50,7 @@ test_packages() {
 lint_json() {
   local rc=0
   golangci-lint run --output.json.path "$1" --output.text.path /dev/null \
-    --show-stats=false "${@:2}" ./... || rc=$?
+    --show-stats=false "${@:2}" "${LINT_TARGETS[@]}" || rc=$?
   # Exit 1 means findings, which the report step prints. Anything else is a crash.
   [ "$rc" -le 1 ]
 }
@@ -57,8 +58,16 @@ lint_json() {
 step_build() { go build ./...; }
 
 step_lint() {
-  golangci-lint config verify &&
-    lint_json "$OUT/lint-new.json" --new-from-merge-base="$GATE_BASE" &&
+  if [ "$PROFILE" = fast ]; then
+    mapfile -t LINT_TARGETS < <(changed_packages)
+    if [ "${#LINT_TARGETS[@]}" -eq 0 ]; then
+      echo "no changed Go packages"
+      return 0
+    fi
+  else
+    golangci-lint config verify || return 1
+  fi
+  lint_json "$OUT/lint-new.json" --new-from-merge-base="$GATE_BASE" &&
     go run ./scripts/quality/ratchet report lint
 }
 
@@ -80,15 +89,8 @@ step_semgrep() {
 }
 
 step_test() {
-  local packages
-  mapfile -t packages < <(test_packages)
-  if [ "${#packages[@]}" -eq 0 ]; then
-    echo "mode: atomic" >"$OUT/cover.out"
-    echo "no changed Go packages"
-    return 0
-  fi
   go test -race -shuffle=on -count=1 -timeout=30m -covermode=atomic \
-    -coverprofile="$OUT/cover.out" "${packages[@]}"
+    -coverprofile="$OUT/cover.out" ./...
 }
 
 step_diff() { scripts/quality/diff-check/run; }
@@ -137,9 +139,14 @@ fi
 : >"$OUT/timings.tsv"
 run_step build step_build
 run_step golangci-lint step_lint
+if [ "$PROFILE" = fast ]; then
+  run_step diff-check step_diff
+  echo "gate: passed (fast). CI runs the full gate, or run make gate-full."
+  exit 0
+fi
 run_step vet step_vet
 run_step semgrep step_semgrep
-run_step "test ($SCOPE)" step_test
+run_step test step_test
 run_step diff-check step_diff
 run_step changed-coverage step_coverage
 run_step duplication-and-ratchet step_duplication
