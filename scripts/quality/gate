@@ -41,10 +41,11 @@ require_tools() {
 changed_packages() {
   local changed
   changed="$(cut -f2 "$OUT/diff/status"; cat "$OUT/diff/untracked")"
-  grep -E '\.go$' <<<"$changed" | sed -E 's#/testdata(/.*)?$##; s#/[^/]*$##' | sort -u |
-    while read -r dir; do
-      if compgen -G "$dir/*.go" >/dev/null; then echo "./$dir"; fi
-    done
+  # go list leaves out fixtures in dot-directories, which are not real packages.
+  comm -12 \
+    <(grep -E '\.go$' <<<"$changed" | sed -E 's#/testdata(/.*)?$##; s#/[^/]*$##' | sort -u) \
+    <(go list -e -f '{{.Dir}}' ./... | sed "s#^$PWD/##" | sort -u) |
+    sed 's#^#./#'
 }
 
 lint_json() {

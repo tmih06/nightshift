@@ -11,7 +11,7 @@ so the GitHub workflows have not run yet, and branch protection is not applied.
 | 2. Rules | golangci-lint, Semgrep, diff rules, CODEOWNERS, goleak | `747e19a`, `5c9712e` |
 | 3. Baseline | Safe autofixes, per-rule debt, ratchet | `f984390`, `dfac9b8` |
 | 4. Enforcement | `make gate`, Stop hook, CI workflows | `44aee44`, `a413a9b` |
-| 5. `AGENTS.md` | Conventions, root-cause rule, 7 learned rules | `ca7b96c` |
+| 5. `AGENTS.md` | Conventions, root-cause rule, 8 learned rules | `ca7b96c` |
 | 6. Verification | 11 violations caught, tool tests added | `eeaa644` |
 
 Local and CI checks differ on purpose, at the maintainer's request:

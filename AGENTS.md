@@ -98,6 +98,9 @@ Prune rules that no longer apply. Past about 200 lines, move older detail into
 - **Rule**: Scale usage graphs against the sandbox limit, not the window's peak.
   - **Why**: A 45% load drew as a full graph (`e14c24f`).
   - **Enforced by**: `TestBrailleGraph`.
+- **Rule**: Resolve gate package lists through `go list ./...`.
+  - **Why**: The fast gate linted Semgrep fixtures as a package (`a413a9b`).
+  - **Enforced by**: manual.
 - **Rule**: Keep `k8s/` YAML lines within 80 columns.
   - **Why**: A long comment failed Lint on `main` (`9ee64a4`).
   - **Enforced by**: `make lint`.
