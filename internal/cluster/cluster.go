@@ -23,12 +23,19 @@ const (
 
 type Sandbox struct {
 	Name        string
-	OwnerKind   string // SandboxWarmPool or SandboxClaim; empty on a volume
-	Owner       string // the pool or claim; on a volume, the volume
+	Namespace   string // Kubernetes namespace; empty defaults to Namespace ("nightshift")
+	OwnerKind   string // SandboxWarmPool, SandboxClaim, ReplicaSet, Job, etc.; empty on a volume
+	Owner       string // the pool, claim, workload, or volume
 	Volume      string // the pull request volume it mounts, if Nightshift started it on one
 	Template    string
 	NodeName    string
 	Phase       string // pod phase, "…" until the pod exists
+	PodIP       string
+	Ready       string // ready container fraction, e.g. "1/1"
+	Restarts    int
+	Waiting     string // container waiting reason when unhealthy
+	Ports       []string
+	Container   string
 	Created     time.Time
 	CPULimitMC  int64
 	MemLimitMiB int64
@@ -43,6 +50,7 @@ type Sandbox struct {
 
 	ManifestYAML string
 	PodYAML      string
+	ExtraYAML    string // extra markdown YAML sections (e.g. egress policy/service/netpol)
 }
 
 type Pool struct {
@@ -73,19 +81,39 @@ type sandboxList struct {
 	Items []json.RawMessage `json:"items"`
 }
 
+type podPort struct {
+	Name          string `json:"name"`
+	ContainerPort int    `json:"containerPort"`
+}
+
 type podContainer struct {
-	Image     string   `json:"image"`
-	Command   []string `json:"command"`
+	Name      string    `json:"name"`
+	Image     string    `json:"image"`
+	Command   []string  `json:"command"`
+	Ports     []podPort `json:"ports"`
 	Resources struct {
 		Requests map[string]string `json:"requests"`
 		Limits   map[string]string `json:"limits"`
 	} `json:"resources"`
 }
 
+type podContainerStatus struct {
+	Ready        bool `json:"ready"`
+	RestartCount int  `json:"restartCount"`
+	State        struct {
+		Waiting *struct {
+			Reason string `json:"reason"`
+		} `json:"waiting"`
+	} `json:"state"`
+}
+
 type podItem struct {
 	Metadata struct {
-		Name    string `json:"name"`
-		Created string `json:"creationTimestamp"`
+		Name            string            `json:"name"`
+		Namespace       string            `json:"namespace"`
+		Labels          map[string]string `json:"labels"`
+		Created         string            `json:"creationTimestamp"`
+		OwnerReferences []ownerReference  `json:"ownerReferences"`
 	} `json:"metadata"`
 	Spec struct {
 		NodeName      string         `json:"nodeName"`
@@ -93,7 +121,9 @@ type podItem struct {
 		Containers    []podContainer `json:"containers"`
 	} `json:"spec"`
 	Status struct {
-		Phase string `json:"phase"`
+		Phase             string               `json:"phase"`
+		PodIP             string               `json:"podIP"`
+		ContainerStatuses []podContainerStatus `json:"containerStatuses"`
 	} `json:"status"`
 }
 
@@ -133,7 +163,8 @@ type kindMeta struct {
 type podMetricsList struct {
 	Items []struct {
 		Metadata struct {
-			Name string `json:"name"`
+			Name      string `json:"name"`
+			Namespace string `json:"namespace"`
 		} `json:"metadata"`
 		Containers []struct {
 			Usage struct {
@@ -144,110 +175,191 @@ type podMetricsList struct {
 	} `json:"items"`
 }
 
-// buildSandboxes joins sandboxes, pods, and optional metrics by pod name.
-func buildSandboxes(sb sandboxList, pl podList, ml *podMetricsList) ([]Sandbox, error) {
-	type parsedPod struct {
-		item podItem
-		raw  json.RawMessage
-	}
-	podByName := make(map[string]*parsedPod, len(pl.Items))
+type parsedPod struct {
+	item podItem
+	raw  json.RawMessage
+}
+
+func parsePodIndex(pl podList) (map[string]*parsedPod, []*parsedPod, error) {
+	byKey := make(map[string]*parsedPod, len(pl.Items))
+	ordered := make([]*parsedPod, 0, len(pl.Items))
 	for _, raw := range pl.Items {
 		var p podItem
 		if err := json.Unmarshal(raw, &p); err != nil {
-			return nil, fmt.Errorf("parse pod item: %w", err)
+			return nil, nil, fmt.Errorf("parse pod item: %w", err)
 		}
-		podByName[p.Metadata.Name] = &parsedPod{item: p, raw: raw}
+		pp := &parsedPod{item: p, raw: raw}
+		byKey[podKey(p.Metadata.Namespace, p.Metadata.Name)] = pp
+		ordered = append(ordered, pp)
 	}
+	return byKey, ordered, nil
+}
 
-	var usedByName map[string][2]int64
-	if ml != nil {
-		usedByName = make(map[string][2]int64, len(ml.Items))
-		for _, item := range ml.Items {
-			var cpu, mem int64
-			for _, c := range item.Containers {
-				mc, err := cpuMillicores(c.Usage.CPU)
-				if err != nil {
-					return nil, err
-				}
-				mm, err := memMiB(c.Usage.Memory)
-				if err != nil {
-					return nil, err
-				}
-				cpu += mc
-				mem += mm
+func parseMetricsIndex(ml *podMetricsList) (map[string][2]int64, error) {
+	if ml == nil {
+		return nil, nil
+	}
+	usedByKey := make(map[string][2]int64, len(ml.Items))
+	for _, item := range ml.Items {
+		var cpu, mem int64
+		for _, c := range item.Containers {
+			mc, err := cpuMillicores(c.Usage.CPU)
+			if err != nil {
+				return nil, err
 			}
-			usedByName[item.Metadata.Name] = [2]int64{cpu, mem}
+			mm, err := memMiB(c.Usage.Memory)
+			if err != nil {
+				return nil, err
+			}
+			cpu += mc
+			mem += mm
+		}
+		usedByKey[podKey(item.Metadata.Namespace, item.Metadata.Name)] = [2]int64{cpu, mem}
+	}
+	return usedByKey, nil
+}
+
+func applyPodSpec(b *Sandbox, pp *parsedPod) error {
+	p := &pp.item
+	b.NodeName = p.Spec.NodeName
+	b.Phase = p.Status.Phase
+	b.PodIP = p.Status.PodIP
+	b.Ready, b.Restarts, b.Waiting = summarizeContainers(p.Status.ContainerStatuses)
+	b.Ports = collectPorts(p.Spec.Containers)
+	b.RestartPolicy = p.Spec.RestartPolicy
+	b.PodYAML = cleanManifestYAML(pp.raw)
+	if ts := parseTime(p.Metadata.Created); !ts.IsZero() {
+		b.Created = ts
+	}
+	for _, c := range p.Spec.Containers {
+		if b.Container == "" {
+			b.Container = c.Name
+		}
+		b.Image = c.Image
+		b.Command = strings.Join(c.Command, " ")
+		if err := addContainerResources(b, c); err != nil {
+			return err
 		}
 	}
+	return nil
+}
 
-	boxes := make([]Sandbox, 0, len(sb.Items))
+func addContainerResources(b *Sandbox, c podContainer) error {
+	if q, ok := c.Resources.Limits["cpu"]; ok {
+		v, err := cpuMillicores(q)
+		if err != nil {
+			return err
+		}
+		b.CPULimitMC += v
+	}
+	if q, ok := c.Resources.Limits["memory"]; ok {
+		v, err := memMiB(q)
+		if err != nil {
+			return err
+		}
+		b.MemLimitMiB += v
+	}
+	if q, ok := c.Resources.Requests["cpu"]; ok {
+		v, err := cpuMillicores(q)
+		if err != nil {
+			return err
+		}
+		b.CPUReqMC += v
+	}
+	if q, ok := c.Resources.Requests["memory"]; ok {
+		v, err := memMiB(q)
+		if err != nil {
+			return err
+		}
+		b.MemReqMiB += v
+	}
+	return nil
+}
+
+func buildSandboxItem(raw json.RawMessage, podByKey map[string]*parsedPod, usedByKey map[string][2]int64) (Sandbox, error) {
+	var item sandboxItem
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return Sandbox{}, fmt.Errorf("parse sandbox item: %w", err)
+	}
+	b := Sandbox{
+		Name:         item.Metadata.Name,
+		Namespace:    Namespace,
+		Template:     item.Metadata.Annotations["agents.x-k8s.io/sandbox-template-ref"],
+		Phase:        "…",
+		Created:      parseTime(item.Metadata.Created),
+		ManifestYAML: cleanManifestYAML(raw),
+	}
+	if len(item.Metadata.OwnerReferences) > 0 {
+		b.OwnerKind = item.Metadata.OwnerReferences[0].Kind
+		b.Owner = item.Metadata.OwnerReferences[0].Name
+	} else if v := item.Metadata.Labels[VolumeLabel]; v != "" {
+		b.Volume, b.Owner = v, v
+	}
+	key := podKey(Namespace, item.Metadata.Name)
+	if pp := podByKey[key]; pp != nil {
+		if err := applyPodSpec(&b, pp); err != nil {
+			return Sandbox{}, err
+		}
+	}
+	if u, ok := usedByKey[key]; ok {
+		b.CPUUsageMC, b.MemUsageMiB = u[0], u[1]
+	}
+	return b, nil
+}
+
+func buildInfraPod(pp *parsedPod, usedByKey map[string][2]int64) (Sandbox, error) {
+	p := &pp.item
+	b := Sandbox{
+		Name:      p.Metadata.Name,
+		Namespace: p.Metadata.Namespace,
+		Phase:     "…",
+		Created:   parseTime(p.Metadata.Created),
+	}
+	if len(p.Metadata.OwnerReferences) > 0 {
+		b.OwnerKind = p.Metadata.OwnerReferences[0].Kind
+		b.Owner = p.Metadata.OwnerReferences[0].Name
+	} else if app := p.Metadata.Labels["app"]; app != "" {
+		b.Owner = app
+	}
+	if err := applyPodSpec(&b, pp); err != nil {
+		return Sandbox{}, err
+	}
+	if u, ok := usedByKey[podKey(b.Namespace, b.Name)]; ok {
+		b.CPUUsageMC, b.MemUsageMiB = u[0], u[1]
+	}
+	return b, nil
+}
+
+// buildSandboxes joins sandboxes, essential cluster pods, and optional metrics.
+func buildSandboxes(sb sandboxList, pl podList, ml *podMetricsList) ([]Sandbox, error) {
+	podByKey, orderedPods, err := parsePodIndex(pl)
+	if err != nil {
+		return nil, err
+	}
+	usedByKey, err := parseMetricsIndex(ml)
+	if err != nil {
+		return nil, err
+	}
+
+	matched := make(map[string]bool, len(sb.Items))
+	boxes := make([]Sandbox, 0, len(sb.Items)+len(orderedPods))
 	for _, raw := range sb.Items {
-		var item sandboxItem
-		if err := json.Unmarshal(raw, &item); err != nil {
-			return nil, fmt.Errorf("parse sandbox item: %w", err)
+		b, err := buildSandboxItem(raw, podByKey, usedByKey)
+		if err != nil {
+			return nil, err
 		}
-		b := Sandbox{
-			Name:     item.Metadata.Name,
-			Template: item.Metadata.Annotations["agents.x-k8s.io/sandbox-template-ref"],
-			Phase:    "…",
-			Created:  parseTime(item.Metadata.Created),
+		matched[podKey(Namespace, b.Name)] = true
+		boxes = append(boxes, b)
+	}
+
+	for _, pp := range orderedPods {
+		ns := pp.item.Metadata.Namespace
+		if ns == "" || matched[podKey(ns, pp.item.Metadata.Name)] || !isEssentialPod(ns, pp.item.Metadata.Name) {
+			continue
 		}
-		if len(item.Metadata.OwnerReferences) > 0 {
-			b.OwnerKind = item.Metadata.OwnerReferences[0].Kind
-			b.Owner = item.Metadata.OwnerReferences[0].Name
-		} else if v := item.Metadata.Labels[VolumeLabel]; v != "" {
-			b.Volume, b.Owner = v, v
-		}
-		isWarm := !b.Claimed()
-		if isWarm {
-			b.ManifestYAML = cleanManifestYAML(raw)
-		}
-		if pp := podByName[item.Metadata.Name]; pp != nil {
-			p := &pp.item
-			b.NodeName = p.Spec.NodeName
-			b.Phase = p.Status.Phase
-			b.RestartPolicy = p.Spec.RestartPolicy
-			if isWarm {
-				b.PodYAML = cleanManifestYAML(pp.raw)
-			}
-			if ts := parseTime(p.Metadata.Created); !ts.IsZero() {
-				b.Created = ts
-			}
-			for _, c := range p.Spec.Containers {
-				b.Image = c.Image
-				b.Command = strings.Join(c.Command, " ")
-				if q, ok := c.Resources.Limits["cpu"]; ok {
-					v, err := cpuMillicores(q)
-					if err != nil {
-						return nil, err
-					}
-					b.CPULimitMC += v
-				}
-				if q, ok := c.Resources.Limits["memory"]; ok {
-					v, err := memMiB(q)
-					if err != nil {
-						return nil, err
-					}
-					b.MemLimitMiB += v
-				}
-				if q, ok := c.Resources.Requests["cpu"]; ok {
-					v, err := cpuMillicores(q)
-					if err != nil {
-						return nil, err
-					}
-					b.CPUReqMC += v
-				}
-				if q, ok := c.Resources.Requests["memory"]; ok {
-					v, err := memMiB(q)
-					if err != nil {
-						return nil, err
-					}
-					b.MemReqMiB += v
-				}
-			}
-		}
-		if u, ok := usedByName[item.Metadata.Name]; ok {
-			b.CPUUsageMC, b.MemUsageMiB = u[0], u[1]
+		b, err := buildInfraPod(pp, usedByKey)
+		if err != nil {
+			return nil, err
 		}
 		boxes = append(boxes, b)
 	}
@@ -263,17 +375,23 @@ func buildSandboxes(sb sandboxList, pl podList, ml *podMetricsList) ([]Sandbox, 
 
 // Claimed is whether b is someone's workspace: adopted by a claim, or
 // started by Nightshift on a pull request's volume.
-func (b Sandbox) Claimed() bool { return b.OwnerKind == "SandboxClaim" || b.Volume != "" }
+func (b Sandbox) Claimed() bool { return b.OwnerKind == ownerKindClaim || b.Volume != "" }
 
-// OwnerRank orders sandboxes warm, then claimed, then anything else.
+// OwnerRank orders warm sandboxes, then claimed, then egress, system, jobs, and other.
 func OwnerRank(b Sandbox) int {
-	switch {
-	case b.OwnerKind == "SandboxWarmPool":
+	switch b.PodRole() {
+	case RoleWarm:
 		return 0
-	case b.Claimed():
+	case RoleClaimed:
 		return 1
-	default:
+	case RoleEgress:
 		return 2
+	case RoleSystem:
+		return 3
+	case RoleJob:
+		return 4
+	default:
+		return 5
 	}
 }
 
@@ -325,32 +443,47 @@ func parseClusterList(raw []byte) (sandboxList, podList, map[string]Pool, error)
 	return sb, pl, pools, nil
 }
 
-// Fetch reads cluster objects and pod metrics concurrently in two
-// kubectl calls. Metrics degrade gracefully when unavailable.
+// Fetch reads sandbox objects, essential cluster pods, pod metrics, and egress
+// proxy configuration concurrently. Metrics and egress configs degrade
+// gracefully when unavailable.
 func Fetch() ([]Sandbox, map[string]Pool, bool, error) {
 	var (
-		resRaw, metRaw []byte
-		resErr, metErr error
-		wg             sync.WaitGroup
+		resRaw, podRaw, metRaw, egressRaw []byte
+		resErr, podErr, metErr, egressErr error
+		wg                                sync.WaitGroup
 	)
-	wg.Add(2)
+	wg.Add(4)
 	go func() {
 		defer wg.Done()
-		resRaw, resErr = runKubectl(nil, "get", "sandboxes,pods,sandboxwarmpools,sandboxtemplates", "-o", "json")
+		resRaw, resErr = runKubectl(nil, "get", "sandboxes,sandboxwarmpools,sandboxtemplates", "-o", "json")
 	}()
 	go func() {
 		defer wg.Done()
-		metRaw, metErr = runKubectl(nil, "get", "--raw",
-			"/apis/metrics.k8s.io/v1beta1/namespaces/"+Namespace+"/pods")
+		podRaw, podErr = runKubectl(nil, "get", "pods", "-A", "-o", "json")
+	}()
+	go func() {
+		defer wg.Done()
+		metRaw, metErr = runKubectl(nil, "get", "--raw", "/apis/metrics.k8s.io/v1beta1/pods")
+	}()
+	go func() {
+		defer wg.Done()
+		egressRaw, egressErr = runKubectl(nil, "-n", EgressNamespace, "get", "configmap,service,networkpolicy", "-o", "json")
 	}()
 	wg.Wait()
 
 	if resErr != nil {
 		return nil, nil, false, resErr
 	}
-	sb, pl, pool, err := parseClusterList(resRaw)
+	if podErr != nil {
+		return nil, nil, false, podErr
+	}
+	sb, _, pool, err := parseClusterList(resRaw)
 	if err != nil {
 		return nil, nil, false, err
+	}
+	var pl podList
+	if err := json.Unmarshal(podRaw, &pl); err != nil {
+		return nil, nil, false, fmt.Errorf("parse pods list: %w", err)
 	}
 
 	var ml *podMetricsList
@@ -361,7 +494,19 @@ func Fetch() ([]Sandbox, map[string]Pool, bool, error) {
 		}
 	}
 	boxes, err := buildSandboxes(sb, pl, ml)
-	return boxes, pool, ml != nil, err
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if egressErr == nil {
+		if extra := parseEgressConfigSections(egressRaw); extra != "" {
+			for i := range boxes {
+				if boxes[i].PodRole() == RoleEgress {
+					boxes[i].ExtraYAML = extra
+				}
+			}
+		}
+	}
+	return boxes, pool, ml != nil, nil
 }
 
 func runKubectl(stdin []byte, args ...string) ([]byte, error) {

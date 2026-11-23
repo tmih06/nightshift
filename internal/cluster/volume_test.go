@@ -173,8 +173,8 @@ func TestASandboxOnAVolumeCountsAsClaimed(t *testing.T) {
 	if b.Name != "pi-pr-acme-rocket-7-x1" || !b.Claimed() || b.Volume != "pr-acme-rocket-7" || b.Owner != "pr-acme-rocket-7" || b.Template != "pi-template" {
 		t.Errorf("box = %+v", b)
 	}
-	if b.ManifestYAML != "" {
-		t.Error("a claimed sandbox got a warm sandbox's configs")
+	if b.PodRole() != RoleClaimed || b.Warm() {
+		t.Error("a volume sandbox must be classified as claimed, not warm")
 	}
 	if boxes[0].Claimed() || OwnerRank(boxes[0]) != 0 || OwnerRank(b) != 1 {
 		t.Error("ranks are off")
