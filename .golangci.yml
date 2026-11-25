@@ -115,65 +115,77 @@ linters:
         - hugeParam
     depguard:
       rules:
+        # Nightshift is two programs: the services (internal/services) own the
+        # cluster, and a frontend (internal/tui, with the vendored gh-dash and
+        # zen-octo it embeds) reaches them only through the API: api/v1 and
+        # api/client. internal/architecture_test.go enforces the same; these
+        # rules show it in the editor.
         leaf-packages:
-          files: ["**/internal/cluster/**", "**/internal/egress/**", "**/internal/manifest/**"]
+          files: ["**/internal/services/cluster/**", "**/internal/services/egress/**", "**/internal/services/manifest/**"]
           deny:
             - pkg: github.com/tmih06/nightshift/internal
               desc: This package is a leaf. Move shared code here instead of importing upward.
         session:
-          files: ["**/internal/session/**"]
+          files: ["**/internal/services/session/**"]
           deny:
-            - pkg: github.com/tmih06/nightshift/internal/app
-              desc: session sits below the UI and may import only cluster.
-            - pkg: github.com/tmih06/nightshift/internal/dashboard
-              desc: session sits below the UI and may import only cluster.
-            - pkg: github.com/tmih06/nightshift/internal/repoview
-              desc: session sits below the UI and may import only cluster.
-            - pkg: github.com/tmih06/nightshift/internal/dialog
+            - pkg: github.com/tmih06/nightshift/internal/tui
               desc: session sits below the UI and may import only cluster.
             - pkg: github.com/tmih06/nightshift/internal/ghdash
               desc: session sits below the UI and may import only cluster.
             - pkg: github.com/tmih06/nightshift/internal/zenocto
               desc: session sits below the UI and may import only cluster.
-        dialog:
-          files: ["**/internal/dialog/**"]
+        server-knows-no-cluster:
+          files: ["**/internal/services/server/**"]
           deny:
-            - pkg: github.com/tmih06/nightshift/internal/app
+            - pkg: github.com/tmih06/nightshift/internal/services/cluster
+              desc: The HTTP layer serves the contract over interfaces and knows nothing of Kubernetes.
+            - pkg: github.com/tmih06/nightshift/internal/services/session
+              desc: The HTTP layer serves the contract over interfaces and knows nothing of Kubernetes.
+            - pkg: github.com/tmih06/nightshift/internal/services/accounts
+              desc: The HTTP layer serves the contract over interfaces and knows nothing of Kubernetes.
+        services-know-no-frontend:
+          files: ["**/internal/services/**"]
+          deny:
+            - pkg: github.com/tmih06/nightshift/internal/tui
+              desc: The services serve any frontend and know none of them.
+            - pkg: github.com/tmih06/nightshift/internal/ghdash
+              desc: The services serve any frontend and know none of them.
+            - pkg: github.com/tmih06/nightshift/internal/zenocto
+              desc: The services serve any frontend and know none of them.
+        frontend-uses-the-api:
+          files: ["**/internal/tui/**"]
+          deny:
+            - pkg: github.com/tmih06/nightshift/internal/services
+              desc: A frontend reaches the services through api/v1 and api/client, never their code.
+        dialog:
+          files: ["**/internal/tui/dialog/**"]
+          deny:
+            - pkg: github.com/tmih06/nightshift/internal/tui/app
               desc: dialog is a shared widget and must not import its callers.
-            - pkg: github.com/tmih06/nightshift/internal/dashboard
+            - pkg: github.com/tmih06/nightshift/internal/tui/dashboard
               desc: dialog is a shared widget and must not import its callers.
-            - pkg: github.com/tmih06/nightshift/internal/repoview
+            - pkg: github.com/tmih06/nightshift/internal/tui/repoview
               desc: dialog is a shared widget and must not import its callers.
         tabs-stay-separate:
-          files: ["**/internal/dashboard/**"]
+          files: ["**/internal/tui/dashboard/**"]
           deny:
-            - pkg: github.com/tmih06/nightshift/internal/app
-              desc: Tabs talk through messages routed by internal/app.
-            - pkg: github.com/tmih06/nightshift/internal/repoview
-              desc: Tabs talk through messages routed by internal/app.
+            - pkg: github.com/tmih06/nightshift/internal/tui/app
+              desc: Tabs talk through messages routed by internal/tui/app.
+            - pkg: github.com/tmih06/nightshift/internal/tui/repoview
+              desc: Tabs talk through messages routed by internal/tui/app.
         repoview-stays-separate:
-          files: ["**/internal/repoview/**"]
+          files: ["**/internal/tui/repoview/**"]
           deny:
-            - pkg: github.com/tmih06/nightshift/internal/app
-              desc: Tabs talk through messages routed by internal/app.
-            - pkg: github.com/tmih06/nightshift/internal/dashboard
-              desc: Tabs talk through messages routed by internal/app.
-            - pkg: github.com/tmih06/nightshift/internal/session
-              desc: Only the sandbox tab owns Herdr sessions.
+            - pkg: github.com/tmih06/nightshift/internal/tui/app
+              desc: Tabs talk through messages routed by internal/tui/app.
+            - pkg: github.com/tmih06/nightshift/internal/tui/dashboard
+              desc: Tabs talk through messages routed by internal/tui/app.
         vendored-stays-upstream:
           files: ["**/internal/ghdash/**", "**/internal/zenocto/**"]
           deny:
-            - pkg: github.com/tmih06/nightshift/internal/app
+            - pkg: github.com/tmih06/nightshift/internal/tui
               desc: Vendored code must not depend on Nightshift.
-            - pkg: github.com/tmih06/nightshift/internal/dashboard
-              desc: Vendored code must not depend on Nightshift.
-            - pkg: github.com/tmih06/nightshift/internal/repoview
-              desc: Vendored code must not depend on Nightshift.
-            - pkg: github.com/tmih06/nightshift/internal/session
-              desc: Vendored code must not depend on Nightshift.
-            - pkg: github.com/tmih06/nightshift/internal/cluster
-              desc: Vendored code must not depend on Nightshift.
-            - pkg: github.com/tmih06/nightshift/internal/dialog
+            - pkg: github.com/tmih06/nightshift/internal/services
               desc: Vendored code must not depend on Nightshift.
 
   exclusions:
