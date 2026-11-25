@@ -90,12 +90,15 @@ data:
       CLAUDE_ACCESS_TOKEN:
         placeholder: "nightshift:secret:CLAUDE_ACCESS_TOKEN"
         file: "/etc/egress-secrets/REAL_CLAUDE_ACCESS_TOKEN"
+        label_file: "/etc/egress-secrets/LABEL_CLAUDE_ACCESS_TOKEN"
       CODEX_ACCESS_TOKEN:
         placeholder: "nightshift:secret:CODEX_ACCESS_TOKEN"
         file: "/etc/egress-secrets/REAL_CODEX_ACCESS_TOKEN"
+        label_file: "/etc/egress-secrets/LABEL_CODEX_ACCESS_TOKEN"
       AGY_ACCESS_TOKEN:
         placeholder: "nightshift:secret:AGY_ACCESS_TOKEN"
         file: "/etc/egress-secrets/REAL_AGY_ACCESS_TOKEN"
+        label_file: "/etc/egress-secrets/LABEL_AGY_ACCESS_TOKEN"
 ---
 ---
 # Static egress environment shared by every sandbox template through

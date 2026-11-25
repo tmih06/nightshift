@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -19,6 +20,7 @@ type resolvedSecret struct {
 	name        string
 	placeholder string
 	value       string
+	label       string
 	scrubForms  [][]byte
 }
 
@@ -33,6 +35,8 @@ func (e *SecretEngine) signature() string {
 		h.Write([]byte(rs.name))
 		h.Write([]byte{0})
 		h.Write([]byte(rs.value))
+		h.Write([]byte{0})
+		h.Write([]byte(rs.label))
 		h.Write([]byte{0})
 	}
 	return string(h.Sum(nil))
@@ -83,12 +87,33 @@ func NewSecretEngine(bindings map[string]SecretBinding, getenv func(string) stri
 			name:        name,
 			placeholder: ph,
 			value:       val,
+			label:       readLabel(b.LabelFile),
 			scrubForms:  buildScrubForms(val),
 		}
 		eng.byName[name] = rs
 		eng.all = append(eng.all, rs)
 	}
 	return eng, nil
+}
+
+// readLabel returns the trimmed account label in path, or "" when there is none.
+func readLabel(path string) string {
+	if path == "" {
+		return ""
+	}
+	raw, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(raw))
+}
+
+// Label is the account behind the named secret, or "" when unlabeled.
+func (e *SecretEngine) Label(name string) string {
+	if e == nil {
+		return ""
+	}
+	return e.byName[name].label
 }
 
 func buildScrubForms(val string) [][]byte {

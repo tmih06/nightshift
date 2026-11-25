@@ -17,6 +17,9 @@ import (
 	"time"
 )
 
+// auditAllow is the Action of a request the policy let through.
+const auditAllow = "ALLOW"
+
 // AuditEvent records one allowed or denied outbound egress request.
 type AuditEvent struct {
 	Time            time.Time `json:"time"`
@@ -53,6 +56,7 @@ type Proxy struct {
 	dialer  *SafeDialer
 	secrets atomic.Pointer[SecretEngine]
 	getenv  func(string) string
+	usage   *usageStore
 	tr      *http.Transport
 
 	auditMu sync.Mutex
@@ -111,6 +115,7 @@ func NewProxy(cfg Config, opts Options) (*Proxy, error) {
 		ca:      ca,
 		dialer:  dialer,
 		getenv:  opts.Getenv,
+		usage:   newUsageStore(),
 		tr:      tr,
 		auditW:  opts.AuditWriter,
 		ringMax: ringMax,
@@ -144,6 +149,12 @@ func (p *Proxy) record(ev AuditEvent) {
 	if ev.Time.IsZero() {
 		ev.Time = time.Now().UTC()
 	}
+	if ev.Action == auditAllow {
+		engine := p.secrets.Load()
+		for _, name := range ev.SecretsInjected {
+			p.usage.record(name, engine.Label(name), ev.Status)
+		}
+	}
 	p.auditMu.Lock()
 	p.ring = append(p.ring, ev)
 	if len(p.ring) > p.ringMax {
@@ -173,6 +184,12 @@ func (p *Proxy) AdminHandler() http.Handler {
 		}
 		w.Header().Set("Content-Type", "application/x-pem-file")
 		_, _ = w.Write(p.ca.CertPEM())
+	})
+	mux.HandleFunc("/usage", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(p.Usage()); err != nil {
+			http.Error(w, "encode usage", http.StatusInternalServerError)
+		}
 	})
 	mux.HandleFunc("/events", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

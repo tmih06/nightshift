@@ -99,6 +99,9 @@ func TestShippedPolicySwapsEveryRegisteredLogin(t *testing.T) {
 		if want := "/etc/egress-secrets/REAL_" + p.Secret; b.File != want {
 			t.Errorf("%s: %s file = %q, want %q so a refresh needs no restart", p.ID, p.Secret, b.File, want)
 		}
+		if want := "/etc/egress-secrets/LABEL_" + p.Secret; b.LabelFile != want {
+			t.Errorf("%s: %s label_file = %q, want %q so usage is counted per account", p.ID, p.Secret, b.LabelFile, want)
+		}
 		for _, host := range p.Hosts {
 			r, ok := cfg.MatchHostPort(host, 443)
 			if !ok {

@@ -61,6 +61,10 @@ type SecretBinding struct {
 	Env         string `yaml:"env"`
 	File        string `yaml:"file"`
 	Value       string `yaml:"value"` // primarily for unit tests
+	// LabelFile names the account behind the secret (an email, say). The
+	// proxy never injects it; it only tags usage so a rotated token's requests
+	// are counted against the account that was active.
+	LabelFile string `yaml:"label_file"`
 }
 
 // DefaultPlaceholderPrefix is the standard prefix for sandbox secret sentinels.
