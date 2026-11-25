@@ -30,6 +30,7 @@ type fakeCPA struct {
 func fakeCPADownloads() map[string]string {
 	return map[string]string{
 		"claude-a@example.com.json": `{"type":"claude","access_token":"sk-ant-oat-CPA-claude","refresh_token":"sk-ant-ort-CPA-claude","email":"a@example.com"}`,
+		"claude-z@example.com.json": `{"type":"claude","access_token":"sk-ant-oat-CPA-claude-z","refresh_token":"sk-ant-ort-CPA-claude-z","email":"z@example.com"}`,
 		"codex-a@example.com.json":  `{"type":"codex","access_token":"codex-CPA-access","refresh_token":"codex-CPA-refresh","id_token":"idtok","account_id":"acct"}`,
 		"agy-b@example.com.json":    `{"type":"antigravity","access_token":"agy-CPA-access","refresh_token":"1//CPA-agy","expired":"2026-01-01T00:00:00Z","expires_in":3599,"email":"b@example.com"}`,
 	}
@@ -59,11 +60,11 @@ func (f *fakeCPA) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/v8/management/credentials":
 		replyJSON(w, map[string]any{"files": []map[string]any{
-			{"name": "claude-a@example.com.json", "provider": "claude", "disabled": false, "access_token_expires_at": soon},
-			{"name": "claude-z@example.com.json", "provider": "claude", "disabled": false, "access_token_expires_at": later},
-			{"name": "codex-a@example.com.json", "provider": "codex", "disabled": false, "access_token_expires_at": later},
+			{"name": "claude-a@example.com.json", "email": "a@example.com", "provider": "claude", "disabled": false, "access_token_expires_at": soon},
+			{"name": "claude-z@example.com.json", "email": "z@example.com", "provider": "claude", "disabled": false, "access_token_expires_at": later},
+			{"name": "codex-a@example.com.json", "email": "a@example.com", "provider": "codex", "disabled": false, "access_token_expires_at": later},
 			{"name": "agy-a@example.com.json", "provider": "antigravity", "disabled": true, "access_token_expires_at": later},
-			{"name": "agy-b@example.com.json", "provider": "antigravity", "disabled": false, "access_token_expires_at": later},
+			{"name": "agy-b@example.com.json", "email": "b@example.com", "provider": "antigravity", "disabled": false, "access_token_expires_at": later},
 		}})
 	case "/v8/management/credentials/refresh":
 		var body struct {

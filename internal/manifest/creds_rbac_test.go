@@ -28,6 +28,7 @@ func TestCredsRefresherHasLeastPrivilege(t *testing.T) {
 	}
 	allowed := map[string]bool{
 		"secrets":          true,
+		"configmaps":       true,
 		"sandboxwarmpools": true,
 	}
 	roles := 0
@@ -66,8 +67,9 @@ func TestCredsRefresherHasLeastPrivilege(t *testing.T) {
 			}
 			// Reading or editing a secret must be pinned to a name; only
 			// create, which Kubernetes cannot scope by name, is open.
-			if slices.Contains(r.Resources, "secrets") && !slices.Equal(r.Verbs, []string{"create"}) && len(r.ResourceNames) == 0 {
-				t.Errorf("%s/%s: secret verbs %v must name the secrets they cover", doc.Metadata.Namespace, doc.Metadata.Name, r.Verbs)
+			named := slices.Contains(r.Resources, "secrets") || slices.Contains(r.Resources, "configmaps")
+			if named && !slices.Equal(r.Verbs, []string{"create"}) && len(r.ResourceNames) == 0 {
+				t.Errorf("%s/%s: secret and configmap verbs %v must name what they cover", doc.Metadata.Namespace, doc.Metadata.Name, r.Verbs)
 			}
 		}
 	}

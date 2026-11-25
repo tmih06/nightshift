@@ -118,7 +118,14 @@ func TestEgressSetupImageFollowsTheProvider(t *testing.T) {
 		t.Errorf("a non-kind cluster must not build or kind-load an image:\n%s", calls)
 	}
 
+	if strings.Contains(calls, "rollout restart") {
+		t.Errorf("a pulled image is replaced by a new tag, not a restart:\n%s", calls)
+	}
+
 	applied, calls = runEgressSetup(t, "NIGHTSHIFT_CONTEXT=kind-dev")
+	if !strings.Contains(calls, "rollout restart deployment/egress-proxy") {
+		t.Errorf("a rebuilt local image keeps its tag, so the proxy must be restarted to run it:\n%s", calls)
+	}
 	if !strings.Contains(applied, "image: nightshift-egress-proxy:local") {
 		t.Error("a kind cluster must use the locally built image")
 	}

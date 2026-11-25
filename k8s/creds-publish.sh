@@ -135,17 +135,25 @@ exercise() {
 # logged in to CLIProxyAPI, so the usual staging runs on them. CLIProxyAPI
 # keeps the tokens fresh; a token near expiry is refreshed first.
 cpa_home() {
-  local dir=$1 key list entry type name exp file cred
+  local dir=$1 key list entry type name exp file cred active label secret
   key=${CPA_MANAGEMENT_KEY:-}
   [ -n "$key" ] || key=$(cat "${CPA_MANAGEMENT_KEY_FILE:-/dev/null}" 2>/dev/null || true)
   [ -n "$key" ] || { echo "--cpa needs CPA_MANAGEMENT_KEY or CPA_MANAGEMENT_KEY_FILE" >&2; return 1; }
   cpa() { curl -fsS -m 30 -H "Authorization: Bearer $key" "$@"; }
   list=$(cpa "$CPA_URL/v8/management/credentials") || { echo "cannot reach CLIProxyAPI at $CPA_URL" >&2; return 1; }
+  # Which account each agent's sandboxes use is set in the Accounts tab and
+  # kept in the nightshift-accounts ConfigMap ({"claude": "<credential name>"}).
+  use_target "${TARGETS[0]}"
+  active=$("${K[@]}" get configmap nightshift-accounts -o jsonpath='{.data.active}' 2>/dev/null || true)
+  jq -e type >/dev/null 2>&1 <<<"$active" || active='{}'
+  : > "$work/selected.jsonl"
   while IFS= read -r entry; do
     type=$(jq -r '.cpa.type // empty' <<<"$entry")
     [ -n "$type" ] || continue
-    # One account per agent: the first enabled one by name.
-    name=$(jq -r --arg t "$type" '[.files[] | select(.provider == $t and (.disabled | not))] | sort_by(.name) | .[0].name // empty' <<<"$list")
+    # The chosen account when it is still enabled, else the first enabled one.
+    name=$(jq -r --arg t "$type" --argjson a "$active" '
+      [.files[] | select(.provider == $t and (.disabled | not))] | sort_by(.name) as $ok
+      | ([$ok[] | select(.name == $a[$t])] + $ok) | .[0].name // empty' <<<"$list")
     [ -n "$name" ] || continue
     exp=$(jq -r --arg n "$name" '.files[] | select(.name == $n) | .access_token_expires_at // empty' <<<"$list")
     if [ -n "$exp" ] && [ "$(date -d "$exp" +%s 2>/dev/null || echo 0)" -lt $(( $(date +%s) + 600 )) ]; then
@@ -158,6 +166,12 @@ cpa_home() {
     mkdir -p "$(dirname "$file")"
     jq "$(jq -r .cpa.build <<<"$entry")" <<<"$cred" > "$file"
     chmod 600 "$file"
+    secret=$(jq -r .secret <<<"$entry")
+    label=$(jq -r --arg n "$name" '.files[] | select(.name == $n) | (.email // .account // .name)' <<<"$list")
+    mkdir -p "$work/labels"
+    printf '%s' "$label" > "$work/labels/$secret"
+    jq -cn --arg t "$type" --arg n "$name" --arg l "$label" --arg e "$exp" \
+      '{type: $t, name: $n, label: $l, expires: $e}' >> "$work/selected.jsonl"
   done < <(jq -c '.providers[]' "$REGISTRY")
 }
 
@@ -185,11 +199,14 @@ publish_to() {
     --from-file=creds.tar="$work/creds.tar" \
     --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
 
-  local pairs="" secret
+  local pairs="" secret label
   while IFS= read -r secret; do
     [ -s "$work/tokens/$secret" ] || continue
     pairs="$pairs\"REAL_$secret\":\"$(base64 -w0 < "$work/tokens/$secret")\","
-    echo "  real $secret -> egress-secrets (proxy reloads it, no restart)"
+    # The proxy tags usage with this label; without CLIProxyAPI it is the machine.
+    label=$(cat "$work/labels/$secret" 2>/dev/null || printf 'this machine')
+    pairs="$pairs\"LABEL_$secret\":\"$(printf '%s' "$label" | base64 -w0)\","
+    echo "  real $secret ($label) -> egress-secrets (proxy reloads it, no restart)"
   done < <(jq -r '.providers[].secret' "$REGISTRY")
   if [ -n "$pairs" ]; then
     # Merge into the existing Secret so the API keys setup seeded survive.
@@ -208,6 +225,21 @@ EOF
     fi
   fi
   scale_pools
+  publish_status
+}
+
+# publish_status records what was published, for the Accounts tab.
+publish_status() {
+  local status
+  status=$(jq -cs --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{published_at: $at, accounts: (map({key: .type, value: {name, label, expires}}) | from_entries)}' \
+    "$work/selected.jsonl" 2>/dev/null) || status="{\"published_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"accounts\":{}}"
+  if "${K[@]}" get configmap nightshift-accounts >/dev/null 2>&1; then
+    "${K[@]}" patch configmap nightshift-accounts --type=merge \
+      -p "$(jq -cn --arg s "$status" '{data: {status: $s}}')" >/dev/null
+  else
+    "${K[@]}" create configmap nightshift-accounts --from-literal=status="$status" >/dev/null
+  fi
 }
 
 publish() {
@@ -235,6 +267,8 @@ chmod 700 "$work"
 
 run_once() {
   local src=$HOME
+  rm -rf "${work:?}/labels" "${work:?}/selected.jsonl" "${work:?}/tokens" "${work:?}/stage" "${work:?}/creds.tar"
+  : > "$work/selected.jsonl"
   if [ -n "$CPA_URL" ]; then
     rm -rf "${work:?}/home"
     mkdir -p "$work/home"
@@ -244,7 +278,6 @@ run_once() {
     echo "exercising the logins (refresh if due)..."
     exercise
   fi
-  rm -rf "$work/tokens" "$work/stage" "$work/creds.tar"
   sh "$HERE/creds-stage.sh" "$src" "$work/stage" "$work/tokens" "$REGISTRY"
   tar -cf "$work/creds.tar" -C "$work/stage" .
   publish

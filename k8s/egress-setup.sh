@@ -105,6 +105,11 @@ echo "4/4 Applying k8s/egress.yaml..."
 # below and written into sandbox-egress-env.
 sed -E "s|^([[:space:]]*image:) nightshift-egress-proxy:local\$|\\1 ${IMAGE}|" \
   "${SCRIPT_DIR}/egress.yaml" | k apply -f -
+# A locally built image keeps its tag, so pods already running it must restart
+# to pick up a rebuild.
+if [ "${IS_KIND}" = 1 ] && [ -z "${EGRESS_IMAGE:-}" ]; then
+  k -n "${EGRESS_NS}" rollout restart deployment/egress-proxy
+fi
 k -n "${EGRESS_NS}" rollout status deployment/egress-proxy --timeout=120s
 
 # Sandbox pods use external DNS resolvers, so they reach the proxy by IP.

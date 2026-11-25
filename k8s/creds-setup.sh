@@ -59,6 +59,11 @@ sed -E "s|^([[:space:]]*image:) eceasy/cli-proxy-api:latest\$|\\1 ${CPA_IMAGE}|"
   "${SCRIPT_DIR}/cpa.yaml" | k apply -f -
 sed -E "s|^([[:space:]]*image:) ghcr.io/tmih06/nightshift-creds:latest\$|\\1 ${IMAGE}|" \
   "${SCRIPT_DIR}/creds.yaml" | k apply -f -
+# A locally built image keeps its tag, so pods already running it must restart
+# to pick up a rebuild.
+if [ "${IS_KIND}" = 1 ] && [ -z "${CREDS_IMAGE:-}" ]; then
+  k -n "${NS}" rollout restart deploy/creds-refresher
+fi
 k -n "${NS}" rollout status deploy/cpa --timeout=180s
 k -n "${NS}" rollout status deploy/creds-refresher --timeout=180s
 

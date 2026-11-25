@@ -28,11 +28,16 @@ metadata:
   namespace: nightshift
 rules:
 - apiGroups: [""]
-  resources: ["secrets"]
+  resources: ["secrets", "configmaps"]
   verbs: ["create"]
 - apiGroups: [""]
   resources: ["secrets"]
   resourceNames: ["agent-creds"]
+  verbs: ["get", "patch", "update"]
+# Which account each agent uses, and what was last published.
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames: ["nightshift-accounts"]
   verbs: ["get", "patch", "update"]
 - apiGroups: ["extensions.agents.x-k8s.io"]
   resources: ["sandboxwarmpools"]
