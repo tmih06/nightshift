@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"sort"
 	"strings"
+	"time"
 
 	"charm.land/lipgloss/v2"
 
@@ -479,9 +480,13 @@ func (m model) renderRow(i, inner int, selected bool) []string {
 	compact := inner < tableMediumMin
 	h := m.hist[b.Name]
 	known := m.usageKnown(b.Name)
+	subtitle := m.podSubtitle(&b, compact, bg)
+	if b.Startup != nil {
+		subtitle = startupSubtitle(b.Startup, time.Now(), compact, bg)
+	}
 	cells := [][2]string{
 		{bg(lipgloss.NewStyle().Foreground(kindColor)).Render(roleGlyph(b.PodRole())), phaseDot},
-		{nameS.Render(b.Name), m.podSubtitle(&b, compact, bg)},
+		{nameS.Render(b.Name), subtitle},
 	}
 	if !compact {
 		cells = append(cells, stateCell(&b, bg))

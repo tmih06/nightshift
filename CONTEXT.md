@@ -158,7 +158,15 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
   icon and live health dot, the pod name and role-aware subtitle (session
   count/owner/template/version or namespace/IP/readiness/restarts), state and
   readiness (at medium/wide widths), CPU and memory with braille history, and
-  age (at wide widths). On the right, behind one rule, the preview sidebar
+  age (at wide widths). A pod still starting up shows its pipeline stage in
+  place of the subtitle — scheduling, pulling, starting, readying — as a
+  spinner, a one-block-per-stage bar, and the stage's elapsed time; when the
+  pull backs off the marker becomes a cross with the failure count. The
+  sidebar heads such a pod with the stage checklist and the pull failure's
+  cause, read from the pod's events. Events are fetched only while some pod
+  is still starting; Kubernetes exposes no byte-level pull progress, so the
+  stages are as deep as the display honestly goes. On the right, behind one
+  rule, the preview sidebar
   heads the pod (namespace and owner, pod name, role pill with phase,
   readiness, restarts, Pod IP/node, and age, live CPU/MEM usage table, image
   and ports/volume spec, and for claimed sandboxes the Herdr session and

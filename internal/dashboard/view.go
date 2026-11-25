@@ -55,10 +55,14 @@ type layout struct {
 }
 
 func (m model) infoRowCount() int {
-	if b := m.selectedBox(); b != nil && b.Claimed() && m.effectivePane() == paneShell {
-		return infoRows + 1
+	n := infoRows
+	if b := m.selectedBox(); b != nil {
+		if b.Claimed() && m.effectivePane() == paneShell {
+			n++
+		}
+		n += startupLineCount(b.Startup)
 	}
-	return infoRows
+	return n
 }
 
 func (m model) layout() layout {
@@ -349,10 +353,17 @@ func (m model) infoLines(width int) []string {
 		header,
 		title[0],
 		" " + m.podStateLine(b, width-1),
-		" " + usage[0],
-		" " + usage[1],
-		" " + m.podContextLine(b, width-1),
 	}
+	if b.Startup != nil {
+		for _, sl := range startupInfoLines(b.Startup, time.Now(), width-1) {
+			lines = append(lines, " "+sl)
+		}
+	}
+	lines = append(lines,
+		" "+usage[0],
+		" "+usage[1],
+		" "+m.podContextLine(b, width-1),
+	)
 
 	if b.Claimed() && m.effectivePane() == paneShell {
 		lines = append(lines, m.claimedSessionLines(b, width)...)

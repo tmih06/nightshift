@@ -456,7 +456,7 @@ func (m model) CheckOut(pool string, c Checkout) (Model, tea.Cmd) {
 		return m, nil
 	}
 	now := time.Now()
-	m.checkout = &checkoutRun{co: c, template: p.Template, began: now, since: now, detail: "starting"}
+	m.checkout = &checkoutRun{co: c, template: p.Template, began: now, since: now, detail: startingLabel}
 	m.status, m.statusTTL = "", 0
 	return m, startCheckoutCmd(liveOps, c, p.Template)
 }

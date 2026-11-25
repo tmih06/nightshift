@@ -51,6 +51,10 @@ type Sandbox struct {
 	ManifestYAML string
 	PodYAML      string
 	ExtraYAML    string // extra markdown YAML sections (e.g. egress policy/service/netpol)
+
+	// Startup is the pod's progress toward readiness while it is still
+	// starting up; nil once it is ready, terminal, or being deleted.
+	Startup *Startup
 }
 
 type Pool struct {
@@ -104,6 +108,9 @@ type podContainerStatus struct {
 		Waiting *struct {
 			Reason string `json:"reason"`
 		} `json:"waiting"`
+		Running *struct {
+			StartedAt string `json:"startedAt"`
+		} `json:"running"`
 	} `json:"state"`
 }
 
@@ -113,6 +120,7 @@ type podItem struct {
 		Namespace       string            `json:"namespace"`
 		Labels          map[string]string `json:"labels"`
 		Created         string            `json:"creationTimestamp"`
+		Deleted         string            `json:"deletionTimestamp"`
 		OwnerReferences []ownerReference  `json:"ownerReferences"`
 	} `json:"metadata"`
 	Spec struct {
@@ -496,6 +504,11 @@ func Fetch() ([]Sandbox, map[string]Pool, bool, error) {
 	boxes, err := buildSandboxes(sb, pl, ml)
 	if err != nil {
 		return nil, nil, false, err
+	}
+	if anyPodStarting(boxes) {
+		if err := attachStartup(boxes, pl, fetchStartupEvents()); err != nil {
+			return nil, nil, false, err
+		}
 	}
 	if egressErr == nil {
 		if extra := parseEgressConfigSections(egressRaw); extra != "" {
