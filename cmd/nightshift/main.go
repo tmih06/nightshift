@@ -20,11 +20,11 @@ import (
 	gitm "github.com/aymanbagabas/git-module"
 	"github.com/cli/go-gh/v2/pkg/repository"
 
-	"github.com/tmih06/nightshift/internal/app"
 	"github.com/tmih06/nightshift/internal/ghdash/config"
 	"github.com/tmih06/nightshift/internal/ghdash/git"
 	ghtui "github.com/tmih06/nightshift/internal/ghdash/tui"
 	ghtheme "github.com/tmih06/nightshift/internal/ghdash/tui/theme"
+	"github.com/tmih06/nightshift/internal/tui/app"
 	zgh "github.com/tmih06/nightshift/internal/zenocto/gh"
 )
 

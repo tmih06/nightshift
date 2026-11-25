@@ -15,7 +15,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/tmih06/nightshift/internal/egress"
+	"github.com/tmih06/nightshift/internal/services/egress"
 )
 
 func main() {
