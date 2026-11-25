@@ -112,6 +112,37 @@ default-deny host/method/path allowlists and SSRF-safe dialing, swaps opaque
 reflected secrets from responses while `NetworkPolicy` blocks direct internet
 and DNS from checkout sandboxes.
 
+Interactive OAuth logins also fit the proxy model, because an OAuth access
+token is just a bearer string. Sandboxes carry only the placeholder: every
+template sources the `sandbox-egress-env` ConfigMap, which sets
+`CLAUDE_CODE_OAUTH_TOKEN=nightshift:secret:CLAUDE_ACCESS_TOKEN` (and never
+`ANTHROPIC_API_KEY`, which Claude Code gives precedence over every OAuth
+path). The proxy swaps the placeholder for the real access token on
+`api.anthropic.com`; no real credential ever exists inside a sandbox. The
+`creds` holder pod (`k8s/creds.yaml`) keeps the master OAuth files on a
+persistent home — the only place refresh tokens exist, since Claude rotates
+them on every use and copies would log each other out.
+`k8s/creds-publish.sh` harvests the master's current access token into
+`egress-secrets` (and restarts the proxy, which reads secrets at startup),
+while publishing placeholder-shaped copies of agent credential files into the
+`agent-creds` secret that templates untar into `$HOME` at boot. Access tokens
+live about eight hours, so re-run the publish script with `--exercise` when
+they expire; refreshing the mediator automatically is future work.
+
+Two cluster facts shape the wiring. Sandbox pods use external DNS resolvers
+(`8.8.8.8`, `1.1.1.1` via the template dnsConfig), so cluster service names
+never resolve for them: the proxy Service pins a numeric `clusterIP` and the
+ConfigMap references it, with `egress-setup.sh` reconciling drift. And the
+agent-sandbox controller generates a NetworkPolicy per template allowing
+egress to the public internet but denying all private ranges, which includes
+the proxy's ClusterIP; `sandbox-egress-proxy-access` additively re-opens the
+proxy path (network policies are union-permissive, so no rule of the
+controller's needs changing). Note the corollary: warm pool pods retain
+direct internet access — credential safety rests on placeholders being
+worthless off the proxy path, not on network restriction. Tightening
+templates to proxy-only egress is possible through the template
+`networkPolicy` field but will break any tool the proxy rules do not cover.
+
 ## Operating the cluster
 
 Apply `k8s/warmpool.yaml` after installing the agent-sandbox controller and

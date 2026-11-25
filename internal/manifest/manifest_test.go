@@ -71,13 +71,14 @@ func TestWarmPools(t *testing.T) {
 	agents := []struct {
 		pool, template, image string
 		requests, limits      quantities
+		pullPolicy            string
 	}{
-		{"pi-pool", "pi-template", "pi", quantities{"100m", "128Mi"}, quantities{"1000m", "2Gi"}},
-		{"codex-pool", "codex-template", "codex", quantities{"100m", "128Mi"}, quantities{"1000m", "2Gi"}},
-		{"claude-code-pool", "claude-code-template", "claude-code", quantities{"100m", "128Mi"}, quantities{"1000m", "2Gi"}},
-		{"agy-pool", "agy-template", "agy", quantities{"100m", "128Mi"}, quantities{"1000m", "2Gi"}},
-		{"ompig-slim-pool", "ompig-slim-template", "ompig-slim", quantities{"100m", "128Mi"}, quantities{"1000m", "2Gi"}},
-		{"opencode-pool", "opencode-template", "opencode", quantities{"100m", "512Mi"}, quantities{"1000m", "2Gi"}},
+		{"pi-pool", "pi-template", "pi", quantities{"100m", "128Mi"}, quantities{"1000m", "2Gi"}, "Always"},
+		{"codex-pool", "codex-template", "codex", quantities{"100m", "128Mi"}, quantities{"1000m", "2Gi"}, "IfNotPresent"},
+		{"claude-code-pool", "claude-code-template", "claude-code", quantities{"100m", "128Mi"}, quantities{"1000m", "2Gi"}, "IfNotPresent"},
+		{"agy-pool", "agy-template", "agy", quantities{"100m", "128Mi"}, quantities{"1000m", "2Gi"}, "Always"},
+		{"ompig-slim-pool", "ompig-slim-template", "ompig-slim", quantities{"100m", "128Mi"}, quantities{"1000m", "2Gi"}, "Always"},
+		{"opencode-pool", "opencode-template", "opencode", quantities{"100m", "512Mi"}, quantities{"1000m", "2Gi"}, "Always"},
 	}
 	if len(pools) != len(agents) || len(templates) != len(agents) {
 		t.Fatalf("got %d pools and %d templates, want %d each", len(pools), len(templates), len(agents))
@@ -97,7 +98,7 @@ func TestWarmPools(t *testing.T) {
 				t.Fatalf("got %d containers", len(containers))
 			}
 			c := containers[0]
-			if c.Name != "agent" || c.Image != "ghcr.io/tmih06/nightshift-"+a.image+":latest" || c.ImagePullPolicy != "Always" {
+			if c.Name != "agent" || c.Image != "ghcr.io/tmih06/nightshift-"+a.image+":latest" || c.ImagePullPolicy != a.pullPolicy {
 				t.Errorf("container: %+v", c)
 			}
 			if c.Resources.Requests != a.requests || c.Resources.Limits != a.limits {

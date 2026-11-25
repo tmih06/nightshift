@@ -31,6 +31,15 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
   a symlink in `~/.local/bin`. `egress.yaml` and `egress-setup.sh` deploy the
   single-pod Go egress + credential-injection proxy in the separate
   `nightshift-egress` namespace with default-deny `NetworkPolicy` enforcement.
+  `creds.yaml` runs the credential holder pod whose persistent home keeps the
+  master OAuth logins, and `creds-publish.sh` pushes the real access token
+  into the egress proxy's secrets while packing placeholder copies into the
+  `agent-creds` secret every sandbox untars into `$HOME` at boot. Sandboxes
+  reach the proxy by its pinned ClusterIP (their DNS is external, so service
+  names never resolve), and the `sandbox-egress-env` ConfigMap wires the
+  proxy, CA trust, and placeholders into every template through `envFrom`.
+  The Claude Code and Codex templates use `imagePullPolicy:
+  IfNotPresent` because their large images stall on slow registry networks.
 - `images/base/` defines the common sandbox tools and Herdr; `images/agent/`
   adds one versioned Pi, Codex, Claude Code, Antigravity, OMPi slim, or
   OpenCode agent and stamps it into `/etc/nightshift-agent`; `images/egress/`

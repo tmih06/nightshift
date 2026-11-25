@@ -210,15 +210,15 @@ func TestEgressWiringAddsProxyCAAndPlaceholdersWithoutRealSecrets(t *testing.T) 
 		envMap[em["name"].(string)] = em["value"].(string)
 	}
 	for k, want := range map[string]string{
-		"HTTP_PROXY":          "http://10.96.0.42:8080",
-		"HTTPS_PROXY":         "http://10.96.0.42:8080",
-		"NODE_EXTRA_CA_CERTS": egressCACertPath,
-		"SSL_CERT_FILE":       egressCACertPath,
-		"GIT_SSL_CAINFO":      egressCACertPath,
-		"ANTHROPIC_API_KEY":   "nightshift:secret:ANTHROPIC_API_KEY",
-		"OPENAI_API_KEY":      "nightshift:secret:OPENAI_API_KEY",
-		"GEMINI_API_KEY":      "nightshift:secret:GEMINI_API_KEY",
-		"GITHUB_TOKEN":        "nightshift:secret:GITHUB_TOKEN",
+		"HTTP_PROXY":              "http://10.96.0.42:8080",
+		"HTTPS_PROXY":             "http://10.96.0.42:8080",
+		"NODE_EXTRA_CA_CERTS":     egressCACertPath,
+		"SSL_CERT_FILE":           egressCACertPath,
+		"GIT_SSL_CAINFO":          egressCACertPath,
+		"CLAUDE_CODE_OAUTH_TOKEN": "nightshift:secret:CLAUDE_ACCESS_TOKEN",
+		"OPENAI_API_KEY":          "nightshift:secret:OPENAI_API_KEY",
+		"GEMINI_API_KEY":          "nightshift:secret:GEMINI_API_KEY",
+		"GITHUB_TOKEN":            "nightshift:secret:GITHUB_TOKEN",
 	} {
 		if envMap[k] != want {
 			t.Errorf("env[%s] = %q, want %q", k, envMap[k], want)
@@ -241,5 +241,11 @@ func TestEgressWiringAddsProxyCAAndPlaceholdersWithoutRealSecrets(t *testing.T) 
 	}
 	if _, hasLLM := jobEnv["ANTHROPIC_API_KEY"]; hasLLM {
 		t.Errorf("clone job should not receive LLM API key placeholder")
+	}
+	if _, hasOAuth := jobEnv["CLAUDE_CODE_OAUTH_TOKEN"]; hasOAuth {
+		t.Errorf("clone job should not receive the oauth token placeholder")
+	}
+	if _, hasKey := envMap["ANTHROPIC_API_KEY"]; hasKey {
+		t.Errorf("sandbox env must not set ANTHROPIC_API_KEY: it shadows oauth auth")
 	}
 }

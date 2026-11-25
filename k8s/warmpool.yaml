@@ -21,7 +21,15 @@ spec:
       - name: agent
         image: ghcr.io/tmih06/nightshift-pi:latest
         imagePullPolicy: Always
-        command: ["sleep", "infinity"]
+        command:
+        - sh
+        - -c
+        - |
+          c=/etc/nightshift/creds/creds.tar
+          if [ -f "$c" ]; then
+            tar -xf "$c" -C "$HOME" 2>/dev/null || true
+          fi
+          exec sleep infinity
         resources:
           requests:
             cpu: 100m
@@ -29,6 +37,26 @@ spec:
           limits:
             cpu: 1000m
             memory: 2Gi
+        envFrom:
+        - configMapRef:
+            name: sandbox-egress-env
+            optional: true
+        volumeMounts:
+        - name: agent-creds
+          mountPath: /etc/nightshift/creds
+          readOnly: true
+        - name: egress-ca
+          mountPath: /etc/nightshift/ca
+          readOnly: true
+      volumes:
+      - name: agent-creds
+        secret:
+          secretName: agent-creds
+          optional: true
+      - name: egress-ca
+        configMap:
+          name: egress-ca
+          optional: true
 ---
 apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxWarmPool
@@ -54,8 +82,16 @@ spec:
       containers:
       - name: agent
         image: ghcr.io/tmih06/nightshift-codex:latest
-        imagePullPolicy: Always
-        command: ["sleep", "infinity"]
+        imagePullPolicy: IfNotPresent
+        command:
+        - sh
+        - -c
+        - |
+          c=/etc/nightshift/creds/creds.tar
+          if [ -f "$c" ]; then
+            tar -xf "$c" -C "$HOME" 2>/dev/null || true
+          fi
+          exec sleep infinity
         resources:
           requests:
             cpu: 100m
@@ -63,6 +99,26 @@ spec:
           limits:
             cpu: 1000m
             memory: 2Gi
+        envFrom:
+        - configMapRef:
+            name: sandbox-egress-env
+            optional: true
+        volumeMounts:
+        - name: agent-creds
+          mountPath: /etc/nightshift/creds
+          readOnly: true
+        - name: egress-ca
+          mountPath: /etc/nightshift/ca
+          readOnly: true
+      volumes:
+      - name: agent-creds
+        secret:
+          secretName: agent-creds
+          optional: true
+      - name: egress-ca
+        configMap:
+          name: egress-ca
+          optional: true
 ---
 apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxWarmPool
@@ -88,8 +144,16 @@ spec:
       containers:
       - name: agent
         image: ghcr.io/tmih06/nightshift-claude-code:latest
-        imagePullPolicy: Always
-        command: ["sleep", "infinity"]
+        imagePullPolicy: IfNotPresent
+        command:
+        - sh
+        - -c
+        - |
+          c=/etc/nightshift/creds/creds.tar
+          if [ -f "$c" ]; then
+            tar -xf "$c" -C "$HOME" 2>/dev/null || true
+          fi
+          exec sleep infinity
         resources:
           requests:
             cpu: 100m
@@ -97,6 +161,26 @@ spec:
           limits:
             cpu: 1000m
             memory: 2Gi
+        envFrom:
+        - configMapRef:
+            name: sandbox-egress-env
+            optional: true
+        volumeMounts:
+        - name: agent-creds
+          mountPath: /etc/nightshift/creds
+          readOnly: true
+        - name: egress-ca
+          mountPath: /etc/nightshift/ca
+          readOnly: true
+      volumes:
+      - name: agent-creds
+        secret:
+          secretName: agent-creds
+          optional: true
+      - name: egress-ca
+        configMap:
+          name: egress-ca
+          optional: true
 ---
 apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxWarmPool
@@ -123,7 +207,15 @@ spec:
       - name: agent
         image: ghcr.io/tmih06/nightshift-agy:latest
         imagePullPolicy: Always
-        command: ["sleep", "infinity"]
+        command:
+        - sh
+        - -c
+        - |
+          c=/etc/nightshift/creds/creds.tar
+          if [ -f "$c" ]; then
+            tar -xf "$c" -C "$HOME" 2>/dev/null || true
+          fi
+          exec sleep infinity
         resources:
           requests:
             cpu: 100m
@@ -131,6 +223,26 @@ spec:
           limits:
             cpu: 1000m
             memory: 2Gi
+        envFrom:
+        - configMapRef:
+            name: sandbox-egress-env
+            optional: true
+        volumeMounts:
+        - name: agent-creds
+          mountPath: /etc/nightshift/creds
+          readOnly: true
+        - name: egress-ca
+          mountPath: /etc/nightshift/ca
+          readOnly: true
+      volumes:
+      - name: agent-creds
+        secret:
+          secretName: agent-creds
+          optional: true
+      - name: egress-ca
+        configMap:
+          name: egress-ca
+          optional: true
 ---
 apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxWarmPool
@@ -157,7 +269,15 @@ spec:
       - name: agent
         image: ghcr.io/tmih06/nightshift-ompig-slim:latest
         imagePullPolicy: Always
-        command: ["sleep", "infinity"]
+        command:
+        - sh
+        - -c
+        - |
+          c=/etc/nightshift/creds/creds.tar
+          if [ -f "$c" ]; then
+            tar -xf "$c" -C "$HOME" 2>/dev/null || true
+          fi
+          exec sleep infinity
         resources:
           requests:
             cpu: 100m
@@ -165,6 +285,26 @@ spec:
           limits:
             cpu: 1000m
             memory: 2Gi
+        envFrom:
+        - configMapRef:
+            name: sandbox-egress-env
+            optional: true
+        volumeMounts:
+        - name: agent-creds
+          mountPath: /etc/nightshift/creds
+          readOnly: true
+        - name: egress-ca
+          mountPath: /etc/nightshift/ca
+          readOnly: true
+      volumes:
+      - name: agent-creds
+        secret:
+          secretName: agent-creds
+          optional: true
+      - name: egress-ca
+        configMap:
+          name: egress-ca
+          optional: true
 ---
 apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxWarmPool
@@ -191,7 +331,15 @@ spec:
       - name: agent
         image: ghcr.io/tmih06/nightshift-opencode:latest
         imagePullPolicy: Always
-        command: ["sleep", "infinity"]
+        command:
+        - sh
+        - -c
+        - |
+          c=/etc/nightshift/creds/creds.tar
+          if [ -f "$c" ]; then
+            tar -xf "$c" -C "$HOME" 2>/dev/null || true
+          fi
+          exec sleep infinity
         resources:
           requests:
             cpu: 100m
@@ -199,6 +347,26 @@ spec:
           limits:
             cpu: 1000m
             memory: 2Gi
+        envFrom:
+        - configMapRef:
+            name: sandbox-egress-env
+            optional: true
+        volumeMounts:
+        - name: agent-creds
+          mountPath: /etc/nightshift/creds
+          readOnly: true
+        - name: egress-ca
+          mountPath: /etc/nightshift/ca
+          readOnly: true
+      volumes:
+      - name: agent-creds
+        secret:
+          secretName: agent-creds
+          optional: true
+      - name: egress-ca
+        configMap:
+          name: egress-ca
+          optional: true
 ---
 apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxWarmPool

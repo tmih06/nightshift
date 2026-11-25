@@ -24,7 +24,7 @@ data:
         hosts: ["api.anthropic.com"]
         ports: [443]
         mode: mitm
-        secrets: ["ANTHROPIC_API_KEY"]
+        secrets: ["ANTHROPIC_API_KEY", "CLAUDE_ACCESS_TOKEN"]
       - name: openai
         hosts: ["api.openai.com"]
         ports: [443]
@@ -66,6 +66,38 @@ data:
       GITHUB_TOKEN:
         placeholder: "nightshift:secret:GITHUB_TOKEN"
         env: "REAL_GITHUB_TOKEN"
+      CLAUDE_ACCESS_TOKEN:
+        placeholder: "nightshift:secret:CLAUDE_ACCESS_TOKEN"
+        env: "REAL_CLAUDE_ACCESS_TOKEN"
+---
+---
+# Static egress environment shared by every sandbox template through
+# envFrom. Placeholder values are only meaningful to the egress proxy;
+# on any direct connection they are worthless sentinels. ANTHROPIC_API_KEY
+# is absent on purpose: Claude Code gives it precedence over every OAuth
+# path, so setting it would disable the credential-file and oauth-token
+# flows this cluster uses.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sandbox-egress-env
+  namespace: nightshift
+data:
+  HTTP_PROXY: http://10.96.239.62:8080
+  HTTPS_PROXY: http://10.96.239.62:8080
+  http_proxy: http://10.96.239.62:8080
+  https_proxy: http://10.96.239.62:8080
+  NO_PROXY: localhost,127.0.0.1
+  no_proxy: localhost,127.0.0.1
+  NODE_EXTRA_CA_CERTS: /etc/nightshift/ca/ca.crt
+  SSL_CERT_FILE: /etc/nightshift/ca/ca.crt
+  REQUESTS_CA_BUNDLE: /etc/nightshift/ca/ca.crt
+  CURL_CA_BUNDLE: /etc/nightshift/ca/ca.crt
+  GIT_SSL_CAINFO: /etc/nightshift/ca/ca.crt
+  OPENAI_API_KEY: nightshift:secret:OPENAI_API_KEY
+  GEMINI_API_KEY: nightshift:secret:GEMINI_API_KEY
+  GITHUB_TOKEN: nightshift:secret:GITHUB_TOKEN
+  CLAUDE_CODE_OAUTH_TOKEN: nightshift:secret:CLAUDE_ACCESS_TOKEN
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -147,6 +179,11 @@ metadata:
   name: egress-proxy
   namespace: nightshift-egress
 spec:
+  # Sandbox pods use external DNS resolvers, so cluster service names do not
+  # resolve for them; the proxy address must be numeric and stable. If this
+  # IP collides on a fresh cluster, pick another free one and run
+  # k8s/egress-setup.sh, which rewrites the sandbox-egress-env ConfigMap.
+  clusterIP: 10.96.239.62
   selector:
     app: egress-proxy
   ports:
@@ -172,6 +209,31 @@ spec:
     - namespaceSelector:
         matchLabels:
           kubernetes.io/metadata.name: nightshift
+    ports:
+    - protocol: TCP
+      port: 8080
+---
+# Let every pod in nightshift reach the egress proxy. The agent-sandbox
+# controller generates per-template NetworkPolicies that deny all private
+# IP egress, which would otherwise make the proxy unreachable; network
+# policies are union-permissive, so this additive allow is enough.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sandbox-egress-proxy-access
+  namespace: nightshift
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: nightshift-egress
+      podSelector:
+        matchLabels:
+          app: egress-proxy
     ports:
     - protocol: TCP
       port: 8080

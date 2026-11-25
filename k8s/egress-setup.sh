@@ -76,4 +76,20 @@ fi
 echo "4/4 Applying k8s/egress.yaml..."
 k apply -f "${SCRIPT_DIR}/egress.yaml"
 k -n "${EGRESS_NS}" rollout status deployment/egress-proxy --timeout=60s
-echo "Done. Egress proxy is live at http://egress-proxy.${EGRESS_NS}.svc.cluster.local:8080"
+
+# Sandbox pods use external DNS resolvers, so they reach the proxy by IP.
+# Rewrite the shared env ConfigMap whenever the live ClusterIP differs.
+ip="$(k -n "${EGRESS_NS}" get service egress-proxy -o jsonpath='{.spec.clusterIP}')"
+if [ -n "${ip}" ]; then
+  proxy_url="http://${ip}:8080"
+  pairs=""
+  for v in HTTP_PROXY HTTPS_PROXY http_proxy https_proxy; do
+    pairs="${pairs}\"${v}\":\"${proxy_url}\","
+  done
+  patch="{\"data\":{${pairs%,}}}"
+  k -n "${SANDBOX_NS}" patch configmap sandbox-egress-env \
+    --type=merge -p "${patch}" >/dev/null
+  echo "Done. Egress proxy is live at ${proxy_url} (service DNS is unusable from sandboxes)."
+else
+  echo "Done, but no ClusterIP found; sandbox-egress-env not reconciled." >&2
+fi

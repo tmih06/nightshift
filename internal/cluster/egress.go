@@ -39,7 +39,10 @@ func EgressSandboxEnv(proxyURL string) []map[string]any {
 		{"REQUESTS_CA_BUNDLE", egressCACertPath},
 		{"CURL_CA_BUNDLE", egressCACertPath},
 		{"GIT_SSL_CAINFO", egressCACertPath},
-		{"ANTHROPIC_API_KEY", "nightshift:secret:ANTHROPIC_API_KEY"},
+		// No ANTHROPIC_API_KEY: Claude Code gives it precedence over every
+		// OAuth path, so setting it would disable credential-file and
+		// oauth-token auth. The oauth placeholder carries Claude instead.
+		{"CLAUDE_CODE_OAUTH_TOKEN", "nightshift:secret:CLAUDE_ACCESS_TOKEN"},
 		{"OPENAI_API_KEY", "nightshift:secret:OPENAI_API_KEY"},
 		{"GEMINI_API_KEY", "nightshift:secret:GEMINI_API_KEY"},
 		{"GITHUB_TOKEN", "nightshift:secret:GITHUB_TOKEN"},
@@ -94,7 +97,7 @@ func applyEgressToPodSpec(spec map[string]any, proxyURL string, includeLLMPlaceh
 		filtered := make([]map[string]any, 0, len(envEntries))
 		for _, e := range envEntries {
 			name, _ := e["name"].(string)
-			if strings.HasSuffix(name, "_API_KEY") {
+			if strings.HasSuffix(name, "_API_KEY") || strings.HasSuffix(name, "_OAUTH_TOKEN") {
 				continue
 			}
 			filtered = append(filtered, e)

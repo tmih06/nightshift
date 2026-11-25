@@ -1,0 +1,63 @@
+# Credential holder for Nightshift sandboxes: one login workstation whose
+# home is a persistent volume. Log in once (kubectl exec ... -- claude login),
+# then k8s/creds-publish.sh harvests the credential files, strips rotating
+# refresh tokens, and packs them into the agent-creds Secret that sandbox
+# templates untar into $HOME at boot. Masters never leave this pod.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: agent-creds-home
+  namespace: nightshift
+  labels:
+    nightshift.dev/component: creds
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 64Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: creds
+  namespace: nightshift
+  labels:
+    nightshift.dev/component: creds
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: creds
+  template:
+    metadata:
+      labels:
+        app: creds
+        nightshift.dev/component: creds
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+      - name: workstation
+        image: ghcr.io/tmih06/nightshift-claude-code:latest
+        imagePullPolicy: IfNotPresent
+        command: ["sleep", "infinity"]
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        volumeMounts:
+        - name: home
+          mountPath: /home/node
+      volumes:
+      - name: home
+        persistentVolumeClaim:
+          claimName: agent-creds-home
