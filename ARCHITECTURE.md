@@ -113,33 +113,68 @@ reflected secrets from responses while `NetworkPolicy` blocks direct internet
 and DNS from checkout sandboxes.
 
 Interactive OAuth logins also fit the proxy model, because an OAuth access
-token is just a bearer string. Sandboxes carry only the placeholder: every
-template sources the `sandbox-egress-env` ConfigMap, which sets
-`CLAUDE_CODE_OAUTH_TOKEN=nightshift:secret:CLAUDE_ACCESS_TOKEN` (and never
-`ANTHROPIC_API_KEY`, which Claude Code gives precedence over every OAuth
-path). The proxy swaps the placeholder for the real access token on
-`api.anthropic.com`; no real credential ever exists inside a sandbox. The
-`creds` holder pod (`k8s/creds.yaml`) keeps the master OAuth files on a
-persistent home — the only place refresh tokens exist, since Claude rotates
-them on every use and copies would log each other out.
-`k8s/creds-publish.sh` harvests the master's current access token into
-`egress-secrets` (and restarts the proxy, which reads secrets at startup),
-while publishing placeholder-shaped copies of agent credential files into the
-`agent-creds` secret that templates untar into `$HOME` at boot. Access tokens
-live about eight hours, so re-run the publish script with `--exercise` when
-they expire; refreshing the mediator automatically is future work.
+token is just a bearer string. Claude Code, Codex, and Antigravity (`agy`)
+log in once on a master and every sandbox then boots logged in, yet no real
+credential ever exists inside a sandbox. `k8s/creds-stage.sh` rewrites each
+login file: the access token becomes a placeholder
+(`nightshift:secret:CLAUDE_ACCESS_TOKEN`, `CODEX_ACCESS_TOKEN`, or
+`AGY_ACCESS_TOKEN`), the expiry moves far into the future so the agent never
+tries to refresh, and the refresh token is dropped (Codex insists on one, so
+it gets an inert string). `gh`'s `hosts.yml` gets the `GITHUB_TOKEN`
+placeholder. A login with no swap is never distributed. The proxy swaps each
+placeholder for the real token on that agent's hosts: `api.anthropic.com`,
+`chatgpt.com`, and `cloudcode-pa.googleapis.com` (plus Antigravity's token
+check under `www.googleapis.com/oauth2/`). The `sandbox-egress-env`
+ConfigMap sets `CLAUDE_CODE_OAUTH_TOKEN` and never `ANTHROPIC_API_KEY`,
+which Claude Code gives precedence over every OAuth path.
+
+Which agents get this treatment is data, not code: `k8s/creds-providers.json`
+lists, per agent, its login file, where the access token sits in it, how to
+swap it, the API hosts that must honor the placeholder, its warm pool, and the
+command that makes it refresh. `creds-stage.sh`, `creds-publish.sh`, and the
+pool sizing all read it, and `TestShippedPolicySwapsEveryRegisteredLogin`
+fails when an entry has no matching proxy rule. Adding an agent is one entry
+plus its proxy rule.
+
+The master is whatever `$HOME` runs `creds-publish.sh`: a laptop, or the
+`creds-refresher` pod (`k8s/creds.yaml`, image `images/creds`), which runs
+it in a loop inside the cluster. The pod's persistent home is the only place
+refresh tokens live: Claude and OpenAI rotate them on every use, so copies
+would log each other out. One replica, Recreate rollouts, and a
+ReadWriteOnce volume make it a single writer by construction; its service
+account may only edit the `agent-creds` and `egress-secrets` secrets and the
+warm pool sizes (`TestCredsRefresherHasLeastPrivilege`). It exercises each
+agent so an expiring token refreshes, packs the placeholder copies into the
+`agent-creds` secret that templates untar into `$HOME` at boot, writes the
+real access tokens into `egress-secrets`, and keeps a warm sandbox only for
+agents that have a login. The proxy binds those secrets to files on a mounted
+volume and re-reads them every 15 seconds (`internal/egress/reload.go`), so a
+refreshed token needs no restart; the kubelet takes up to about two minutes to
+update the volume. Do not run a laptop publisher and the refresher for the
+same agent: each would overwrite the other's secrets.
+
+Nothing here is specific to kind. `NIGHTSHIFT_CONTEXT` selects the kubeconfig
+context for the scripts and the TUI, the manifests pin no service address, and
+`egress-setup.sh` pulls the published proxy image on any cluster that is not
+kind (`EGRESS_IMAGE` points it at your own registry, `EGRESS_BUILD=1` builds
+and pushes one). The cluster needs a default StorageClass for the refresher's
+volume and a network plugin that enforces `NetworkPolicy`. Secrets live in
+ordinary Kubernetes Secrets, so an external secret manager that syncs into
+them (External Secrets, a CSI driver) slots in without changing the proxy.
 
 Two cluster facts shape the wiring. Sandbox pods use external DNS resolvers
-(`8.8.8.8`, `1.1.1.1` via the template dnsConfig), so cluster service names
-never resolve for them: the proxy Service pins a numeric `clusterIP` and the
-ConfigMap references it, with `egress-setup.sh` reconciling drift. And the
-agent-sandbox controller generates a NetworkPolicy per template allowing
+(`8.8.8.8`, `1.1.1.1`, set by the agent-sandbox controller), so cluster
+service names never resolve for them: `egress-setup.sh` reads the proxy
+Service's assigned `clusterIP` and patches it into `sandbox-egress-env`, which
+the manifest therefore leaves unset (a plain `kubectl apply` must not reset it).
+And the agent-sandbox controller generates a NetworkPolicy per template allowing
 egress to the public internet but denying all private ranges, which includes
 the proxy's ClusterIP; `sandbox-egress-proxy-access` additively re-opens the
-proxy path (network policies are union-permissive, so no rule of the
-controller's needs changing). Note the corollary: warm pool pods retain
-direct internet access — credential safety rests on placeholders being
-worthless off the proxy path, not on network restriction. Tightening
+proxy path for sandbox pods only (network policies are union-permissive, so no
+rule of the controller's needs changing). It must not select every pod: an
+empty selector would isolate the refresher too. Note the corollary: warm pool
+pods retain direct internet access — credential safety rests on placeholders
+being worthless off the proxy path, not on network restriction. Tightening
 templates to proxy-only egress is possible through the template
 `networkPolicy` field but will break any tool the proxy rules do not cover.
 

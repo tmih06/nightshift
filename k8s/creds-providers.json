@@ -1,0 +1,48 @@
+{
+  "_comment": "One entry per coding agent whose login Nightshift hands to sandboxes. file: where the agent keeps its login, relative to $HOME. access: jq path of the access token in that file. filter: jq turning the login into a sandbox copy ($ph is the placeholder for secret, $far a far-future timestamp). hosts: the API hosts that must swap that secret (checked against k8s/egress.yaml). pool: the warm pool kept only while this login exists. exercise: command that makes the agent refresh an expiring token.",
+  "providers": [
+    {
+      "id": "claude-code",
+      "pool": "claude-code-pool",
+      "secret": "CLAUDE_ACCESS_TOKEN",
+      "file": ".claude/.credentials.json",
+      "access": ".claudeAiOauth.accessToken",
+      "filter": ".claudeAiOauth.accessToken = $ph | .claudeAiOauth.expiresAt = 1999999999999 | del(.claudeAiOauth.refreshToken)",
+      "hosts": [
+        "api.anthropic.com"
+      ],
+      "exercise": "claude -p ping --model haiku"
+    },
+    {
+      "id": "codex",
+      "pool": "codex-pool",
+      "secret": "CODEX_ACCESS_TOKEN",
+      "file": ".codex/auth.json",
+      "access": ".tokens.access_token",
+      "filter": ".tokens.access_token = $ph | .tokens.refresh_token = \"nightshift:secret:CODEX_REFRESH_TOKEN_UNUSABLE\" | .last_refresh = $far",
+      "extra": {
+        ".codex/config.toml": "[model_providers.openai]\nsupports_websockets = false\n"
+      },
+      "hosts": [
+        "chatgpt.com"
+      ],
+      "exercise": "codex exec --skip-git-repo-check ping",
+      "exercise_when_jwt_expiring": ".tokens.access_token"
+    },
+    {
+      "id": "antigravity",
+      "pool": "agy-pool",
+      "secret": "AGY_ACCESS_TOKEN",
+      "file": ".gemini/antigravity-cli/antigravity-oauth-token",
+      "access": ".token.access_token",
+      "filter": ".token.access_token = $ph | .token.expiry = $far | .token.expires_in = 99999999 | del(.token.refresh_token)",
+      "hosts": [
+        "cloudcode-pa.googleapis.com",
+        "daily-cloudcode-pa.googleapis.com",
+        "aicode.googleapis.com",
+        "www.googleapis.com"
+      ],
+      "exercise": "agy models"
+    }
+  ]
+}

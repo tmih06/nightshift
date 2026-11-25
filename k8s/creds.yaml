@@ -1,8 +1,89 @@
-# Credential holder for Nightshift sandboxes: one login workstation whose
-# home is a persistent volume. Log in once (kubectl exec ... -- claude login),
-# then k8s/creds-publish.sh harvests the credential files, strips rotating
-# refresh tokens, and packs them into the agent-creds Secret that sandbox
-# templates untar into $HOME at boot. Masters never leave this pod.
+# In-cluster credential refresher. One pod holds the master logins on a
+# persistent home, so refresh tokens exist in exactly one place, and runs
+# creds-publish.sh in a loop: it exercises each agent so expiring access tokens
+# refresh, then publishes sandbox-safe copies (agent-creds) and the real access
+# tokens (egress-secrets) and sizes the warm pools to the logins it holds.
+#
+# Log in once from your machine:
+#   kubectl -n nightshift exec -it deploy/creds-refresher -- claude login
+#   kubectl -n nightshift exec -it deploy/creds-refresher -- \
+#     codex login --device-auth
+#   kubectl -n nightshift exec -it deploy/creds-refresher -- agy
+# or carry logins you already have:
+#   k8s/creds-publish.sh --import ~/.codex/auth.json
+#
+# Single writer by construction: one replica, Recreate rollouts, and a
+# ReadWriteOnce volume, so a second refresher can never rotate a refresh token
+# behind the first. Edit image: to use your own registry's copy.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: creds-refresher
+  namespace: nightshift
+  labels:
+    nightshift.dev/component: creds
+---
+# Least privilege: the refresher edits only the credential secrets and the
+# warm pool sizes, and nothing else in either namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: creds-refresher
+  namespace: nightshift
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["create"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["agent-creds"]
+  verbs: ["get", "patch", "update"]
+- apiGroups: ["extensions.agents.x-k8s.io"]
+  resources: ["sandboxwarmpools"]
+  verbs: ["get", "list", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: creds-refresher
+  namespace: nightshift
+subjects:
+- kind: ServiceAccount
+  name: creds-refresher
+  namespace: nightshift
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: creds-refresher
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: creds-refresher
+  namespace: nightshift-egress
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["create"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["egress-secrets"]
+  verbs: ["get", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: creds-refresher
+  namespace: nightshift-egress
+subjects:
+- kind: ServiceAccount
+  name: creds-refresher
+  namespace: nightshift
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: creds-refresher
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -12,6 +93,7 @@ metadata:
   labels:
     nightshift.dev/component: creds
 spec:
+  # The cluster's default StorageClass; set storageClassName for another.
   accessModes: ["ReadWriteOnce"]
   resources:
     requests:
@@ -20,7 +102,7 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: creds
+  name: creds-refresher
   namespace: nightshift
   labels:
     nightshift.dev/component: creds
@@ -30,30 +112,33 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app: creds
+      app: creds-refresher
   template:
     metadata:
       labels:
-        app: creds
+        app: creds-refresher
         nightshift.dev/component: creds
     spec:
-      automountServiceAccountToken: false
+      serviceAccountName: creds-refresher
       securityContext:
         runAsUser: 1000
         runAsGroup: 1000
         fsGroup: 1000
       containers:
-      - name: workstation
-        image: ghcr.io/tmih06/nightshift-claude-code:latest
+      - name: refresher
+        image: ghcr.io/tmih06/nightshift-creds:latest
         imagePullPolicy: IfNotPresent
-        command: ["sleep", "infinity"]
+        args: ["--watch", "1200"]
+        env:
+        - name: HOME
+          value: /home/node
         resources:
           requests:
             cpu: 50m
-            memory: 64Mi
+            memory: 128Mi
           limits:
             cpu: 500m
-            memory: 512Mi
+            memory: 768Mi
         volumeMounts:
         - name: home
           mountPath: /home/node

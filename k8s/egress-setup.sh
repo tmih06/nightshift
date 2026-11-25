@@ -1,17 +1,35 @@
 #!/usr/bin/env bash
 # Set up Nightshift's lightweight Go egress + credential-injection proxy on
-# kind-agent-sandbox. Generates an ECDSA CA in nightshift-egress/egress-ca,
-# mirrors ONLY the public cert into nightshift/egress-ca, loads real
-# credentials from your host environment (never stored in the repo) into
-# nightshift-egress/egress-secrets, builds the proxy image into kind, and
-# applies k8s/egress.yaml.
+# any Kubernetes cluster (kind, k3s, EKS, GKE, AKS, ...). Generates an ECDSA
+# CA in nightshift-egress/egress-ca, mirrors ONLY the public cert into
+# nightshift/egress-ca, loads real credentials from your host environment
+# (never stored in the repo) into nightshift-egress/egress-secrets, gets the
+# proxy image onto the cluster, and applies k8s/egress.yaml.
+#
+# Env:  NIGHTSHIFT_CONTEXT  kubeconfig context to use (default kind-agent-sandbox;
+#                           KUBE_CONTEXT is still read)
+#       EGRESS_IMAGE        proxy image. Unset on a kind context: build
+#                           nightshift-egress-proxy:local and load it into kind.
+#                           Unset elsewhere: ghcr.io/tmih06/nightshift-egress-proxy:latest.
+#       EGRESS_BUILD=1      build EGRESS_IMAGE here and push it to its registry
+#                           (needs docker login) instead of pulling a published one
+#       KIND_CLUSTER        kind cluster name (default: the context minus "kind-")
 set -euo pipefail
 
-CONTEXT="${KUBE_CONTEXT:-kind-agent-sandbox}"
-CLUSTER="${KIND_CLUSTER:-agent-sandbox}"
+CONTEXT="${NIGHTSHIFT_CONTEXT:-${KUBE_CONTEXT:-kind-agent-sandbox}}"
 EGRESS_NS="nightshift-egress"
 SANDBOX_NS="nightshift"
-IMAGE="nightshift-egress-proxy:local"
+case "${CONTEXT}" in
+  kind-*) IS_KIND=1; CLUSTER="${KIND_CLUSTER:-${CONTEXT#kind-}}" ;;
+  *)      IS_KIND=0; CLUSTER="" ;;
+esac
+if [ -n "${EGRESS_IMAGE:-}" ]; then
+  IMAGE="${EGRESS_IMAGE}"
+elif [ "${IS_KIND}" = 1 ]; then
+  IMAGE="nightshift-egress-proxy:local"
+else
+  IMAGE="ghcr.io/tmih06/nightshift-egress-proxy:latest"
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -20,9 +38,17 @@ k() {
   kubectl --context "${CONTEXT}" "$@"
 }
 
-echo "1/4 Building ${IMAGE} and loading into kind cluster ${CLUSTER}..."
-docker build -t "${IMAGE}" -f "${REPO_ROOT}/images/egress/Dockerfile" "${REPO_ROOT}"
-kind load docker-image "${IMAGE}" --name "${CLUSTER}"
+if [ "${IS_KIND}" = 1 ] && [ -z "${EGRESS_IMAGE:-}" ]; then
+  echo "1/4 Building ${IMAGE} and loading into kind cluster ${CLUSTER}..."
+  docker build -t "${IMAGE}" -f "${REPO_ROOT}/images/egress/Dockerfile" "${REPO_ROOT}"
+  kind load docker-image "${IMAGE}" --name "${CLUSTER}"
+elif [ "${EGRESS_BUILD:-0}" = 1 ]; then
+  echo "1/4 Building and pushing ${IMAGE}..."
+  docker build -t "${IMAGE}" -f "${REPO_ROOT}/images/egress/Dockerfile" "${REPO_ROOT}"
+  docker push "${IMAGE}"
+else
+  echo "1/4 Using proxy image ${IMAGE} (the cluster pulls it)."
+fi
 
 echo "2/4 Ensuring namespaces ${EGRESS_NS} and ${SANDBOX_NS}..."
 k create namespace "${EGRESS_NS}" --dry-run=client -o yaml | k apply -f -
@@ -74,8 +100,12 @@ if [ "${#secret_args[@]}" -gt 0 ]; then
 fi
 
 echo "4/4 Applying k8s/egress.yaml..."
-k apply -f "${SCRIPT_DIR}/egress.yaml"
-k -n "${EGRESS_NS}" rollout status deployment/egress-proxy --timeout=60s
+# The manifest names the local kind image; point it at the chosen one. It pins
+# no clusterIP: service CIDRs differ per provider, so the address is read back
+# below and written into sandbox-egress-env.
+sed -E "s|^([[:space:]]*image:) nightshift-egress-proxy:local\$|\\1 ${IMAGE}|" \
+  "${SCRIPT_DIR}/egress.yaml" | k apply -f -
+k -n "${EGRESS_NS}" rollout status deployment/egress-proxy --timeout=120s
 
 # Sandbox pods use external DNS resolvers, so they reach the proxy by IP.
 # Rewrite the shared env ConfigMap whenever the live ClusterIP differs.

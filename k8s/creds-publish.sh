@@ -1,144 +1,187 @@
 #!/usr/bin/env bash
-# creds-publish — harvest agent credential files from the creds holder pod,
-# strip rotating refresh tokens, and pack them into the agent-creds Secret
-# that sandbox templates untar into $HOME at boot.
+# creds-publish — log in once, then every sandbox boots logged in.
 #
-# Usage:  k8s/creds-publish.sh [--exercise] [--from-host PATH ...]
-#   (no flags)     harvest the known credential files from the creds pod
-#   --exercise     run a trivial `claude -p` in the creds pod first, so an
-#                  expired access token is refreshed before harvesting
-#   --from-host P  import host file P into the creds pod master first, at the
-#                  same home-relative path (e.g. --from-host ~/.codex/auth.json)
+# Reads the master logins of every agent in k8s/creds-providers.json, swaps
+# each real access token for a placeholder (k8s/creds-stage.sh), packs the
+# placeholder copies into the agent-creds Secret that sandbox templates untar
+# into $HOME at boot, and writes the REAL access tokens into
+# nightshift-egress's egress-secrets. The egress proxy swaps the placeholder
+# for the real token on each agent's API host and re-reads the files without a
+# restart. No real credential ever enters a sandbox, and no refresh token
+# leaves the master. It also keeps a warm sandbox only for agents that have a
+# login.
 #
-# Claude gets special treatment: copies carry the placeholder
-# nightshift:secret:CLAUDE_ACCESS_TOKEN, a far-future expiry, and no refresh
-# token, while the REAL access token is patched into nightshift-egress's
-# egress-secrets and the egress proxy swaps it in on api.anthropic.com. No
-# real credential ever enters a sandbox. Claude rotates refresh tokens on
-# every use, so the master chain never leaves the creds pod. Access tokens
-# live about 8h; re-run with --exercise when they expire (the exercise makes
-# the master refresh first). Other agents' files pass through unchanged.
+# The master is whatever $HOME this runs in: your laptop, or the
+# creds-refresher pod (k8s/creds.yaml), which runs it in a loop inside the
+# cluster. Inside a pod it uses the pod's service account.
 #
-# Env overrides: CTX (default kind-agent-sandbox), NS (default nightshift),
-#                CREDS_POD (default: deployment/creds)
+# Usage:  k8s/creds-publish.sh [--exercise] [--watch SECONDS]
+#         k8s/creds-publish.sh --import PATH...
+#   --exercise     run each agent once first so an expiring access token is
+#                  refreshed before it is published
+#   --watch N      publish again every N seconds, exercising first (implies
+#                  --exercise). Access tokens expire (Antigravity's in about
+#                  an hour, Claude's in about eight), so keep this running.
+#   --import PATH  copy login files from this machine into the creds-refresher
+#                  pod's home (paths must be under $HOME), then stop
+#
+# Env:  NIGHTSHIFT_CONTEXT  kubeconfig context for any Kubernetes provider
+#                           (default kind-agent-sandbox; CTX and KUBE_CONTEXT
+#                           are still read). Unset inside a pod.
+#       NS                  sandbox namespace (default nightshift)
+#       REFRESHER           pod to --import into (default deploy/creds-refresher)
 set -euo pipefail
 
-CTX=${CTX:-kind-agent-sandbox}
 NS=${NS:-nightshift}
-CREDS_POD=${CREDS_POD:-deployment/creds}
+EGRESS_NS=nightshift-egress
+REFRESHER=${REFRESHER:-deploy/creds-refresher}
+HERE=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
+REGISTRY=${REGISTRY:-$HERE/creds-providers.json}
 
-K=(kubectl -n "$NS" --context "$CTX")
-
-# Credential files harvested relative to the sandbox home, space-separated.
-# Each entry is a path; entries are skipped silently when absent.
-KNOWN_PATHS=".claude/.credentials.json .codex/auth.json .gemini/oauth_creds.json .config/gh/hosts.yml .local/share/opencode/auth.json"
+CTX_ARGS=()
+if [ -n "${NIGHTSHIFT_CONTEXT:-${CTX:-${KUBE_CONTEXT:-}}}" ]; then
+  CTX_ARGS=(--context "${NIGHTSHIFT_CONTEXT:-${CTX:-${KUBE_CONTEXT:-}}}")
+elif [ -z "${KUBERNETES_SERVICE_HOST:-}" ]; then
+  CTX_ARGS=(--context kind-agent-sandbox)
+fi
+K=(kubectl "${CTX_ARGS[@]}" -n "$NS")
+EK=(kubectl "${CTX_ARGS[@]}" -n "$EGRESS_NS")
 
 EXERCISE=0
-HOST_FILES=()
+WATCH=0
+IMPORTS=()
 while [ $# -gt 0 ]; do
   case "$1" in
+    --host)      shift ;; # the master has always been this machine's $HOME
     --exercise)  EXERCISE=1; shift ;;
-    --from-host) HOST_FILES+=("$2"); shift 2 ;;
+    --watch)     WATCH=$2; EXERCISE=1; shift 2 ;;
+    --import)    shift; while [ $# -gt 0 ] && [[ $1 != --* ]]; do IMPORTS+=("$1"); shift; done ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 
-pod_name() {
-  "${K[@]}" get "$CREDS_POD" -o jsonpath='{.status.readyReplicas}' >/dev/null 2>&1 \
-    || { echo "creds pod not ready; apply k8s/creds.yaml first" >&2; exit 1; }
-  "${K[@]}" get pods -l app=creds -o jsonpath='{.items[0].metadata.name}'
-}
-
-POD=$(pod_name)
-[ -n "$POD" ] || { echo "no creds pod found" >&2; exit 1; }
-
-# Stage 0: import host files into the master, keeping their home-relative path.
-for f in ${HOST_FILES[@]+"${HOST_FILES[@]}"}; do
-  rel=${f/#"$HOME"/}
-  rel=${rel#/}
-  [ "$rel" != "$f" ] || { echo "--from-host path must be under \$HOME: $f" >&2; exit 2; }
-  [ -f "$f" ] || { echo "host file not found: $f" >&2; exit 2; }
-  echo "importing $f -> creds pod $rel"
-  "${K[@]}" exec "$POD" -- mkdir -p "/home/node/$(dirname "$rel")"
-  cat "$f" | "${K[@]}" exec -i "$POD" -- sh -c "cat > /home/node/$rel && chmod 600 /home/node/$rel"
-done
-
-if [ "$EXERCISE" = 1 ]; then
-  echo "exercising the master credentials (claude refresh if due)..."
-  "${K[@]}" exec "$POD" -- timeout 120 claude -p "ping" --model haiku >/dev/null 2>&1 \
-    || echo "warning: exercise failed; harvesting whatever is present" >&2
+if [ ${#IMPORTS[@]} -gt 0 ]; then
+  for f in "${IMPORTS[@]}"; do
+    rel=${f/#"$HOME"/}
+    rel=${rel#/}
+    [ "$rel" != "$f" ] || { echo "--import path must be under \$HOME: $f" >&2; exit 2; }
+    [ -f "$f" ] || { echo "file not found: $f" >&2; exit 2; }
+    echo "importing $f -> $REFRESHER:~/$rel"
+    remote="mkdir -p \"\$HOME/\$(dirname \"\$1\")\" && cat > \"\$HOME/\$1\" && chmod 600 \"\$HOME/\$1\""
+    "${K[@]}" exec -i "$REFRESHER" -- sh -c "$remote" _ "$rel" < "$f"
+  done
+  exit 0
 fi
 
-# Stage inside the pod: copy known files into a home-relative tree, stripping
-# Claude's refreshToken (jq is in the base image). Then read the tar out.
-read -ra paths <<< "$KNOWN_PATHS"
-echo "harvesting credentials from $POD..."
-"${K[@]}" exec -i "$POD" -- sh -s -- "${paths[@]}" <<'EOF'
-set -eu
-stage=/tmp/credsdist
-rm -rf "$stage"
-mkdir -p "$stage"
-strip_claude() {
-  src=$1 dst=$2
-  if jq -e '.claudeAiOauth.accessToken' "$src" >/dev/null 2>&1; then
-    jq -r '.claudeAiOauth.accessToken' "$src" > /tmp/claude-access-token
-    chmod 600 /tmp/claude-access-token
-    jq '.claudeAiOauth.accessToken = "nightshift:secret:CLAUDE_ACCESS_TOKEN"
-        | .claudeAiOauth.expiresAt = 1999999999999
-        | del(.claudeAiOauth.refreshToken)' "$src" > "$dst"
-  else
-    cp "$src" "$dst"
-  fi
+# jwt_expiring TOKEN: true when TOKEN's exp is within an hour, or unreadable.
+jwt_expiring() {
+  local payload exp
+  payload=$(printf '%s' "$1" | cut -d. -f2 | tr '_-' '/+')
+  while [ $(( ${#payload} % 4 )) -ne 0 ]; do payload="$payload="; done
+  exp=$(printf '%s' "$payload" | base64 -d 2>/dev/null | jq -r '.exp // empty' 2>/dev/null || true)
+  [ -z "$exp" ] || [ "$exp" -lt $(( $(date +%s) + 3600 )) ]
 }
-for rel in "$@"; do
-  src=/home/node/$rel
-  [ -f "$src" ] || continue
-  mkdir -p "$stage/$(dirname "$rel")"
-  case "$rel" in
-    .claude/.credentials.json) strip_claude "$src" "$stage/$rel" ;;
-    *)                         cp "$src" "$stage/$rel" ;;
-  esac
-  chmod 600 "$stage/$rel"
-done
-rm -f /tmp/creds.tar
-tar -cf /tmp/creds.tar -C "$stage" .
+
+# exercise refreshes whichever logins are close to expiring.
+exercise() {
+  local entry file cmd jwt tok
+  while IFS= read -r entry; do
+    file=$HOME/$(jq -r .file <<<"$entry")
+    cmd=$(jq -r '.exercise // empty' <<<"$entry")
+    [ -f "$file" ] || continue
+    [ -n "$cmd" ] || continue
+    command -v "${cmd%% *}" >/dev/null 2>&1 || continue
+    jwt=$(jq -r '.exercise_when_jwt_expiring // empty' <<<"$entry")
+    if [ -n "$jwt" ]; then
+      tok=$(jq -r "$jwt // empty" "$file" 2>/dev/null || true)
+      jwt_expiring "$tok" || continue
+    fi
+    # shellcheck disable=SC2086 # the registry command is a word list
+    # stdin is the registry loop's: an agent that reads it would swallow the
+    # remaining entries, so none after it would be exercised.
+    timeout 180 $cmd >/dev/null 2>&1 </dev/null || echo "warning: $(jq -r .id <<<"$entry") exercise failed" >&2
+  done < <(jq -c '.providers[]' "$REGISTRY")
+}
+
+# scale_pools keeps a warm sandbox only for agents with a login to hand out.
+# Every other pool is scaled to zero. Applying k8s/warmpool.yaml sets them
+# back to one, so run this script after it.
+scale_pools() {
+  local pool want
+  while IFS= read -r pool; do
+    want=0
+    while IFS= read -r secret; do
+      [ -s "$work/tokens/$secret" ] && want=1
+    done < <(jq -r --arg p "$pool" '.providers[] | select(.pool == $p) | .secret' "$REGISTRY")
+    "${K[@]}" patch sandboxwarmpool "$pool" --type=merge \
+      -p "{\"spec\":{\"replicas\":$want}}" >/dev/null
+    echo "  $pool: $want warm"
+  done < <("${K[@]}" get sandboxwarmpool -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
+}
+
+publish() {
+  if [ "$(tar -tf "$work/creds.tar" 2>/dev/null | grep -c .)" -le 1 ]; then
+    echo "no credential files found; nothing published" >&2
+    echo "log in first (see k8s/creds-providers.json for the agents), then run this again" >&2
+    return 1
+  fi
+
+  echo "publishing agent-creds secret..."
+  "${K[@]}" create secret generic agent-creds \
+    --from-file=creds.tar="$work/creds.tar" \
+    --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+
+  local pairs="" secret
+  while IFS= read -r secret; do
+    [ -s "$work/tokens/$secret" ] || continue
+    pairs="$pairs\"REAL_$secret\":\"$(base64 -w0 < "$work/tokens/$secret")\","
+    echo "  real $secret -> egress-secrets (proxy reloads it, no restart)"
+  done < <(jq -r '.providers[].secret' "$REGISTRY")
+  if [ -n "$pairs" ]; then
+    # Merge into the existing Secret so the API keys setup seeded survive.
+    if "${EK[@]}" get secret egress-secrets >/dev/null 2>&1; then
+      "${EK[@]}" patch secret egress-secrets --type=merge \
+        -p "{\"data\":{${pairs%,}}}" >/dev/null
+    else
+      "${EK[@]}" apply -f - >/dev/null <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: egress-secrets
+  namespace: $EGRESS_NS
+data: {${pairs%,}}
 EOF
-
-tmp=$(mktemp)
-trap 'rm -f "$tmp"' EXIT
-"${K[@]}" exec "$POD" -- cat /tmp/creds.tar > "$tmp"
-
-if [ "$(tar -tf "$tmp" 2>/dev/null | grep -c .)" -le 1 ]; then
-  echo "no credential files found in the creds pod; nothing published" >&2
-  echo "log in first: kubectl -n $NS --context $CTX exec -it $POD -- claude login" >&2
-  exit 1
-fi
-
-echo "publishing agent-creds secret..."
-"${K[@]}" create secret generic agent-creds \
-  --from-file=creds.tar="$tmp" \
-  --dry-run=client -o yaml | "${K[@]}" apply -f -
-
-token=$("${K[@]}" exec "$POD" -- sh -c 'cat /tmp/claude-access-token 2>/dev/null' || true)
-token=$(printf '%s' "$token" | tr -d '[:space:]')
-if [ -n "$token" ]; then
-  echo "publishing real Claude access token to egress-secrets..."
-  EK=(kubectl -n nightshift-egress --context "$CTX")
-  b64=$(printf '%s' "$token" | base64)
-  if "${EK[@]}" get secret egress-secrets >/dev/null 2>&1; then
-    "${EK[@]}" patch secret egress-secrets \
-      --type=merge -p "{\"data\":{\"REAL_CLAUDE_ACCESS_TOKEN\":\"$b64\"}}" >/dev/null
-  else
-    "${EK[@]}" create secret generic egress-secrets \
-      --from-literal="REAL_CLAUDE_ACCESS_TOKEN=$token"
+    fi
   fi
-  "${EK[@]}" rollout restart deployment/egress-proxy >/dev/null
-  echo "egress proxy restarted with the new token"
-fi
+  scale_pools
 
-echo "done. Files published:"
-tar -tf "$tmp" | grep -v '/$' | sed 's|^\./||' | sed 's/^/  ~\//'
-echo
-echo "New sandbox pods pick these up at boot. Existing warm pods do not;"
-echo "delete unclaimed pool pods by name so the pools restock fresh ones, e.g.:"
-echo "  kubectl -n $NS --context $CTX delete pod pi-pool-XXXXX"
+  echo "done. Files published:"
+  tar -tf "$work/creds.tar" | grep -v '/$' | sed 's|^\./||; s|^|  ~/|'
+  echo
+  echo "New sandbox pods pick these up at boot. Existing warm pods do not;"
+  echo "delete unclaimed pool pods by name so the pools restock fresh ones."
+}
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+chmod 700 "$work"
+
+run_once() {
+  if [ "$EXERCISE" = 1 ]; then
+    echo "exercising the logins (refresh if due)..."
+    exercise
+  fi
+  rm -rf "$work/tokens" "$work/stage" "$work/creds.tar"
+  sh "$HERE/creds-stage.sh" "$HOME" "$work/stage" "$work/tokens" "$REGISTRY"
+  tar -cf "$work/creds.tar" -C "$work/stage" .
+  publish
+}
+
+if [ "$WATCH" -gt 0 ]; then
+  while true; do
+    run_once || echo "publish failed; retrying in ${WATCH}s" >&2
+    sleep "$WATCH"
+  done
+else
+  run_once
+fi

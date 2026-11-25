@@ -12,13 +12,13 @@
 #        pool restocks a fresh warm one. Run it twice = two different
 #        sandboxes (even in parallel: each run claims its own).
 #
-# Env overrides: CTX (default kind-agent-sandbox), NS (default nightshift),
+# Env overrides: NIGHTSHIFT_CONTEXT or CTX (default kind-agent-sandbox), NS (default nightshift),
 #                POOL (default pi-pool; also codex-pool, claude-code-pool,
 #                agy-pool, ompig-slim-pool, opencode-pool),
 #                SBX_NO_EXEC=1 to skip the shell.
 set -euo pipefail
 
-CTX=${CTX:-kind-agent-sandbox}
+CTX=${NIGHTSHIFT_CONTEXT:-${CTX:-kind-agent-sandbox}}
 NS=${NS:-nightshift}
 POOL=${POOL:-pi-pool}
 NAME=claimed-sandbox-$(date +%Y%m%d%H%M%S)-$$

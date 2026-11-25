@@ -25,6 +25,25 @@ data:
         ports: [443]
         mode: mitm
         secrets: ["ANTHROPIC_API_KEY", "CLAUDE_ACCESS_TOKEN"]
+      - name: chatgpt
+        hosts: ["chatgpt.com"]
+        ports: [443]
+        mode: mitm
+        secrets: ["CODEX_ACCESS_TOKEN"]
+      - name: antigravity
+        hosts:
+          - "cloudcode-pa.googleapis.com"
+          - "daily-cloudcode-pa.googleapis.com"
+          - "aicode.googleapis.com"
+        ports: [443]
+        mode: mitm
+        secrets: ["AGY_ACCESS_TOKEN"]
+      - name: antigravity-token-check
+        hosts: ["www.googleapis.com"]
+        ports: [443]
+        mode: mitm
+        path_prefixes: ["/oauth2/"]
+        secrets: ["AGY_ACCESS_TOKEN"]
       - name: openai
         hosts: ["api.openai.com"]
         ports: [443]
@@ -66,14 +85,25 @@ data:
       GITHUB_TOKEN:
         placeholder: "nightshift:secret:GITHUB_TOKEN"
         env: "REAL_GITHUB_TOKEN"
+      # OAuth access tokens rotate: creds-publish.sh rewrites them in
+      # egress-secrets and the proxy re-reads these files without a restart.
       CLAUDE_ACCESS_TOKEN:
         placeholder: "nightshift:secret:CLAUDE_ACCESS_TOKEN"
-        env: "REAL_CLAUDE_ACCESS_TOKEN"
+        file: "/etc/egress-secrets/REAL_CLAUDE_ACCESS_TOKEN"
+      CODEX_ACCESS_TOKEN:
+        placeholder: "nightshift:secret:CODEX_ACCESS_TOKEN"
+        file: "/etc/egress-secrets/REAL_CODEX_ACCESS_TOKEN"
+      AGY_ACCESS_TOKEN:
+        placeholder: "nightshift:secret:AGY_ACCESS_TOKEN"
+        file: "/etc/egress-secrets/REAL_AGY_ACCESS_TOKEN"
 ---
 ---
 # Static egress environment shared by every sandbox template through
 # envFrom. Placeholder values are only meaningful to the egress proxy;
-# on any direct connection they are worthless sentinels. ANTHROPIC_API_KEY
+# on any direct connection they are worthless sentinels. The proxy address
+# (HTTP_PROXY and friends) is not set here: egress-setup.sh patches in the
+# Service's address, which differs per cluster, and a later `kubectl apply`
+# leaves it alone. ANTHROPIC_API_KEY
 # is absent on purpose: Claude Code gives it precedence over every OAuth
 # path, so setting it would disable the credential-file and oauth-token
 # flows this cluster uses.
@@ -83,10 +113,6 @@ metadata:
   name: sandbox-egress-env
   namespace: nightshift
 data:
-  HTTP_PROXY: http://10.96.239.62:8080
-  HTTPS_PROXY: http://10.96.239.62:8080
-  http_proxy: http://10.96.239.62:8080
-  https_proxy: http://10.96.239.62:8080
   NO_PROXY: localhost,127.0.0.1
   no_proxy: localhost,127.0.0.1
   NODE_EXTRA_CA_CERTS: /etc/nightshift/ca/ca.crt
@@ -165,6 +191,9 @@ spec:
         - name: ca
           mountPath: /etc/egress-ca
           readOnly: true
+        - name: secrets
+          mountPath: /etc/egress-secrets
+          readOnly: true
       volumes:
       - name: policy
         configMap:
@@ -172,6 +201,10 @@ spec:
       - name: ca
         secret:
           secretName: egress-ca
+      - name: secrets
+        secret:
+          secretName: egress-secrets
+          optional: true
 ---
 apiVersion: v1
 kind: Service
@@ -179,11 +212,9 @@ metadata:
   name: egress-proxy
   namespace: nightshift-egress
 spec:
-  # Sandbox pods use external DNS resolvers, so cluster service names do not
-  # resolve for them; the proxy address must be numeric and stable. If this
-  # IP collides on a fresh cluster, pick another free one and run
-  # k8s/egress-setup.sh, which rewrites the sandbox-egress-env ConfigMap.
-  clusterIP: 10.96.239.62
+  # No clusterIP is pinned: service CIDRs differ per provider. Sandbox pods
+  # use external DNS resolvers, so egress-setup.sh reads the assigned address
+  # back and writes it into the sandbox-egress-env ConfigMap.
   selector:
     app: egress-proxy
   ports:
@@ -213,7 +244,7 @@ spec:
     - protocol: TCP
       port: 8080
 ---
-# Let every pod in nightshift reach the egress proxy. The agent-sandbox
+# Let every sandbox pod in nightshift reach the egress proxy. The agent-sandbox
 # controller generates per-template NetworkPolicies that deny all private
 # IP egress, which would otherwise make the proxy unreachable; network
 # policies are union-permissive, so this additive allow is enough.
@@ -223,7 +254,13 @@ metadata:
   name: sandbox-egress-proxy-access
   namespace: nightshift
 spec:
-  podSelector: {}
+  # Only sandbox pods. An empty selector would put every pod in the namespace
+  # under an egress policy, cutting off the creds refresher's DNS and its
+  # direct path to the agents' login servers.
+  podSelector:
+    matchExpressions:
+    - key: agents.x-k8s.io/sandbox-template-ref-hash
+      operator: Exists
   policyTypes:
   - Egress
   egress:

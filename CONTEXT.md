@@ -31,19 +31,25 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
   a symlink in `~/.local/bin`. `egress.yaml` and `egress-setup.sh` deploy the
   single-pod Go egress + credential-injection proxy in the separate
   `nightshift-egress` namespace with default-deny `NetworkPolicy` enforcement.
-  `creds.yaml` runs the credential holder pod whose persistent home keeps the
-  master OAuth logins, and `creds-publish.sh` pushes the real access token
-  into the egress proxy's secrets while packing placeholder copies into the
-  `agent-creds` secret every sandbox untars into `$HOME` at boot. Sandboxes
-  reach the proxy by its pinned ClusterIP (their DNS is external, so service
-  names never resolve), and the `sandbox-egress-env` ConfigMap wires the
+  `creds-providers.json` lists the agents whose logins reach sandboxes;
+  `creds-publish.sh` reads each master login, `creds-stage.sh` swaps its
+  access token for a placeholder, and the real tokens go into the egress
+  proxy's secrets while the placeholder copies go into the `agent-creds`
+  secret every sandbox untars into `$HOME` at boot. Warm pools are sized to
+  the logins that exist. `creds.yaml` runs the same script in-cluster as the
+  `creds-refresher` (image `images/creds`); `--watch` does it from a laptop.
+  `NIGHTSHIFT_CONTEXT` points every script and the TUI at any cluster.
+  Sandboxes reach the proxy by its ClusterIP, which `egress-setup.sh` writes
+  into the ConfigMap (their DNS is external, so service names never resolve), and the `sandbox-egress-env` ConfigMap wires the
   proxy, CA trust, and placeholders into every template through `envFrom`.
   The Claude Code and Codex templates use `imagePullPolicy:
   IfNotPresent` because their large images stall on slow registry networks.
 - `images/base/` defines the common sandbox tools and Herdr; `images/agent/`
   adds one versioned Pi, Codex, Claude Code, Antigravity, OMPi slim, or
   OpenCode agent and stamps it into `/etc/nightshift-agent`; `images/egress/`
-  builds the static distroless container for `cmd/egress-proxy`. The image
+  builds the static distroless container for `cmd/egress-proxy`; `images/creds/`
+  builds the credential refresher (the login-capable agent CLIs, `kubectl`, and the
+  publish scripts). The image
   workflow watches stable npm releases and the agy and ompig-slim release
   feeds, and publishes to GHCR. Check
   registry access before applying `k8s/warmpool.yaml`; see
