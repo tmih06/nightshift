@@ -66,8 +66,8 @@ func TestCredsStageSwapsEveryAgentLogin(t *testing.T) {
 	}
 	homeDir, stageDir, tokenDir := t.TempDir(), t.TempDir(), t.TempDir()
 	home := openRoot(t, homeDir)
-	writeFixture(t, home, ".claude/.credentials.json", `{"claudeAiOauth":{"accessToken":"sk-ant-oat-REAL-access","refreshToken":"sk-ant-ort-REAL-refresh","expiresAt":1,"scopes":["a"]}}`)
-	writeFixture(t, home, ".codex/auth.json", `{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"id_token":"idtok","access_token":"codex-REAL-access","refresh_token":"codex-REAL-refresh","account_id":"acct"},"last_refresh":"2026-01-01T00:00:00Z"}`)
+	writeFixture(t, home, ".claude/.credentials.json", `{"claudeAiOauth":{"accessToken":"sk-ant-oat-REAL-access","refreshToken":"sk-ant-ort-REAL-refresh","expiresAt":1,"scopes":["a"]},"mcpOAuth":{"server|1":{"accessToken":"mcp-REAL-access","refreshToken":"mcp-REAL-refresh"}}}`)
+	writeFixture(t, home, ".codex/auth.json", `{"auth_mode":"chatgpt","OPENAI_API_KEY":"sk-REAL-openai-key","tokens":{"id_token":"idtok","access_token":"codex-REAL-access","refresh_token":"codex-REAL-refresh","account_id":"acct"},"last_refresh":"2026-01-01T00:00:00Z"}`)
 	writeFixture(t, home, ".gemini/antigravity-cli/antigravity-oauth-token", `{"token":{"access_token":"ya29.REAL-agy-access","token_type":"Bearer","refresh_token":"1//REAL-agy-refresh","expiry":"2026-01-01T00:00:00Z","expires_in":3599},"auth_method":"oauth","id_token_email":"a@b.c"}`)
 	writeFixture(t, home, ".config/gh/hosts.yml", "github.com:\n    users:\n        u:\n            oauth_token: gho_REAL-github\n    oauth_token: gho_REAL-github\n    user: u\n")
 	writeFixture(t, home, ".local/share/opencode/auth.json", `{"x":{"type":"oauth","access":"opencode-REAL"}}`)
@@ -89,6 +89,7 @@ func TestCredsStageSwapsEveryAgentLogin(t *testing.T) {
 		"codex-REAL-access", "codex-REAL-refresh",
 		"ya29.REAL-agy-access", "1//REAL-agy-refresh",
 		"gho_REAL-github", "opencode-REAL",
+		"mcp-REAL-access", "mcp-REAL-refresh", "sk-REAL-openai-key",
 	}
 	err := fs.WalkDir(stage.FS(), ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
@@ -127,9 +128,12 @@ func TestCredsStageSwapsEveryAgentLogin(t *testing.T) {
 	if codex["refresh_token"] == "" || codex["refresh_token"] == nil {
 		t.Error("codex needs a non-empty inert refresh_token")
 	}
-	cfg, err := stage.ReadFile(".codex/config.toml")
-	if err != nil || !strings.Contains(string(cfg), "supports_websockets = false") {
-		t.Errorf("codex config.toml must disable WebSockets: %q (%v)", cfg, err)
+	// Codex refuses to start on a config.toml that overrides a built-in
+	// provider, and releases have disagreed about which overrides are
+	// allowed, so no config is shipped: Codex retries its WebSocket against
+	// the proxy and falls back to HTTPS by itself.
+	if _, err := stage.Stat(".codex/config.toml"); err == nil {
+		t.Error("a config.toml can stop a Codex release from starting; none may be distributed")
 	}
 	agy := object(t, readJSON(t, stage, ".gemini/antigravity-cli/antigravity-oauth-token"), "token")
 	if agy["access_token"] != "nightshift:secret:AGY_ACCESS_TOKEN" {

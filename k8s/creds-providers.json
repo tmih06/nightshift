@@ -1,5 +1,5 @@
 {
-  "_comment": "One entry per coding agent whose login Nightshift hands to sandboxes. file: where the agent keeps its login, relative to $HOME. access: jq path of the access token in that file. filter: jq turning the login into a sandbox copy ($ph is the placeholder for secret, $far a far-future timestamp). hosts: the API hosts that must swap that secret (checked against k8s/egress.yaml). pool: the warm pool kept only while this login exists. exercise: command that makes the agent refresh an expiring token.",
+  "_comment": "One entry per coding agent whose login Nightshift hands to sandboxes. file: where the agent keeps its login, relative to $HOME. access: jq path of the access token in that file. filter: jq building the sandbox copy from the login ($ph is the placeholder for secret, $far a far-future timestamp). It must construct the result from the fields it keeps, never copy the rest of the file: a login file can hold other credentials, such as Claude Code's MCP server tokens. hosts: the API hosts that must swap that secret (checked against k8s/egress.yaml). pool: the warm pool kept only while this login exists. exercise: command that makes the agent refresh an expiring token.",
   "providers": [
     {
       "id": "claude-code",
@@ -7,7 +7,7 @@
       "secret": "CLAUDE_ACCESS_TOKEN",
       "file": ".claude/.credentials.json",
       "access": ".claudeAiOauth.accessToken",
-      "filter": ".claudeAiOauth.accessToken = $ph | .claudeAiOauth.expiresAt = 1999999999999 | del(.claudeAiOauth.refreshToken)",
+      "filter": "{claudeAiOauth: (.claudeAiOauth | del(.refreshToken, .refreshTokenExpiresAt) | .accessToken = $ph | .expiresAt = 1999999999999)}",
       "hosts": [
         "api.anthropic.com"
       ],
@@ -19,10 +19,7 @@
       "secret": "CODEX_ACCESS_TOKEN",
       "file": ".codex/auth.json",
       "access": ".tokens.access_token",
-      "filter": ".tokens.access_token = $ph | .tokens.refresh_token = \"nightshift:secret:CODEX_REFRESH_TOKEN_UNUSABLE\" | .last_refresh = $far",
-      "extra": {
-        ".codex/config.toml": "[model_providers.openai]\nsupports_websockets = false\n"
-      },
+      "filter": "{auth_mode: .auth_mode, OPENAI_API_KEY: null, tokens: (.tokens | .access_token = $ph | .refresh_token = \"nightshift:secret:CODEX_REFRESH_TOKEN_UNUSABLE\"), last_refresh: $far}",
       "hosts": [
         "chatgpt.com"
       ],
@@ -35,7 +32,7 @@
       "secret": "AGY_ACCESS_TOKEN",
       "file": ".gemini/antigravity-cli/antigravity-oauth-token",
       "access": ".token.access_token",
-      "filter": ".token.access_token = $ph | .token.expiry = $far | .token.expires_in = 99999999 | del(.token.refresh_token)",
+      "filter": "{token: (.token | .access_token = $ph | .expiry = $far | .expires_in = 99999999 | del(.refresh_token)), auth_method: .auth_method, id_token_email: .id_token_email}",
       "hosts": [
         "cloudcode-pa.googleapis.com",
         "daily-cloudcode-pa.googleapis.com",
