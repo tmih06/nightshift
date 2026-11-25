@@ -2,6 +2,7 @@ package egress
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -19,6 +20,22 @@ type resolvedSecret struct {
 	placeholder string
 	value       string
 	scrubForms  [][]byte
+}
+
+// signature identifies the loaded secret values so a reload can tell whether
+// anything changed without comparing the values themselves.
+func (e *SecretEngine) signature() string {
+	if e == nil {
+		return ""
+	}
+	h := sha256.New()
+	for _, rs := range e.all {
+		h.Write([]byte(rs.name))
+		h.Write([]byte{0})
+		h.Write([]byte(rs.value))
+		h.Write([]byte{0})
+	}
+	return string(h.Sum(nil))
 }
 
 // SecretEngine swaps opaque placeholders for real credentials on authorized

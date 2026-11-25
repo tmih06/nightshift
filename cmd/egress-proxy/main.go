@@ -20,12 +20,13 @@ import (
 
 func main() {
 	var (
-		listenAddr = flag.String("listen", ":8080", "HTTP/HTTPS proxy listen address")
-		adminAddr  = flag.String("admin", ":9090", "Admin listen address (/healthz, /ca.crt, /events); empty disables")
-		configPath = flag.String("config", "/etc/egress/policy.yaml", "Path to YAML egress policy config")
-		caCertPath = flag.String("ca-cert", "", "Override CA certificate PEM path")
-		caKeyPath  = flag.String("ca-key", "", "Override CA private key PEM path")
-		caOutPath  = flag.String("ca-out", "", "Optional path to write the public CA certificate PEM on startup")
+		listenAddr  = flag.String("listen", ":8080", "HTTP/HTTPS proxy listen address")
+		adminAddr   = flag.String("admin", ":9090", "Admin listen address (/healthz, /ca.crt, /events); empty disables")
+		configPath  = flag.String("config", "/etc/egress/policy.yaml", "Path to YAML egress policy config")
+		caCertPath  = flag.String("ca-cert", "", "Override CA certificate PEM path")
+		caKeyPath   = flag.String("ca-key", "", "Override CA private key PEM path")
+		caOutPath   = flag.String("ca-out", "", "Optional path to write the public CA certificate PEM on startup")
+		reloadEvery = flag.Duration("reload-secrets", 15*time.Second, "How often to re-read file-backed secrets")
 	)
 	flag.Parse()
 
@@ -77,6 +78,16 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// File-backed secrets (rotating OAuth access tokens) are re-read while
+	// the proxy runs, so a refresh never needs a restart.
+	watchDone := make(chan struct{})
+	go func() {
+		defer close(watchDone)
+		proxy.WatchSecrets(ctx, *reloadEvery,
+			func() { log.Printf("egress-proxy: secrets reloaded") },
+			func(err error) { log.Printf("egress-proxy: %v", err) })
+	}()
+
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -89,7 +100,10 @@ func main() {
 
 	log.Printf("egress-proxy: proxy listening on %s (%d rules, block_private_ips=%v, scrub_responses=%v)",
 		*listenAddr, len(cfg.Rules), cfg.ShouldBlockPrivateIPs(), cfg.ShouldScrubResponses())
-	if err := proxySrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	err = proxySrv.ListenAndServe()
+	stop()
+	<-watchDone
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fmt.Fprintf(os.Stderr, "egress-proxy: %v\n", err)
 		os.Exit(1)
 	}

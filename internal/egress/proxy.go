@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -50,7 +51,8 @@ type Proxy struct {
 	cfg     Config
 	ca      *CA
 	dialer  *SafeDialer
-	secrets *SecretEngine
+	secrets atomic.Pointer[SecretEngine]
+	getenv  func(string) string
 	tr      *http.Transport
 
 	auditMu sync.Mutex
@@ -104,15 +106,17 @@ func NewProxy(cfg Config, opts Options) (*Proxy, error) {
 		ringMax = 200
 	}
 
-	return &Proxy{
+	p := &Proxy{
 		cfg:     cfg,
 		ca:      ca,
 		dialer:  dialer,
-		secrets: secrets,
+		getenv:  opts.Getenv,
 		tr:      tr,
 		auditW:  opts.AuditWriter,
 		ringMax: ringMax,
-	}, nil
+	}
+	p.secrets.Store(secrets)
+	return p, nil
 }
 
 func needsMITM(cfg Config) bool {
@@ -239,7 +243,7 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	outReq.URL.Host = net.JoinHostPort(host, strconv.Itoa(port))
 	stripHopHeaders(outReq.Header)
-	injected := p.secrets.InjectRequest(outReq, rule.Secrets)
+	injected := p.secrets.Load().InjectRequest(outReq, rule.Secrets)
 	if p.cfg.ShouldScrubResponses() {
 		// Prevent compressed reflections from bypassing plaintext scrubbing.
 		outReq.Header.Del("Accept-Encoding")
@@ -264,7 +268,7 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var scrubbed bool
 	if p.cfg.ShouldScrubResponses() {
-		scrubbed, err = p.secrets.ScrubResponse(resp)
+		scrubbed, err = p.secrets.Load().ScrubResponse(resp)
 		if err != nil {
 			http.Error(w, "failed reading upstream response", http.StatusBadGateway)
 			return
@@ -427,7 +431,7 @@ func (p *Proxy) handleMITM(w http.ResponseWriter, r *http.Request, host string, 
 			outReq.Host = host
 		}
 		stripHopHeaders(outReq.Header)
-		injected := p.secrets.InjectRequest(outReq, rule.Secrets)
+		injected := p.secrets.Load().InjectRequest(outReq, rule.Secrets)
 		if p.cfg.ShouldScrubResponses() {
 			outReq.Header.Del("Accept-Encoding")
 		}
@@ -451,7 +455,7 @@ func (p *Proxy) handleMITM(w http.ResponseWriter, r *http.Request, host string, 
 
 		var scrubbed bool
 		if p.cfg.ShouldScrubResponses() {
-			scrubbed, err = p.secrets.ScrubResponse(resp)
+			scrubbed, err = p.secrets.Load().ScrubResponse(resp)
 			if err != nil {
 				_ = resp.Body.Close()
 				_ = writeSimpleResponse(tlsConn, req, http.StatusBadGateway, "failed reading upstream response\n")
