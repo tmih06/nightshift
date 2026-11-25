@@ -63,6 +63,10 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
   `internal/cluster` reads the fleet from the cluster, `internal/session`
   owns the Herdr terminal sessions, and `internal/manifest` pins the cluster
   manifests' resource budget in its tests.
+- `internal/accounts` is the Accounts tab's data layer (CLIProxyAPI client,
+  port-forwards, the active-account ConfigMap, proxy usage) and
+  `internal/accountsview` the tab itself; both log through charm's log, never
+  the standard one, which would draw over the TUI.
 - `internal/ghdash` is a vendored copy of
   [gh-dash](https://github.com/dlvhdr/gh-dash) (MIT), the GitHub tab.
   Its Go packages are copied with the import paths rewritten; see
@@ -93,7 +97,7 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
 ## The dashboard
 
 - A view switcher runs across the top in gh-dash's footer style: Pods,
-  with its count, and GitHub, the active one bold with a green icon,
+  with its count, GitHub, and Accounts with its count, the active one bold with a green icon,
   and the NIGHTSHIFT logo in the corner. `tab` and `shift+tab` cycle the
   tabs, and a click on a tab opens it. While a tab holds the keyboard for text
   (the embedded shell, or a gh-dash search bar, prompt, or comment box) `tab`

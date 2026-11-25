@@ -10,6 +10,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/tmih06/nightshift/internal/accounts"
+	"github.com/tmih06/nightshift/internal/accountsview"
 	"github.com/tmih06/nightshift/internal/dashboard"
 	"github.com/tmih06/nightshift/internal/ghdash/config"
 	ghtui "github.com/tmih06/nightshift/internal/ghdash/tui"
@@ -26,6 +28,7 @@ type Tab int
 const (
 	TabSandboxes Tab = iota
 	TabGitHub
+	TabAccounts
 )
 
 type ghScreen int
@@ -39,6 +42,7 @@ const (
 var tabLabels = [...]string{
 	TabSandboxes: "Pods",
 	TabGitHub:    "GitHub",
+	TabAccounts:  "Accounts",
 }
 
 // GitHub is the model behind the GitHub tab: gh-dash's root.
@@ -58,6 +62,11 @@ type Model struct {
 	active Tab
 
 	sandboxes dashboard.Model
+
+	// accounts is the Accounts tab; accountsSvc reaches the cluster for it and
+	// is closed on exit.
+	accounts    accountsview.Model
+	accountsSvc accounts.Service
 
 	// gh is nil when gh-dash could not start; ghErr then says why.
 	gh    GitHub
@@ -99,12 +108,19 @@ type Model struct {
 // New builds the root model over gh-dash's theme. gh is nil when ghErr says
 // why the GitHub tab cannot run.
 func New(theme ghtheme.Theme, gh GitHub, ghErr error) Model {
+	return NewWithAccounts(theme, gh, ghErr, accounts.NewLive())
+}
+
+// NewWithAccounts is New with the Accounts tab backed by svc.
+func NewWithAccounts(theme ghtheme.Theme, gh GitHub, ghErr error, svc accounts.Service) Model {
 	return Model{
-		theme:     theme,
-		styles:    context.InitStyles(theme),
-		sandboxes: dashboard.New(theme),
-		gh:        gh,
-		ghErr:     ghErr,
+		theme:       theme,
+		styles:      context.InitStyles(theme),
+		sandboxes:   dashboard.New(theme),
+		accounts:    accountsview.New(theme, svc),
+		accountsSvc: svc,
+		gh:          gh,
+		ghErr:       ghErr,
 		newPRClient: func() (PullRequests, error) {
 			c, err := zgh.New()
 			if err != nil {
@@ -112,6 +128,14 @@ func New(theme ghtheme.Theme, gh GitHub, ghErr error) Model {
 			}
 			return c, nil
 		},
+	}
+}
+
+// Close releases what the tabs hold open, such as the Accounts tab's
+// port-forwards. Call it after the program ends.
+func (m Model) Close() {
+	if m.accountsSvc != nil {
+		m.accountsSvc.Close()
 	}
 }
 
@@ -136,7 +160,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		return m.broadcast(tea.WindowSizeMsg{Width: msg.Width, Height: max(0, msg.Height-barHeight)})
+		body := tea.WindowSizeMsg{Width: msg.Width, Height: max(0, msg.Height-barHeight)}
+		m.accounts, _ = m.accounts.Update(body)
+		return m.broadcast(body)
 
 	case tea.KeyPressMsg:
 		if m.picker != nil {
@@ -200,11 +226,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 
 	case repoview.FocusSandboxMsg:
-		m.active = TabSandboxes
-		m.sandboxes = m.sandboxes.SetHidden(false)
+		next, switchCmd := m.goTo(TabSandboxes)
+		m = next
 		var cmd tea.Cmd
 		m.sandboxes, cmd = m.sandboxes.FocusPod(msg.Pod)
-		return m, cmd
+		return m, tea.Batch(switchCmd, cmd)
 
 	case ghtui.SandboxPullRequestMsg:
 		return m.openPicker(msg)
@@ -255,6 +281,8 @@ func (m Model) capturing() bool {
 	switch m.active {
 	case TabSandboxes:
 		return m.sandboxes.Capturing()
+	case TabAccounts:
+		return m.accounts.Capturing()
 	case TabGitHub:
 		switch m.ghScreen {
 		case ghScreenPR:
@@ -268,10 +296,19 @@ func (m Model) capturing() bool {
 	return false
 }
 
-func (m Model) switchTo(tab Tab) (tea.Model, tea.Cmd) {
+// goTo makes tab the active one. The Accounts tab polls only while it is shown,
+// so leaving and entering it start and stop that.
+func (m Model) goTo(tab Tab) (Model, tea.Cmd) {
 	m.active = tab
 	m.sandboxes = m.sandboxes.SetHidden(tab != TabSandboxes)
-	return m, nil
+	var cmd tea.Cmd
+	m.accounts, cmd = m.accounts.SetHidden(tab != TabAccounts)
+	return m, cmd
+}
+
+func (m Model) switchTo(tab Tab) (tea.Model, tea.Cmd) {
+	next, cmd := m.goTo(tab)
+	return next, cmd
 }
 
 func (m Model) toActive(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -279,6 +316,8 @@ func (m Model) toActive(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.active {
 	case TabSandboxes:
 		m.sandboxes, cmd = m.sandboxes.Update(msg)
+	case TabAccounts:
+		m.accounts, cmd = m.accounts.Update(msg)
 	case TabGitHub:
 		switch m.ghScreen {
 		case ghScreenPR:
@@ -299,6 +338,11 @@ func (m Model) toActive(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) broadcast(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if accountsview.Owns(msg) {
+		var cmd tea.Cmd
+		m.accounts, cmd = m.accounts.Update(msg)
+		return m, cmd
+	}
 	var sandboxCmd, ghCmd tea.Cmd
 	m.sandboxes, sandboxCmd = m.sandboxes.Update(msg)
 	if m.repos != nil {
@@ -357,6 +401,9 @@ func (m Model) body() tea.View {
 	h := max(0, m.height-barHeight)
 	if m.active == TabSandboxes {
 		return tea.NewView(m.sandboxes.View())
+	}
+	if m.active == TabAccounts {
+		return tea.NewView(m.accounts.View())
 	}
 	switch m.ghScreen {
 	case ghScreenPR:

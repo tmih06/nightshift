@@ -10,9 +10,9 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/atotto/clipboard"
 
+	"github.com/tmih06/nightshift/internal/dialog"
 	ghctx "github.com/tmih06/nightshift/internal/ghdash/tui/context"
 	ghmd "github.com/tmih06/nightshift/internal/ghdash/tui/markdown"
 	ghtheme "github.com/tmih06/nightshift/internal/ghdash/tui/theme"
@@ -388,30 +388,7 @@ func New(th ghtheme.Theme, styles ghctx.Styles, opts Options) *Model {
 }
 
 func newStyledInput(th ghtheme.Theme, prompt, placeholder string, charLimit int) textinput.Model {
-	ti := textinput.New()
-	ti.SetVirtualCursor(true)
-	ti.Prompt = prompt
-	ti.Placeholder = placeholder
-	ti.CharLimit = charLimit
-	base := lipgloss.NewStyle()
-	ti.SetStyles(textinput.Styles{
-		Focused: textinput.StyleState{
-			Prompt:      base.Foreground(th.SuccessText).Bold(true),
-			Text:        base.Foreground(th.PrimaryText),
-			Placeholder: base.Foreground(th.FaintText),
-		},
-		Blurred: textinput.StyleState{
-			Prompt:      base.Foreground(th.FaintText),
-			Text:        base.Foreground(th.SecondaryText),
-			Placeholder: base.Foreground(th.FaintText),
-		},
-		Cursor: textinput.CursorStyle{
-			Color: th.PrimaryText,
-			Shape: tea.CursorBar,
-			Blink: false,
-		},
-	})
-	return ti
+	return dialog.TextInput(th, prompt, placeholder, charLimit)
 }
 
 // Init returns no initial command so repo loading happens lazily via EnsureLoaded.

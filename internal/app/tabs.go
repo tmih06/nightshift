@@ -22,22 +22,33 @@ const (
 var tabIcons = [...]string{
 	TabSandboxes: "\uf1b2", // fa-cube
 	TabGitHub:    "\uf09b", // fa-github: gh-dash covers PRs, issues, and notifications
+	TabAccounts:  "\uf007", // fa-user: the coding-agent accounts
 }
 
 type span struct{ from, to int }
 
 func truncate(s string, width int) string { return ansi.Truncate(s, width, "") }
 
-func tabText(i int, count int) string {
+// counts are the numbers shown beside the tabs that have one.
+type counts struct{ sandboxes, accounts int }
+
+func tabText(i int, c counts) string {
 	text := tabIcons[i] + " " + tabLabels[i]
-	if i == int(TabSandboxes) && count > 0 {
-		text += " (" + strconv.Itoa(count) + ")"
+	switch {
+	case i == int(TabSandboxes) && c.sandboxes > 0:
+		text += " (" + strconv.Itoa(c.sandboxes) + ")"
+	case i == int(TabAccounts) && c.accounts > 0:
+		text += " (" + strconv.Itoa(c.accounts) + ")"
 	}
 	return text
 }
 
+func (m Model) counts() counts {
+	return counts{sandboxes: m.sandboxes.Count(), accounts: m.accounts.Count()}
+}
+
 // tabSpans gives each tab's columns, left to right.
-func tabSpans(count int) []span {
+func tabSpans(count counts) []span {
 	spans := make([]span, 0, len(tabLabels))
 	x := 1
 	for i := range tabLabels {
@@ -49,7 +60,7 @@ func tabSpans(count int) []span {
 }
 
 func (m Model) tabAt(x int) (Tab, bool) {
-	for i, s := range tabSpans(m.sandboxes.Count()) {
+	for i, s := range tabSpans(m.counts()) {
 		if x >= s.from && x < s.to && s.to <= m.width {
 			return Tab(i), true
 		}
@@ -66,7 +77,7 @@ func (m Model) renderBar() string {
 	var b strings.Builder
 	b.WriteString(s.ViewSwitcher.ViewsSeparator.Render(" "))
 	used := 1
-	count := m.sandboxes.Count()
+	count := m.counts()
 	for i := range tabLabels {
 		if i > 0 {
 			b.WriteString(s.ViewSwitcher.ViewsSeparator.Render(tabSeparator))

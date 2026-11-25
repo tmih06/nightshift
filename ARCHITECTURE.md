@@ -163,6 +163,23 @@ credential secrets and the warm pool sizes
 (`TestCredsRefresherHasLeastPrivilege`), and CLIProxyAPI's network policy
 admits only the refresher.
 
+The **Accounts tab** (`internal/accountsview`, over `internal/accounts`) is how
+people drive all of this from the TUI. It reaches CLIProxyAPI's management API
+through a `kubectl port-forward` that it owns and restarts, and the egress
+proxy's admin port through another, so it needs nothing but the kubeconfig
+Nightshift already uses. It lists every signed-in account per agent, runs the
+sign-in (the link, then the pasted callback address), disables, removes, and
+refreshes accounts, and publishes on demand. Several accounts per agent are
+supported by choice, not by splitting traffic: the account picked with enter is
+recorded in the `nightshift-accounts` ConfigMap, `creds-publish.sh` publishes
+that one (or the first enabled one if it is gone), and only the sandboxes
+started afterwards get it. Usage comes from the proxy: it tags every request
+that carried a token with the account label published beside it
+(`LABEL_<secret>`), counts them in ten-minute windows, and serves the counts
+at `/usage` on its admin port, so a switch of account splits the history
+correctly. The counts live in the proxy's memory and start over when it
+restarts.
+
 One login can serve several clusters: `PUBLISH_CONTEXTS` lists the contexts to
 publish into (`-` is the cluster the refresher runs in), and
 `REMOTE_KUBECONFIG` points at a mounted kubeconfig for the others. Every

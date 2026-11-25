@@ -73,29 +73,7 @@ func (m Model) preparePicker(repo string, number int, url string) ([]cluster.Poo
 }
 
 func (m Model) newBranchInput(defaultBranch string) textinput.Model {
-	ti := textinput.New()
-	ti.SetVirtualCursor(true)
-	ti.Prompt = "▸ "
-	ti.Placeholder = defaultBranch
-	ti.CharLimit = 200
-	base := lipgloss.NewStyle()
-	ti.SetStyles(textinput.Styles{
-		Focused: textinput.StyleState{
-			Prompt:      base.Foreground(m.theme.SuccessText).Bold(true),
-			Text:        base.Foreground(m.theme.PrimaryText),
-			Placeholder: base.Foreground(m.theme.FaintText),
-		},
-		Blurred: textinput.StyleState{
-			Prompt:      base.Foreground(m.theme.FaintText),
-			Text:        base.Foreground(m.theme.SecondaryText),
-			Placeholder: base.Foreground(m.theme.FaintText),
-		},
-		Cursor: textinput.CursorStyle{
-			Color: m.theme.PrimaryText,
-			Shape: tea.CursorBar,
-			Blink: false,
-		},
-	})
+	ti := dialog.TextInput(m.theme, "▸ ", defaultBranch, 200)
 	ti.SetValue(defaultBranch)
 	ti.CursorEnd()
 	ti.Focus()
@@ -331,8 +309,8 @@ func (m Model) startCheckout(poolIdx, modelIdx int) (Model, tea.Cmd) {
 		modelID = h.Models[modelIdx].ID
 	}
 	m.picker = nil
-	m.active = TabSandboxes
-	m.sandboxes = m.sandboxes.SetHidden(false)
+	switched, switchCmd := m.goTo(TabSandboxes)
+	m = switched
 	var cmd tea.Cmd
 	m.sandboxes, cmd = m.sandboxes.CheckOut(p.pools[poolIdx].Name, dashboard.Checkout{
 		Repo:    p.repo,
@@ -342,7 +320,7 @@ func (m Model) startCheckout(poolIdx, modelIdx int) (Model, tea.Cmd) {
 		Harness: h.Command,
 		Model:   modelID,
 	})
-	return m, cmd
+	return m, tea.Batch(switchCmd, cmd)
 }
 
 // validateBranchName checks git check-ref-format rules for a branch name and

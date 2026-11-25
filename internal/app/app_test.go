@@ -1,13 +1,16 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/tmih06/nightshift/internal/accounts"
 	"github.com/tmih06/nightshift/internal/ghdash/config"
 	ghtheme "github.com/tmih06/nightshift/internal/ghdash/tui/theme"
 )
@@ -57,10 +60,35 @@ func sized(m Model, w, h int) Model {
 	return next.(Model)
 }
 
+// fakeAccounts is the Accounts tab's backend; it counts reads of the cluster.
+type fakeAccounts struct{ fetches int }
+
+func (f *fakeAccounts) Fetch(context.Context) (accounts.Snapshot, error) {
+	f.fetches++
+	return accounts.Snapshot{Accounts: []accounts.Account{{Name: "claude-a.json", Provider: "claude", Email: "a@example.com", Active: true}}}, nil
+}
+func (*fakeAccounts) StartLogin(context.Context, string) (accounts.Login, error) {
+	return accounts.Login{}, nil
+}
+func (*fakeAccounts) CompleteLogin(context.Context, accounts.Login, string) error { return nil }
+func (*fakeAccounts) CancelLogin(context.Context, accounts.Login) error           { return nil }
+func (*fakeAccounts) SetDisabled(context.Context, string, bool) error             { return nil }
+func (*fakeAccounts) Remove(context.Context, string) error                        { return nil }
+func (*fakeAccounts) Refresh(context.Context, string) error                       { return nil }
+func (*fakeAccounts) SetActive(context.Context, string, string) error             { return nil }
+func (*fakeAccounts) PublishNow(context.Context) (string, error)                  { return "", nil }
+func (*fakeAccounts) Close()                                                      {}
+
 func newModel(t *testing.T) (Model, *fakePRs) {
 	t.Helper()
-	f := &fakePRs{}
-	return sized(New(*ghtheme.DefaultTheme, f, nil), 120, 40), f
+	m, f, _ := newModelWithAccounts(t)
+	return m, f
+}
+
+func newModelWithAccounts(t *testing.T) (Model, *fakePRs, *fakeAccounts) {
+	t.Helper()
+	f, acc := &fakePRs{}, &fakeAccounts{}
+	return sized(NewWithAccounts(*ghtheme.DefaultTheme, f, nil, acc), 120, 40), f, acc
 }
 
 func key(s string) tea.KeyPressMsg {
@@ -101,7 +129,9 @@ func TestTabCyclesTheTabsBothWays(t *testing.T) {
 		want Tab
 	}{
 		{"tab", TabGitHub},
+		{"tab", TabAccounts},
 		{"tab", TabSandboxes},
+		{"shift+tab", TabAccounts},
 		{"shift+tab", TabGitHub},
 		{"shift+tab", TabSandboxes},
 	}
@@ -119,7 +149,7 @@ func TestTheBarIsGhDashsViewSwitcher(t *testing.T) {
 	if len(rows) != 40 {
 		t.Fatalf("frame is %d rows, want 40", len(rows))
 	}
-	for _, want := range []string{"Pods", "GitHub", "NIGHTSHIFT", "│"} {
+	for _, want := range []string{"Pods", "GitHub", "Accounts", "NIGHTSHIFT", "│"} {
 		if !strings.Contains(rows[0], want) {
 			t.Errorf("bar %q is missing %q", rows[0], want)
 		}
@@ -136,7 +166,7 @@ func TestTheBarIsGhDashsViewSwitcher(t *testing.T) {
 
 func TestClickingATabSwitchesToIt(t *testing.T) {
 	m, _ := newModel(t)
-	s := tabSpans(m.sandboxes.Count())[TabGitHub]
+	s := tabSpans(m.counts())[TabGitHub]
 	next, _ := m.Update(tea.MouseClickMsg{X: s.from + 2, Y: 0, Button: tea.MouseLeft})
 	if got := next.(Model).active; got != TabGitHub {
 		t.Errorf("click on the GitHub tab landed on %d", got)
@@ -200,5 +230,99 @@ func TestWithoutGhDashThePullRequestTabSaysWhy(t *testing.T) {
 	}
 	if _, cmd := m.Update(key("q")); cmd == nil {
 		t.Error("q on the unavailable tab does not quit")
+	}
+}
+
+// asModel narrows what Update returns back to the root model.
+func asModel(t *testing.T, m tea.Model) Model {
+	t.Helper()
+	root, ok := m.(Model)
+	if !ok {
+		t.Fatalf("Update returned %T, want the root Model", m)
+	}
+	return root
+}
+
+// run executes cmd and feeds what it returns back into m, as the program
+// would. A command that blocks, like a poll timer, is dropped after a moment.
+func run(t *testing.T, m Model, cmd tea.Cmd) Model {
+	t.Helper()
+	if cmd == nil {
+		return m
+	}
+	done := make(chan tea.Msg, 1)
+	go func() { done <- cmd() }()
+	var msg tea.Msg
+	select {
+	case msg = <-done:
+	case <-time.After(80 * time.Millisecond):
+		return m
+	}
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			m = run(t, m, c)
+		}
+		return m
+	}
+	if msg == nil {
+		return m
+	}
+	next, c := m.Update(msg)
+	return run(t, asModel(t, next), c)
+}
+
+func TestTheAccountsTabReadsTheClusterOnlyOnceOpened(t *testing.T) {
+	m, _, acc := newModelWithAccounts(t)
+	if acc.fetches != 0 {
+		t.Fatalf("fetched %d times before the tab was opened", acc.fetches)
+	}
+	next, cmd := m.Update(key("tab"))
+	m = run(t, asModel(t, next), cmd) // GitHub
+	if acc.fetches != 0 {
+		t.Fatalf("fetched %d times on the way past", acc.fetches)
+	}
+	next, cmd = m.Update(key("tab"))
+	m = run(t, asModel(t, next), cmd) // Accounts
+	if acc.fetches != 1 {
+		t.Errorf("opening the Accounts tab fetched %d times, want 1", acc.fetches)
+	}
+	if body := strings.Join(frame(m)[barHeight:], "\n"); !strings.Contains(body, "a@example.com") {
+		t.Errorf("the Accounts tab does not show the account:\n%s", body)
+	}
+	if !strings.Contains(frame(m)[0], "Accounts (1)") {
+		t.Errorf("the tab bar must count the accounts: %q", frame(m)[0])
+	}
+}
+
+func TestLeavingTheAccountsTabStopsItsPolling(t *testing.T) {
+	m, _, acc := newModelWithAccounts(t)
+	m = run(t, m, func() tea.Msg { return nil })
+	next, cmd := m.Update(key("shift+tab")) // Accounts
+	m = run(t, asModel(t, next), cmd)
+	before := acc.fetches
+	next, cmd = m.Update(key("tab")) // Pods
+	m = run(t, asModel(t, next), cmd)
+	if m.active != TabSandboxes {
+		t.Fatalf("active = %d", m.active)
+	}
+	if got := m.accounts.Capturing(); got {
+		t.Error("a hidden tab must not hold the keyboard")
+	}
+	if acc.fetches != before {
+		t.Errorf("leaving the tab read the cluster %d more times", acc.fetches-before)
+	}
+}
+
+func TestTabBelongsToTheAccountsDialogWhileItIsOpen(t *testing.T) {
+	m, _, _ := newModelWithAccounts(t)
+	next, cmd := m.Update(key("shift+tab")) // Accounts
+	m = run(t, asModel(t, next), cmd)
+	m = press(m, "a") // the sign-in dialog opens
+	if !m.capturing() {
+		t.Fatal("the dialog must hold the keyboard")
+	}
+	m = press(m, "tab")
+	if m.active != TabAccounts {
+		t.Errorf("tab left the Accounts tab while its dialog was open (active = %d)", m.active)
 	}
 }

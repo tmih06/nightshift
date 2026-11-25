@@ -98,7 +98,10 @@ func run(openPR string, startRepos bool) error {
 	} else if startRepos {
 		root = root.StartOnRepos()
 	}
-	_, err = tea.NewProgram(root).Run()
+	final, err := tea.NewProgram(root).Run()
+	if m, ok := final.(app.Model); ok {
+		m.Close()
+	}
 	return err
 }
 

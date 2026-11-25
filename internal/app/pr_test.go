@@ -136,10 +136,10 @@ func TestKeysReachThePullRequestAndTabStillSwitches(t *testing.T) {
 	}
 
 	m = press(m, "tab")
-	if m.active != TabSandboxes {
-		t.Errorf("tab inside a pull request landed on %d, want the sandboxes", m.active)
+	if m.active != TabAccounts {
+		t.Errorf("tab inside a pull request landed on %d, want the next tab", m.active)
 	}
-	m = press(m, "tab")
+	m = press(m, "tab", "tab")
 	if m.ghScreen != ghScreenPR || m.active != TabGitHub {
 		t.Error("coming back did not find the pull request still open")
 	}

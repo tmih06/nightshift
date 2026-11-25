@@ -171,12 +171,12 @@ func TestOpenRepoViewRenders3PanesAndPreservesStateAcrossTabs(t *testing.T) {
 		t.Error("gh-dash still rendered under Repo view")
 	}
 
-	// Tab switches to Sandboxes and back while keeping Repo view open.
+	// Tab goes round the other tabs and back while keeping Repo view open.
 	m = press(m, "tab")
-	if m.active != TabSandboxes {
-		t.Fatalf("active = %v, want TabSandboxes", m.active)
+	if m.active != TabAccounts {
+		t.Fatalf("active = %v, want TabAccounts", m.active)
 	}
-	m = press(m, "tab")
+	m = press(m, "tab", "tab")
 	if m.active != TabGitHub || m.ghScreen != ghScreenRepos {
 		t.Fatalf("active=%v ghScreen=%v, want TabGitHub + ghScreenRepos", m.active, m.ghScreen)
 	}
