@@ -56,17 +56,36 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
   feeds, and publishes to GHCR. Check
   registry access before applying `k8s/warmpool.yaml`; see
   `images/agent/README.md`.
-- `cmd/nightshift` is the entrypoint of the Go program, a Bubble Tea v2
-  TUI; `cmd/egress-proxy` is the standalone outbound egress + secret-injection
-  proxy backed by `internal/egress`. `internal/app` is the root model: it draws the tab bar and routes
-  input to the active tab. `internal/dashboard` is the sandbox tab,
-  `internal/cluster` reads the fleet from the cluster, `internal/session`
-  owns the Herdr terminal sessions, and `internal/manifest` pins the cluster
-  manifests' resource budget in its tests.
-- `internal/accounts` is the Accounts tab's data layer (CLIProxyAPI client,
-  port-forwards, the active-account ConfigMap, proxy usage) and
-  `internal/accountsview` the tab itself; both log through charm's log, never
-  the standard one, which would draw over the TUI.
+- Nightshift is two programs with one contract between them
+  (`docs/api.md`). **nightshift-services** (`cmd/nightshiftd`, under
+  `internal/services`) owns everything that touches the cluster and serves
+  the API. **nightshift-tui** (`cmd/nightshift`, under `internal/tui`) is one
+  frontend: a Bubble Tea v2 TUI that reaches the cluster only through that API.
+  `api/openapi.yaml` is the contract, `api/v1` its Go types, and `api/client`
+  the Go client; they import nothing but the standard library. Anyone can write
+  another frontend against them. `internal/architecture_test.go` keeps the two
+  halves apart: a frontend may not import the services, the services may not
+  import a frontend, and the HTTP layer may not import the cluster.
+- The services: `internal/services/cluster` reads and changes the fleet with
+  `kubectl`, `session` owns the Herdr terminal sessions, `accounts` is the
+  coding-agent accounts' data layer (CLIProxyAPI client, port-forwards, the
+  active-account ConfigMap, proxy usage), `checkout` is the pipeline that puts
+  a pull request, issue, or branch on its own volume and a sandbox on it,
+  `server` is the HTTP layer that implements the contract over interfaces,
+  `live` answers it from the cluster, `daemon` runs it, and `egress` is the
+  library behind `cmd/egress-proxy`, the standalone outbound egress +
+  secret-injection proxy. `manifest` pins the cluster manifests' resource
+  budget in its tests. The services log through charm's log.
+- The frontend: `internal/tui/app` is the root model: it draws the tab bar and
+  routes input to the active tab. `dashboard` is the Pods tab, `accountsview`
+  the Accounts tab, `repoview` the Repo view, `dialog` the shared widgets, and
+  `fleet` what the TUI makes of the contract's types. With no `-api`,
+  `cmd/nightshift` runs the services inside itself on a private loopback port;
+  with `-api` (or `NIGHTSHIFT_API` and `NIGHTSHIFT_TOKEN`) it talks to a
+  server, which may run in the cluster (`k8s/nightshiftd.yaml`,
+  `k8s/nightshiftd-setup.sh`). `NIGHTSHIFT_CONTEXT` picks the cluster,
+  `NIGHTSHIFT_CONTEXT=-` means the one the services run in. The TUI logs
+  through charm's log, never the standard one, which would draw over it.
 - `internal/ghdash` is a vendored copy of
   [gh-dash](https://github.com/dlvhdr/gh-dash) (MIT), the GitHub tab.
   Its Go packages are copied with the import paths rewritten; see
@@ -77,7 +96,7 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
   [zen-octo](https://github.com/praxis-labs-io/zen-octo) (MIT), vendored the
   same way and repainted in gh-dash's look; see `internal/zenocto/README.md`
   for the commit, what was left out, and the local changes.
-- `internal/repoview` is Nightshift's 3-pane repository workspace for the
+- `internal/tui/repoview` is Nightshift's 3-pane repository workspace for the
   GitHub tab (repository/scope tree, grouped Branches/PRs/Issues/Actions/Files
   list, and detail preview pane with active sandbox badges).
 - `docs/` holds research notes. `docs/software-factory.md` traces the term
@@ -103,7 +122,7 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
   (the embedded shell, or a gh-dash search bar, prompt, or comment box) `tab`
   belongs to that tab instead.
 - The GitHub tab is gh-dash as it ships: pull requests, issues, and
-  notifications, plus Nightshift's 3-pane Repo view (`internal/repoview`),
+  notifications, plus Nightshift's 3-pane Repo view (`internal/tui/repoview`),
   switched with its own view keys (`s`) or by clicking the footer view
   switcher. The Repo view shows a repository/scope tree, a grouped list
   (Branches, PRs, Issues, Actions, Files), and a detail preview pane with
@@ -203,7 +222,8 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
 - The sidebar takes half the width and resizes by dragging its rule. Under
   90 columns it moves under the table, as gh-dash's bottom preview does.
 - Usage refreshes every 2 seconds. A claimed sandbox's numbers come from its
-  own cgroup counters, read with one `kubectl exec` per refresh: memory from
+  own cgroup counters, which the services read with one `kubectl exec` per
+  refresh (the TUI asks for `include=live`): memory from
   the first read, CPU as the rate between two. Warm sandboxes use
   metrics-server, which the cluster samples every 15 seconds and
   averages over 15 to 30. Each running pod's coding CLI is asked its
@@ -223,9 +243,10 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
   sub-terminals spawned inside the pod via `hc run`) with `+` to open a new
   window and `×` to close the active one. Clicking a tab switches windows and
   focuses the shell; middle-clicking a tab closes it; `C-b` prefix chords
-  (`C-b c` new, `C-b n`/`p`/`h`/`l`/`1-9` switch, `C-b x` close, `C-b F`
-  fullscreen, `C-b C-b` literal, `C-b q`/`d` leave) provide full keyboard
-  control. Herdr never takes over the terminal unless `F` or `C-b F` is used.
+  (`C-b c` new, `C-b n`/`p`/`h`/`l`/`1-9` switch, `C-b x` close, `C-b f`
+  zoom, `C-b C-b` literal, `C-b q`/`d` leave) provide full keyboard
+  control. Zoom gives the shell the whole window, drawn from the same screen
+  API, so it works against a server on another machine.
 - Focus is in the table during navigation and in the sidebar while bash or
   the configs have it; the sidebar's heading turns green and says how to
   leave, and its rule brightens.
@@ -237,7 +258,7 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
   until `enter` attaches. `enter` or a click on a warm sandbox's sidebar
   focuses its configs, and `esc` leaves them. Warm pool sandboxes refuse
   bash. `x` twice destroys a claim; on a pull request's sandbox it asks
-  whether the volume goes too. `F` fullscreens.
+  whether the volume goes too. `F` zooms the shell to the whole window.
 - Status notifications expire after 5 seconds; errors and armed
   confirmations stay.
 - Herdr (`hc`) runs inside each claimed sandbox, not on the host. See

@@ -76,7 +76,7 @@ func Start(cfg Config) (*Daemon, error) {
 	backend := live.New(live.Options{Accounts: cfg.accounts()})
 	s, err := newServer(server.Config{
 		Token: token, Hosts: cfg.Hosts, AnyHost: cfg.AnyHost, Version: cfg.Version,
-		Cluster: v1.ClusterInfo{Context: cluster.KubeContext(), Namespace: cluster.Namespace},
+		Cluster: v1.ClusterInfo{Context: cluster.ContextLabel(), Namespace: cluster.Namespace},
 		Fleet:   backend.Fleet, Claims: backend.Claims, Checkouts: backend.Checkouts, Volumes: backend.Volumes,
 		Terminals: backend.Terminals, Accounts: accountsOf(backend),
 	})
@@ -108,7 +108,7 @@ func Start(cfg Config) (*Daemon, error) {
 		}
 		d.done <- err
 	}()
-	log.Info("nightshiftd is serving", "url", d.url, "cluster", cluster.KubeContext())
+	log.Info("nightshiftd is serving", "url", d.url, "cluster", cluster.ContextLabel())
 	return d, nil
 }
 

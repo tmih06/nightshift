@@ -68,14 +68,25 @@ replica per cluster; a restart loses nothing but the progress display.
   shell in a sandbox, so it is never open. The server reads the token from
   `--token-file` (or `NIGHTSHIFT_TOKEN`), and compares in constant time.
 - **Network.** The server refuses a non-loopback `--listen` unless it also has
-  `--tls-cert` and `--tls-key`, or is told it sits behind a TLS terminator
-  (`--behind-tls-proxy`). It checks the `Host` header against the addresses it
-  was given, which defeats DNS rebinding from a web page. It sends no CORS
-  headers; a browser frontend needs a server of its own, or a gateway that adds
-  them.
-- **Exposure in-cluster.** The Service is ClusterIP. Reach it with
-  `kubectl port-forward`, or put the ingress of your provider in front of it.
-  Nightshift ships no provider-specific load balancer, on purpose.
+  `--tls-cert` and `--tls-key`, or is told with `--plain-http` that something else
+  protects the traffic: a ClusterIP Service reached through `kubectl
+  port-forward`, or an ingress that terminates TLS. It checks the `Host` header
+  against loopback and the names given with `--allow-host`, which defeats DNS
+  rebinding from a web page; behind a gateway with names of its own,
+  `--any-host` turns that check off and the token still guards everything. It
+  sends no CORS headers; a browser frontend needs a server of its own, or a
+  gateway that adds them.
+- **In the cluster.** `k8s/nightshiftd.yaml` runs the services as a Deployment
+  with a service account of the least privilege they need (pinned by
+  `TestTheServicesHaveLeastPrivilege`), `NIGHTSHIFT_CONTEXT=-` so `kubectl` uses
+  that account instead of a kubeconfig, and `--cpa-url` and `--proxy-url` set to
+  the Services' addresses. `k8s/nightshiftd-setup.sh` installs it on any
+  provider: it builds and loads the image on kind and pulls it anywhere else
+  (`NIGHTSHIFTD_IMAGE` and `NIGHTSHIFTD_BUILD=1` point it at your registry),
+  makes the token, and binds log access only in namespaces the cluster has.
+  The API Service is a ClusterIP. Reach it with `kubectl port-forward`, or put
+  the ingress of your provider in front of it. Nightshift ships no
+  provider-specific load balancer, on purpose.
 
 ## Rules of the contract
 
@@ -102,14 +113,21 @@ replica per cluster; a restart loses nothing but the progress display.
 
 ## What the API offers
 
-| Area | Endpoints | Replaces, in the old TUI |
+| Area | Endpoints | Implemented by |
 | --- | --- | --- |
-| Meta | `GET /v1`, `/v1/healthz`, `/v1/openapi.yaml` | Nothing: new |
-| Fleet | `GET /v1/fleet`, `/v1/fleet/watch`, `/v1/pods/{ns}/{name}/logs` | `cluster.Fetch`, cgroup sampling, agent versions, `PodLogs` |
-| Claims | `POST /v1/claims`, `GET` and `DELETE /v1/claims/{name}` | `cluster.Claim`, `WaitForClaim`, `DeleteClaim` |
-| Checkouts | `POST /v1/checkouts`, `GET /v1/checkouts/{id}`, `/events`, `GET /v1/volumes`, `DELETE /v1/volumes/{name}`, `DELETE /v1/sandboxes/{name}` | The pipeline in `internal/dashboard/checkout.go` |
-| Terminals | `/v1/sandboxes/{name}/terminals`, `.../{address}/screen`, `.../input` | `internal/session` |
-| Accounts | `/v1/accounts` and its sub-resources | `internal/accounts` |
+| Meta | `GET /v1`, `/v1/healthz`, `/v1/openapi.yaml` | `internal/services/server` |
+| Fleet | `GET /v1/fleet`, `/v1/fleet/watch`, `/v1/pods/{ns}/{name}/logs` | `internal/services/cluster`, through `live` |
+| Claims | `POST /v1/claims`, `GET` and `DELETE /v1/claims/{name}` | `internal/services/cluster` |
+| Checkouts | `POST /v1/checkouts`, `GET /v1/checkouts/{id}`, `/events`, `GET /v1/volumes`, `DELETE /v1/volumes/{name}`, `DELETE /v1/sandboxes/{name}` | `internal/services/checkout` |
+| Terminals | `/v1/sandboxes/{name}/terminals`, `.../{address}/screen`, `.../input` | `internal/services/session` |
+| Accounts | `/v1/accounts` and its sub-resources | `internal/services/accounts` |
+
+A fleet read takes `include`: `configs` for manifests, `live` for CPU and memory
+read from each pod's cgroup, `versions` for each agent's version, and
+`terminals` for each claimed sandbox's terminals, so a frontend gets what a
+screen shows in one call. Each pool says which agent it runs and which models it
+takes, and volume names (`api/v1/volumes.go`) are part of the contract, so a
+frontend can show a volume before it exists and recognise it afterwards.
 
 The GitHub side of the TUI, pull requests, issues, and notifications, is not
 part of the services. It talks to GitHub with the person's own `gh` login, as
@@ -122,8 +140,10 @@ A terminal belongs to its sandbox. It keeps running when a frontend goes away,
 and another frontend can pick it up. The API gives a frontend what it needs to
 draw one without knowing how it is hosted:
 
-- `GET .../screen?cols=&rows=&wait=` returns the rendered screen, as lines with
-  ANSI styling, waiting up to `wait` ms for a change.
+- `GET .../screen?cols=&rows=&wait=&viewer=` returns the rendered screen, as lines
+  with ANSI styling, waiting up to `wait` ms for a change. Each `viewer` id has its
+  own view, so two frontends can watch one terminal, each at its own size,
+  without taking each other's changes.
 - `POST .../input` presses keys, in order.
 - `POST .../terminals` and `DELETE` open and stop terminals.
 

@@ -83,7 +83,10 @@ func imports(t *testing.T, root, dir string) (code, tests map[string][]string) {
 		if perr != nil {
 			return perr
 		}
-		rel, _ := filepath.Rel(root, path)
+		rel, rerr := filepath.Rel(root, path)
+		if rerr != nil {
+			return rerr
+		}
 		into := code
 		if strings.HasSuffix(path, "_test.go") {
 			into = tests
@@ -154,7 +157,7 @@ func TestEachLayerOfTheServicesStandsOnTheOnesBelow(t *testing.T) {
 				continue
 			}
 			for _, imp := range imps {
-				if imp == pkg || under(imp, pkg) || under(imp, "api/v1") || !(under(imp, "internal") || under(imp, "api") || under(imp, "cmd")) {
+				if imp == pkg || under(imp, pkg) || under(imp, "api/v1") || (!under(imp, "internal") && !under(imp, "api") && !under(imp, "cmd")) {
 					continue
 				}
 				if !contains(ok, imp) && !contains(extra[pkg], imp) {

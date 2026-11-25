@@ -13,7 +13,8 @@ import (
 // The arguments go straight to kubectl's argv, never through a shell.
 func command(ctx context.Context, ns string, args []string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "kubectl")
-	cmd.Args = append(cmd.Args, "--context", KubeContext(), "-n", ns)
+	cmd.Args = append(cmd.Args, ContextArgs()...)
+	cmd.Args = append(cmd.Args, "-n", ns)
 	cmd.Args = append(cmd.Args, args...)
 	return cmd
 }

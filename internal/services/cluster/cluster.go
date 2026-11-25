@@ -25,14 +25,39 @@ const (
 	WarmPool   = "pi-pool"
 )
 
+// InCluster is the NIGHTSHIFT_CONTEXT that means "the cluster this process runs
+// in". The services then pass no --context to kubectl, which uses the pod's
+// service account, so they run as a Deployment on any provider with no
+// kubeconfig.
+const InCluster = "-"
+
 // KubeContext is the kubeconfig context every kubectl call targets:
 // NIGHTSHIFT_CONTEXT when set, so Nightshift runs on any Kubernetes
-// provider, and the kind default otherwise.
+// provider, InCluster for the cluster the process runs in, and the kind
+// default otherwise.
 func KubeContext() string {
 	if c := strings.TrimSpace(os.Getenv(ContextEnv)); c != "" {
 		return c
 	}
 	return DefaultKubeContext
+}
+
+// ContextArgs are the kubectl arguments that choose the cluster: --context for
+// a kubeconfig context, and none in-cluster.
+func ContextArgs() []string {
+	if c := KubeContext(); c != InCluster {
+		return []string{"--context", c}
+	}
+	return nil
+}
+
+// ContextLabel is how the cluster is named to people: its context, or
+// "in-cluster".
+func ContextLabel() string {
+	if c := KubeContext(); c != InCluster {
+		return c
+	}
+	return "in-cluster"
 }
 
 type Sandbox struct {
@@ -537,7 +562,8 @@ func Fetch() ([]Sandbox, map[string]Pool, bool, error) {
 }
 
 func runKubectl(stdin []byte, args ...string) ([]byte, error) {
-	full := append([]string{"--context", KubeContext(), "-n", Namespace}, args...)
+	full := append(ContextArgs(), "-n", Namespace)
+	full = append(full, args...)
 	cmd := exec.Command("kubectl", full...)
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)

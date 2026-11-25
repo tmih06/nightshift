@@ -2,7 +2,58 @@
 
 Nightshift combines a Kubernetes sandbox fleet with a terminal dashboard and
 GitHub views. The automated ticket-to-merge workflow is still on the roadmap.
-Nightshift runs in the `nightshift` namespace on `kind-agent-sandbox`.
+Nightshift runs in the `nightshift` namespace of any Kubernetes cluster, on
+`kind-agent-sandbox` by default.
+
+## Two programs
+
+Nightshift is **nightshift-services** and any number of frontends, with one
+contract between them. The services own everything that touches Kubernetes.
+A frontend, such as the terminal UI, draws screens and turns keys into API
+calls; it holds no kubeconfig and runs no `kubectl`. `docs/api.md` has the
+contract's rules, and `api/openapi.yaml` is the contract itself.
+
+```mermaid
+flowchart LR
+  TUI[nightshift TUI] -->|HTTP and JSON| API
+  Other[Another frontend] -->|HTTP and JSON| API
+  subgraph Services[nightshiftd]
+    API[server] --> Live[live backend]
+    Live --> Fleet[cluster]
+    Live --> Terms[session]
+    Live --> Acc[accounts]
+    Live --> Co[checkout]
+  end
+  Fleet --> K8s[(Kubernetes API)]
+  Terms -->|kubectl exec| K8s
+  Acc --> CPA[CLIProxyAPI]
+  Acc --> Proxy[egress proxy]
+```
+
+```text
+api/            the contract: openapi.yaml, v1 (types), client (Go SDK)
+cmd/nightshiftd the services as a daemon
+cmd/nightshift  the terminal UI, which can run the services inside itself
+internal/services/{cluster,session,accounts,checkout,server,live,daemon,egress}
+internal/tui/{app,dashboard,accountsview,repoview,dialog,fleet}
+```
+
+The services run where it suits: on a laptop, against the kubeconfig context in
+`NIGHTSHIFT_CONTEXT`, or as a Deployment in the cluster (`k8s/nightshiftd.yaml`),
+where they act through a service account with `NIGHTSHIFT_CONTEXT=-` and reach
+CLIProxyAPI and the egress proxy by their Service addresses. In the cluster,
+many people on many machines use one address and nobody needs a kubeconfig. The
+manifests assume no provider, the setup script builds and loads an image on kind
+and pulls one anywhere else, and the services' permissions are pinned by
+`TestTheServicesHaveLeastPrivilege`. One server serves one cluster; a frontend
+can talk to several servers. Run one replica per cluster: what a server keeps in
+memory, the progress of running checkouts and its connections into sandboxes, is
+rebuilt from the cluster after a restart.
+
+Two things keep the halves apart. The terminal UI imports only `api/v1` and
+`api/client`, which `internal/architecture_test.go` enforces in both directions,
+and the HTTP layer imports nothing of the cluster, so the contract is the only
+thing they share.
 
 ## Sandbox fleet
 
@@ -101,8 +152,9 @@ scratch. The cluster's `standard` class is local-path, so a volume lives on
 one node's disk and pins its sandboxes to that node.
 
 Inside a claimed pod, Herdr keeps bash alive independently of the dashboard's
-connection. The dashboard reads and interacts with it through `kubectl exec`;
-see `docs/session-manager.md`. Pod deletion or restart ends the session and
+connection. The services read and interact with it through `kubectl exec`, and
+frontends through the terminal endpoints of the API; see
+`docs/session-manager.md`. Pod deletion or restart ends the session and
 its ephemeral workspace. Credentials must be supplied at runtime, or isolated
 outside the sandbox via Nightshift's optional lightweight Go egress proxy
 (`cmd/egress-proxy`, `k8s/egress.yaml`, `k8s/egress-setup.sh`): a single
@@ -156,18 +208,19 @@ Publishing is the same either way. The placeholder copies go into the
 `agent-creds` secret that templates untar into `$HOME` at boot, the real
 access tokens into `egress-secrets`, and a warm sandbox is kept only for
 agents that have a login. The proxy binds those secrets to files on a mounted
-volume and re-reads them every 15 seconds (`internal/egress/reload.go`), so a
+volume and re-reads them every 15 seconds (`internal/services/egress/reload.go`), so a
 refreshed token needs no restart; the kubelet takes up to about two minutes to
 update the volume. The refresher's service account may only edit the two
 credential secrets and the warm pool sizes
 (`TestCredsRefresherHasLeastPrivilege`), and CLIProxyAPI's network policy
 admits only the refresher.
 
-The **Accounts tab** (`internal/accountsview`, over `internal/accounts`) is how
-people drive all of this from the TUI. It reaches CLIProxyAPI's management API
-through a `kubectl port-forward` that it owns and restarts, and the egress
-proxy's admin port through another, so it needs nothing but the kubeconfig
-Nightshift already uses. It lists every signed-in account per agent, runs the
+The **Accounts tab** (`internal/tui/accountsview`, over `internal/services/accounts`
+and the `/v1/accounts` endpoints) is how people drive all of this from the TUI.
+The services reach CLIProxyAPI's management API through a `kubectl port-forward`
+that they own and restart, and the egress proxy's admin port through another;
+in the cluster they use the Services' addresses instead, so on a laptop nothing
+is needed but the kubeconfig Nightshift already uses. It lists every signed-in account per agent, runs the
 sign-in (the link, then the pasted callback address), disables, removes, and
 refreshes accounts, and publishes on demand. Several accounts per agent are
 supported by choice, not by splitting traffic: the account picked with enter is
