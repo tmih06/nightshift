@@ -145,8 +145,33 @@ type Pool struct {
 	// UpdateStrategy is how the pool replaces standbys when its template
 	// changes.
 	UpdateStrategy string `json:"updateStrategy,omitempty"`
+	// Harness is the coding agent the pool's sandboxes run, and the models it
+	// accepts.
+	Harness Harness `json:"harness"`
 	// Configs are the pool and template manifests, only with include=configs.
 	Configs *PoolConfigs `json:"configs,omitempty"`
+}
+
+// Harness is a coding agent installed in a pool's image.
+type Harness struct {
+	// Name is the agent's canonical name, such as claude-code or codex.
+	Name string `json:"name"`
+	// Label is what people call it.
+	Label string `json:"label"`
+	// Command is the program that starts it, empty for a bare shell.
+	Command string `json:"command,omitempty"`
+	// Models are the models it accepts through --model. The entry with an empty
+	// ID is its own default.
+	Models []HarnessModel `json:"models"`
+}
+
+// HarnessModel is one model a harness accepts.
+type HarnessModel struct {
+	// ID is the value for --model; empty means the harness default.
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	// Note is a short hint to show beside the label.
+	Note string `json:"note,omitempty"`
 }
 
 // PoolConfigs are a pool's manifests as YAML.

@@ -22,6 +22,8 @@ func schemaTypes() map[string]reflect.Type {
 		"Fleet":           reflect.TypeFor[v1.Fleet](),
 		"Pod":             reflect.TypeFor[v1.Pod](),
 		"Pool":            reflect.TypeFor[v1.Pool](),
+		"Harness":         reflect.TypeFor[v1.Harness](),
+		"HarnessModel":    reflect.TypeFor[v1.HarnessModel](),
 		"Logs":            reflect.TypeFor[v1.Logs](),
 		"ClaimRequest":    reflect.TypeFor[v1.ClaimRequest](),
 		"Claim":           reflect.TypeFor[v1.Claim](),

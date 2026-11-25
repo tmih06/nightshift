@@ -11,10 +11,17 @@ import (
 // viewer's terminal screen. A nil screen means nothing changed before wait
 // elapsed.
 func WatchScreen(pod, term string, w, h int, resize bool, wait time.Duration) ([]string, error) {
+	return WatchScreenAs(pod, term, "", w, h, resize, wait)
+}
+
+// WatchScreenAs is WatchScreen for one viewer among several. Each who sees its
+// own changes, so frontends on different machines can watch the same
+// terminal, each at its own size.
+func WatchScreenAs(pod, term, who string, w, h int, resize bool, wait time.Duration) ([]string, error) {
 	if w < 1 || h < 1 || w > 65535 || h > 65535 {
 		return nil, fmt.Errorf("invalid terminal size %dx%d", w, h)
 	}
-	v, err := getViewer(pod, term, w, h)
+	v, err := getViewerAs(pod, term, who, w, h)
 	if err != nil {
 		return nil, err
 	}

@@ -311,6 +311,14 @@ paths:
           in: query
           description: The viewer's size changed; repaint everything.
           schema: {type: boolean, default: false}
+        - name: viewer
+          in: query
+          description: |
+            An id the client picks and keeps. Each viewer has its own view of the
+            terminal, so two frontends can watch one terminal, each at its own
+            size, without taking each other's changes. A viewer idle for two
+            minutes is dropped.
+          schema: {type: string, maxLength: 64, pattern: "^[A-Za-z0-9_.-]+$"}
         - name: wait
           in: query
           description: Milliseconds to wait for a change, at most 30000.
@@ -583,18 +591,37 @@ components:
             extra: {type: string}
     Pool:
       type: object
-      required: [name, template, ready, desired]
+      required: [name, template, ready, desired, harness]
       properties:
         name: {type: string}
         template: {type: string}
         ready: {type: integer}
         desired: {type: integer}
         updateStrategy: {type: string}
+        harness: {$ref: "#/components/schemas/Harness"}
         configs:
           type: object
           properties:
             pool: {type: string}
             template: {type: string}
+    Harness:
+      type: object
+      description: A coding agent installed in a pool's image.
+      required: [name, label, models]
+      properties:
+        name: {type: string, examples: [claude-code]}
+        label: {type: string, examples: [Claude Code]}
+        command: {type: string, description: The program that starts it; empty for a bare shell.}
+        models:
+          type: array
+          items: {$ref: "#/components/schemas/HarnessModel"}
+    HarnessModel:
+      type: object
+      required: [id, label]
+      properties:
+        id: {type: string, description: The value for --model; empty means the harness default.}
+        label: {type: string}
+        note: {type: string}
     Logs:
       type: object
       required: [pod, lines]

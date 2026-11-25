@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os/exec"
 	"path"
 	"sort"
@@ -37,6 +38,15 @@ type Terminal struct {
 	Status    string
 	CWD       string
 	CreatedMS uint64
+}
+
+// Created is when the terminal was made, or the zero time if Herdr reported a
+// moment too far off to be one.
+func (t Terminal) Created() time.Time {
+	if t.CreatedMS > math.MaxInt64 {
+		return time.Time{}
+	}
+	return time.UnixMilli(int64(t.CreatedMS)).UTC()
 }
 
 // Label is the short name shown on a window tab. Explicit user/agent names
@@ -694,7 +704,28 @@ func DisconnectViewer(pod, term string) {
 		return
 	}
 	c.mu.Lock()
-	v := c.viewers[term]
+	var vs []*viewer
+	for _, v := range c.viewers {
+		if v.term == term {
+			vs = append(vs, v)
+		}
+	}
+	c.mu.Unlock()
+	for _, v := range vs {
+		c.detachViewer(v, true)
+	}
+}
+
+// DisconnectViewerAs detaches the viewer who has on term, and no one else's.
+func DisconnectViewerAs(pod, term, who string) {
+	conns.Lock()
+	c := conns.byPod[pod]
+	conns.Unlock()
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	v := c.viewers[viewerKey(resolveTerm(pod, term), who)]
 	c.mu.Unlock()
 	if v != nil {
 		c.detachViewer(v, true)
@@ -733,17 +764,33 @@ func resolveTerm(pod, term string) string {
 }
 
 func getViewer(pod, term string, w, h int) (*viewer, error) {
+	return getViewerAs(pod, term, "", w, h)
+}
+
+// getViewerAs is the viewer who looks at term. Each who has a viewer of their
+// own, so two frontends watching one terminal do not take each other's
+// "something changed" signal; "" is the shared viewer that input goes through.
+func getViewerAs(pod, term, who string, w, h int) (*viewer, error) {
 	term = resolveTerm(pod, term)
 	c, err := getPodConn(pod)
 	if err != nil {
 		return nil, err
 	}
-	return c.getViewer(term, w, h)
+	return c.getViewer(term, who, w, h)
 }
 
-func (c *podConn) getViewer(term string, w, h int) (*viewer, error) {
+// viewerKey names one viewer of one terminal in podConn.viewers.
+func viewerKey(term, who string) string {
+	if who == "" {
+		return term
+	}
+	return term + "\x00" + who
+}
+
+func (c *podConn) getViewer(term, who string, w, h int) (*viewer, error) {
+	key := viewerKey(term, who)
 	c.mu.Lock()
-	if v := c.viewers[term]; v != nil {
+	if v := c.viewers[key]; v != nil {
 		v.mu.Lock()
 		closed := v.closed
 		v.mu.Unlock()
@@ -751,7 +798,7 @@ func (c *podConn) getViewer(term string, w, h int) (*viewer, error) {
 			c.mu.Unlock()
 			return v, nil
 		}
-		delete(c.viewers, term)
+		delete(c.viewers, key)
 	}
 	c.mu.Unlock()
 
@@ -779,7 +826,7 @@ func (c *podConn) getViewer(term string, w, h int) (*viewer, error) {
 		c.mu.Lock()
 		if !c.closed {
 			c.channels[resp.Channel] = v
-			c.viewers[term] = v
+			c.viewers[key] = v
 		}
 		c.mu.Unlock()
 		return v, nil
