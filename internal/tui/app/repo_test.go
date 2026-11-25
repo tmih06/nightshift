@@ -10,10 +10,11 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	v1 "github.com/tmih06/nightshift/api/v1"
 	"github.com/tmih06/nightshift/internal/ghdash/config"
 	ghtui "github.com/tmih06/nightshift/internal/ghdash/tui"
-	"github.com/tmih06/nightshift/internal/services/cluster"
 	"github.com/tmih06/nightshift/internal/tui/dashboard"
+	"github.com/tmih06/nightshift/internal/tui/fleet"
 	"github.com/tmih06/nightshift/internal/tui/repoview"
 )
 
@@ -317,10 +318,10 @@ func TestRepoViewSandboxMessagesOpenPickersOverRepoView(t *testing.T) {
 
 func TestFocusSandboxMsgSwitchesToSandboxesAndSelectsPod(t *testing.T) {
 	m, _ := openRepoModel(t)
-	m.sandboxes = m.sandboxes.WithFleet([]cluster.Sandbox{
+	m.sandboxes = m.sandboxes.WithFleet([]fleet.Sandbox{
 		{Name: "pi-warm-1", OwnerKind: "SandboxWarmPool", Owner: "pi-pool", Template: "pi-template", Phase: "Running"},
-		{Name: "codex-repo-dev", Volume: cluster.RepoVolumeName("acme/rocket", "develop"), Template: "codex-template", Phase: "Pending"},
-	}, map[string]cluster.Pool{
+		{Name: "codex-repo-dev", Volume: v1.BranchVolumeName("acme/rocket", "develop"), Template: "codex-template", Phase: "Pending"},
+	}, map[string]fleet.Pool{
 		"pi-pool": {Name: "pi-pool", Template: "pi-template", Ready: 1, Desired: 1},
 	})
 
@@ -339,8 +340,8 @@ func TestActiveSandboxSyncPropagatesToRepoView(t *testing.T) {
 	m, _ := withPools(t)
 	m = sized(withFakeRepos(t, m), 140, 40)
 
-	vol1 := cluster.RepoVolumeName("acme/rocket", "main")
-	m.sandboxes = m.sandboxes.WithFleet([]cluster.Sandbox{
+	vol1 := v1.BranchVolumeName("acme/rocket", "main")
+	m.sandboxes = m.sandboxes.WithFleet([]fleet.Sandbox{
 		{Name: "pi-warm-1", OwnerKind: "SandboxWarmPool", Owner: "pi-pool", Phase: "Running"},
 		{Name: "pi-rocket-main", Volume: vol1, Phase: "Running"},
 	}, nil)
@@ -355,8 +356,8 @@ func TestActiveSandboxSyncPropagatesToRepoView(t *testing.T) {
 	}
 
 	// Updating fleet and running broadcast propagates the new sandbox into m.repos.
-	vol2 := cluster.VolumeName("acme/rocket", 7)
-	m.sandboxes = m.sandboxes.WithFleet([]cluster.Sandbox{
+	vol2 := v1.PRVolumeName("acme/rocket", 7)
+	m.sandboxes = m.sandboxes.WithFleet([]fleet.Sandbox{
 		{Name: "pi-rocket-main", Volume: vol1, Phase: "Running"},
 		{Name: "codex-rocket-pr7", Volume: vol2, Phase: "Running"},
 	}, nil)

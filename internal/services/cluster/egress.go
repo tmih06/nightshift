@@ -81,14 +81,18 @@ func applyEgressToPodSpec(spec map[string]any, proxyURL string, includeLLMPlaceh
 	}
 	spec["automountServiceAccountToken"] = false
 
+	// A template that egress-setup.sh already wired carries the CA volume and
+	// mount; adding them again makes Kubernetes refuse the pod as a duplicate.
 	volumes, _ := spec["volumes"].([]any)
-	volumes = append(volumes, map[string]any{
-		"name": "egress-ca",
-		"configMap": map[string]any{
-			"name":     EgressCAConfigMap,
-			"optional": true,
-		},
-	})
+	if !hasNamed(volumes, "egress-ca") {
+		volumes = append(volumes, map[string]any{
+			"name": "egress-ca",
+			"configMap": map[string]any{
+				"name":     EgressCAConfigMap,
+				"optional": true,
+			},
+		})
+	}
 	spec["volumes"] = volumes
 
 	envEntries := EgressSandboxEnv(proxyURL)
@@ -112,11 +116,13 @@ func applyEgressToPodSpec(spec map[string]any, proxyURL string, includeLLMPlaceh
 			continue
 		}
 		mounts, _ := c["volumeMounts"].([]any)
-		mounts = append(mounts, map[string]any{
-			"name":      "egress-ca",
-			"mountPath": egressCAMountDir,
-			"readOnly":  true,
-		})
+		if !hasNamed(mounts, "egress-ca") {
+			mounts = append(mounts, map[string]any{
+				"name":       "egress-ca",
+				keyMountPath: egressCAMountDir,
+				"readOnly":   true,
+			})
+		}
 		c["volumeMounts"] = mounts
 
 		existing, _ := c["env"].([]any)
@@ -135,4 +141,17 @@ func applyEgressToPodSpec(spec map[string]any, proxyURL string, includeLLMPlaceh
 		}
 		c["env"] = existing
 	}
+}
+
+// keyMountPath is the field of a volume mount that says where it sits.
+const keyMountPath = "mountPath"
+
+// hasNamed is whether a list of volumes or mounts holds one called name.
+func hasNamed(list []any, name string) bool {
+	for _, item := range list {
+		if m, ok := item.(map[string]any); ok && m["name"] == name {
+			return true
+		}
+	}
+	return false
 }

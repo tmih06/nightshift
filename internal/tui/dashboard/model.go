@@ -1,14 +1,14 @@
 package dashboard
 
 import (
-	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/tmih06/nightshift/api/client"
+	v1 "github.com/tmih06/nightshift/api/v1"
 	ghtheme "github.com/tmih06/nightshift/internal/ghdash/tui/theme"
-	"github.com/tmih06/nightshift/internal/services/cluster"
-	"github.com/tmih06/nightshift/internal/services/session"
+	"github.com/tmih06/nightshift/internal/tui/fleet"
 )
 
 const (
@@ -36,7 +36,7 @@ const (
 type inspectContent struct {
 	text, logErr    string
 	loaded, loading bool
-	role            cluster.PodRole
+	role            fleet.PodRole
 }
 
 type inspectKey struct {
@@ -52,24 +52,17 @@ type inspectCache struct {
 	lines   []string
 }
 
-// liveUsage is a claimed sandbox's usage from its own cgroup counters:
-// base is the sample the next CPU rate is measured from.
-type liveUsage struct {
-	base  cluster.CgroupSample
-	cpu   int64
-	cpuOK bool
-}
-
 type usageHistory struct {
 	cpu, mem []float64
 }
 
 type model struct {
-	boxes          []cluster.Sandbox
-	pools          map[string]cluster.Pool
+	api            API
+	boxes          []fleet.Sandbox
+	pools          map[string]fleet.Pool
 	selected       string // pod name, stable across fleet resorts
 	sessions       map[string]bool
-	windows        map[string][]session.Terminal
+	windows        map[string][]v1.Terminal
 	activeWindow   map[string]string // pod -> active terminal address
 	metricsOK      bool
 	err            error
@@ -102,11 +95,13 @@ type model struct {
 	shellPod       string
 	shellTerm      string
 	shellW, shellH int
-	watchingShell  bool
-	pending        []session.Key
-	pendingTerm    string
-	sending        bool
-	pendingPod     string
+	// zoom gives the shell the whole window.
+	zoom          bool
+	watchingShell bool
+	pending       []v1.Key
+	pendingTerm   string
+	sending       bool
+	pendingPod    string
 	// checkout is the pull request checkout in flight, shown as a card.
 	checkout *checkoutRun
 	// destroy, while open, asks whether a sandbox's volume goes with it.
@@ -115,8 +110,6 @@ type model struct {
 	// shell takes the keyboard once the fleet shows it.
 	pendingCheckout *Checkout
 	hist            map[string]usageHistory
-	live            map[string]liveUsage
-	agentVersions   map[string]string // pod -> coding CLI version, probed once
 
 	// hidden stops shell screen renders while another tab is on screen.
 	hidden bool
@@ -130,11 +123,12 @@ type model struct {
 type Model = model
 
 // New returns the pods tab painted from gh-dash's theme t.
-func New(t ghtheme.Theme) Model {
+func New(t ghtheme.Theme, api API) Model {
 	useTheme(t)
 	return model{
+		api:          api,
 		sessions:     map[string]bool{},
-		windows:      map[string][]session.Terminal{},
+		windows:      map[string][]v1.Terminal{},
 		activeWindow: map[string]string{},
 		rowCache:     &rowCacheEntry{},
 		inspectDocs:  map[inspectKey]inspectCache{},
@@ -161,11 +155,11 @@ func (m model) Capturing() bool {
 
 // Boxes returns a shallow copy of the current sandbox fleet for read-only
 // inspection.
-func (m model) Boxes() []cluster.Sandbox {
+func (m model) Boxes() []fleet.Sandbox {
 	if len(m.boxes) == 0 {
 		return nil
 	}
-	out := make([]cluster.Sandbox, len(m.boxes))
+	out := make([]fleet.Sandbox, len(m.boxes))
 	copy(out, m.boxes)
 	return out
 }
@@ -174,7 +168,7 @@ func (m model) Boxes() []cluster.Sandbox {
 // attaches to its shell when it is claimed and running. It is a no-op if pod
 // is not in the fleet.
 func (m model) FocusPod(pod string) (Model, tea.Cmd) {
-	var target *cluster.Sandbox
+	var target *fleet.Sandbox
 	for i := range m.boxes {
 		if m.boxes[i].Name == pod {
 			target = &m.boxes[i]
@@ -196,35 +190,33 @@ func (m model) FocusPod(pod string) (Model, tea.Cmd) {
 	}
 	m.confirmDestroy = false
 	m.selectPod(target.Name)
-	if target.Claimed() && target.Phase == cluster.PodPhaseRunning {
+	if target.Claimed() && target.Phase == fleet.PodPhaseRunning {
 		m.sidebarMode = paneShell
 		if m.hasSession(target.Name) {
 			m.focus = focusShell
 			m.prefix = false
 			return m, m.watchShell()
 		}
-		return m, attachCmd(target.Name)
+		return m, attachCmd(m.api, target.Name)
 	}
 	cmd := m.maybeFetchLogs()
 	return m, cmd
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(fetchCmd(nil), tickCmd(), shellTickCmd())
+	return tea.Batch(fetchCmd(m.api), tickCmd(), shellTickCmd())
 }
 
 type tickMsg struct{}
 type shellTickMsg struct{}
 
 type loadedMsg struct {
-	boxes         []cluster.Sandbox
-	pools         map[string]cluster.Pool
-	sessions      map[string]bool
-	windows       map[string][]session.Terminal
-	metricsOK     bool
-	cgroups       map[string]cluster.CgroupSample
-	agentVersions map[string]string
-	err           error
+	boxes     []fleet.Sandbox
+	pools     map[string]fleet.Pool
+	sessions  map[string]bool
+	windows   map[string][]v1.Terminal
+	metricsOK bool
+	err       error
 }
 
 type claimMsg struct {
@@ -249,19 +241,13 @@ type deletedMsg struct {
 
 type attachReadyMsg struct {
 	pod   string
-	terms []session.Terminal
+	terms []v1.Terminal
 	err   error
-}
-
-type fullReadyMsg struct {
-	pod  string
-	term string
-	err  error
 }
 
 type windowCreatedMsg struct {
 	pod  string
-	term session.Terminal
+	term v1.Terminal
 	err  error
 }
 
@@ -269,10 +255,6 @@ type windowKilledMsg struct {
 	pod  string
 	term string
 	err  error
-}
-
-type resumeMsg struct {
-	err error
 }
 
 type shellMsg struct {
@@ -294,8 +276,8 @@ type sentMsg struct {
 func Owns(msg tea.Msg) bool {
 	switch msg.(type) {
 	case tickMsg, shellTickMsg, loadedMsg, logsMsg, claimMsg, claimAdoptedMsg, deletedMsg,
-		attachReadyMsg, fullReadyMsg, windowCreatedMsg, windowKilledMsg,
-		resumeMsg, shellMsg, sentMsg, checkoutMsg:
+		attachReadyMsg, windowCreatedMsg, windowKilledMsg,
+		shellMsg, sentMsg, checkoutMsg:
 		return true
 	}
 	return false
@@ -309,150 +291,18 @@ func shellTickCmd() tea.Cmd {
 	return tea.Tick(shellRefreshEvery, func(time.Time) tea.Msg { return shellTickMsg{} })
 }
 
-// fetchCmd reloads the fleet. known holds pod versions already probed, so
-// each pod's coding CLI is asked for its version only once per lifetime.
-func fetchCmd(known map[string]string) tea.Cmd {
-	return func() tea.Msg {
-		boxes, pools, metricsOK, err := cluster.Fetch()
-		var claimed, unprobed []string
-		for _, b := range boxes {
-			if b.Phase != cluster.PodPhaseRunning {
-				continue
-			}
-			if b.Claimed() {
-				claimed = append(claimed, b.Name)
-			}
-			if b.IsSandbox() {
-				if _, ok := known[b.Name]; !ok {
-					unprobed = append(unprobed, b.Name)
-				}
-			}
-		}
-		var (
-			windows map[string][]session.Terminal
-			cgroups map[string]cluster.CgroupSample
-			probed  map[string]string
-			wg      sync.WaitGroup
-		)
-		wg.Add(3)
-		go func() { defer wg.Done(); windows = session.LiveTerminals(boxes) }()
-		go func() { defer wg.Done(); cgroups = cluster.ReadCgroups(claimed) }()
-		go func() { defer wg.Done(); probed = cluster.AgentVersions(unprobed) }()
-		wg.Wait()
-		sessions := make(map[string]bool, len(windows))
-		for pod, terms := range windows {
-			if len(terms) > 0 {
-				sessions[pod] = true
-			}
-		}
-		return loadedMsg{
-			boxes:         boxes,
-			pools:         pools,
-			sessions:      sessions,
-			windows:       windows,
-			metricsOK:     metricsOK,
-			cgroups:       cgroups,
-			agentVersions: probed,
-			err:           err,
-		}
-	}
-}
-
-func claimCmd(pool string) tea.Cmd {
-	return func() tea.Msg {
-		name, err := cluster.Claim(pool)
-		return claimMsg{name: name, err: err}
-	}
-}
-
-func (m model) claimPool() string {
-	if b := m.selectedBox(); b != nil && b.OwnerKind == "SandboxWarmPool" {
-		return b.Owner
-	}
-	return cluster.WarmPool
-}
-
-func deleteClaimCmd(claim string) tea.Cmd {
-	return func() tea.Msg {
-		return deletedMsg{claim: claim, err: cluster.DeleteClaim(claim)}
-	}
-}
-
-func waitClaimCmd(claim string) tea.Cmd {
-	return func() tea.Msg {
-		pod, err := cluster.WaitForClaim(claim, 30*time.Second)
-		if err != nil {
-			return claimAdoptedMsg{err: err}
-		}
-		if err := session.Ensure(pod); err != nil {
-			return claimAdoptedMsg{err: err}
-		}
-		return claimAdoptedMsg{pod: pod}
-	}
-}
-
-func attachCmd(pod string) tea.Cmd {
-	return func() tea.Msg {
-		if err := session.Ensure(pod); err != nil {
-			return attachReadyMsg{pod: pod, err: err}
-		}
-		terms, err := session.List(pod)
-		return attachReadyMsg{pod: pod, terms: terms, err: err}
-	}
-}
-
-func fullCmd(pod, term string) tea.Cmd {
-	return func() tea.Msg {
-		if err := session.Ensure(pod); err != nil {
-			return fullReadyMsg{pod: pod, err: err}
-		}
-		if term == "" {
-			if terms, err := session.List(pod); err == nil && len(terms) > 0 {
-				term = terms[0].Address
-			}
-		}
-		return fullReadyMsg{pod: pod, term: term}
-	}
-}
-
-func createWindowCmd(pod, fromTerm string) tea.Cmd {
-	return func() tea.Msg {
-		term, err := session.CreateFrom(pod, "", fromTerm)
-		return windowCreatedMsg{pod: pod, term: term, err: err}
-	}
-}
-
-func killWindowCmd(pod, term string) tea.Cmd {
-	return func() tea.Msg {
-		return windowKilledMsg{pod: pod, term: term, err: session.Kill(pod, term)}
-	}
-}
-
-func watchShellCmd(pod, term string, w, h int, resize bool) tea.Cmd {
-	return func() tea.Msg {
-		lines, err := session.WatchScreen(pod, term, w, h, resize, shellRefreshEvery)
-		return shellMsg{pod: pod, term: term, lines: lines, err: err}
-	}
-}
-
-func drainCmd(pod, term string, keys []session.Key) tea.Cmd {
-	return func() tea.Msg {
-		return sentMsg{pod: pod, term: term, count: len(keys), err: session.SendBatch(pod, term, keys)}
-	}
-}
-
 func (m model) hasSession(pod string) bool {
 	return len(m.windows[pod]) > 0 || m.sessions[pod]
 }
 
 // podWindows returns the live windows for pod. If only the boolean sessions
 // map marks pod live (as in legacy unit tests), it synthesizes one bash window.
-func (m model) podWindows(pod string) []session.Terminal {
+func (m model) podWindows(pod string) []v1.Terminal {
 	if wins := m.windows[pod]; len(wins) > 0 {
 		return wins
 	}
 	if m.sessions[pod] {
-		return []session.Terminal{{Address: session.Name(pod), Command: "bash"}}
+		return []v1.Terminal{{Address: defaultTerminal, Command: "bash"}}
 	}
 	return nil
 }
@@ -540,7 +390,7 @@ func (m *model) watchShell() tea.Cmd {
 	resize := w != m.shellW || h != m.shellH || m.shellPod != b.Name || m.shellTerm != term
 	m.shellW, m.shellH = w, h
 	m.watchingShell = true
-	return watchShellCmd(b.Name, term, w, h, resize)
+	return watchShellCmd(m.api, client.ScreenRequest{Sandbox: b.Name, Address: term, Cols: w, Rows: h, Resize: resize})
 }
 
 func (m *model) startDrain() tea.Cmd {
@@ -556,64 +406,7 @@ func (m *model) startDrain() tea.Cmd {
 	keys := m.pending
 	m.pending = nil
 	m.pendingTerm = ""
-	return drainCmd(b.Name, term, keys)
-}
-
-// applyLive puts claimed sandboxes' own counters over metrics-server's
-// numbers. Memory is live from the first sample; CPU from the second, as it
-// is a rate between two.
-func (m *model) applyLive(samples map[string]cluster.CgroupSample) {
-	next := make(map[string]liveUsage, len(samples))
-	for i := range m.boxes {
-		b := &m.boxes[i]
-		s, ok := samples[b.Name]
-		if !ok {
-			continue
-		}
-		st, seen := m.live[b.Name]
-		switch {
-		case !seen:
-			st = liveUsage{base: s}
-		case s.Uptime < st.base.Uptime || s.CPUUsec < st.base.CPUUsec:
-			st = liveUsage{base: s} // restarted: start over
-		default:
-			if mc, ok := cluster.CPURate(st.base, s); ok {
-				st.cpu, st.cpuOK, st.base = mc, true, s
-			}
-		}
-		b.MemUsageMiB = s.MemMiB()
-		if st.cpuOK {
-			b.CPUUsageMC = st.cpu
-		}
-		next[b.Name] = st
-	}
-	m.live = next
-}
-
-// mergeAgentVersions records freshly probed CLI versions and drops the ones
-// whose pods left the fleet.
-func (m *model) mergeAgentVersions(probed map[string]string) {
-	if m.agentVersions == nil {
-		m.agentVersions = map[string]string{}
-	}
-	live := make(map[string]bool, len(m.boxes))
-	for _, b := range m.boxes {
-		live[b.Name] = true
-	}
-	for pod := range m.agentVersions {
-		if !live[pod] {
-			delete(m.agentVersions, pod)
-		}
-	}
-	for pod, v := range probed {
-		m.agentVersions[pod] = v
-	}
-}
-
-// usageKnown is whether b's numbers are real: metrics-server answered, or
-// the sandbox's own counters did.
-func (m model) usageKnown(name string) bool {
-	return m.metricsOK || m.live[name].cpuOK
+	return drainCmd(m.api, b.Name, term, keys)
 }
 
 func (m *model) appendHistory() {
@@ -622,7 +415,7 @@ func (m *model) appendHistory() {
 	}
 	for i := range m.boxes {
 		b := &m.boxes[i]
-		if !m.usageKnown(b.Name) || b.CPULimitMC <= 0 || b.MemLimitMiB <= 0 {
+		if !b.UsageKnown || b.CPULimitMC <= 0 || b.MemLimitMiB <= 0 {
 			continue
 		}
 		h := m.hist[b.Name]
@@ -663,7 +456,7 @@ func (m *model) expireStatus() {
 	}
 }
 
-func (m model) selectedBox() *cluster.Sandbox {
+func (m model) selectedBox() *fleet.Sandbox {
 	for i := range m.boxes {
 		if m.boxes[i].Name == m.selected {
 			return &m.boxes[i]
@@ -694,9 +487,9 @@ func (m model) effectivePane() sidebarMode {
 	mode := m.sidebarMode
 	if mode == paneAuto {
 		switch b.PodRole() {
-		case cluster.RoleClaimed:
+		case fleet.RoleClaimed:
 			return paneShell
-		case cluster.RoleWarm:
+		case fleet.RoleWarm:
 			return paneConfigs
 		default:
 			return paneLogs
@@ -711,14 +504,14 @@ func (m model) effectivePane() sidebarMode {
 	return mode
 }
 
-func availablePanes(b *cluster.Sandbox) []sidebarMode {
+func availablePanes(b *fleet.Sandbox) []sidebarMode {
 	if b == nil {
 		return nil
 	}
 	switch b.PodRole() {
-	case cluster.RoleClaimed:
+	case fleet.RoleClaimed:
 		return []sidebarMode{paneShell, paneLogs, paneConfigs}
-	case cluster.RoleWarm:
+	case fleet.RoleWarm:
 		return []sidebarMode{paneConfigs, paneLogs}
 	default:
 		return []sidebarMode{paneLogs, paneConfigs}
@@ -800,7 +593,7 @@ func (m *model) maybeFetchLogs() tea.Cmd {
 		return nil
 	}
 	m.loadingLogs = b.Name
-	return fetchLogsCmd(b.EffectiveNamespace(), b.Name)
+	return fetchLogsCmd(m.api, b.EffectiveNamespace(), b.Name)
 }
 
 func (m *model) selectPod(name string) {

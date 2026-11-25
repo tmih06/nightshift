@@ -6,7 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/tmih06/nightshift/internal/services/session"
+	v1 "github.com/tmih06/nightshift/api/v1"
 )
 
 // sgrMouseLeakRe matches SGR mouse suffixes that leak as text when a PTY or
@@ -32,7 +32,7 @@ var shellKeys = map[string]string{
 
 func (m model) updateShellKeys(msg tea.KeyPressMsg) (model, tea.Cmd) {
 	if !m.canFocusShell() {
-		m.focus = focusNav
+		m.focus, m.zoom = focusNav, false
 		m.prefix = false
 		return m, nil
 	}
@@ -55,7 +55,7 @@ func (m model) handlePrefixKey(msg tea.KeyPressMsg) (model, tea.Cmd) {
 	s := msg.String()
 	switch s {
 	case "q", "d":
-		m.focus = focusNav
+		m.focus, m.zoom = focusNav, false
 		m.status, m.statusTTL = "", 0
 		return m, nil
 	case "c":
@@ -64,7 +64,7 @@ func (m model) handlePrefixKey(msg tea.KeyPressMsg) (model, tea.Cmd) {
 			return m, nil
 		}
 		m.flash("opening new window…")
-		return m, createWindowCmd(b.Name, m.activeTerm(b.Name))
+		return m, createWindowCmd(m.api, b.Name, m.activeTerm(b.Name))
 	case "n", "l", "right":
 		return m, m.stepWindow(1)
 	case "p", "h", "left":
@@ -79,17 +79,15 @@ func (m model) handlePrefixKey(msg tea.KeyPressMsg) (model, tea.Cmd) {
 			return m, nil
 		}
 		m.flash("closing window…")
-		return m, killWindowCmd(b.Name, term)
+		return m, killWindowCmd(m.api, b.Name, term)
 	case "f", "F":
 		b := m.selectedBox()
 		if b == nil || b.Phase != "Running" {
 			return m, nil
 		}
-		m.focus = focusNav
-		m.flash("opening fullscreen bash, detach with Ctrl-\\")
-		return m, fullCmd(b.Name, m.activeTerm(b.Name))
+		return m.zoomShell(b)
 	case "ctrl+b":
-		return m.queueShell(session.Key{Name: "C-b"})
+		return m.queueShell(v1.Key{Name: "C-b"})
 	}
 	if len(s) == 1 && s[0] >= '1' && s[0] <= '9' {
 		return m, m.selectWindowIndex(int(s[0] - '1'))
@@ -101,10 +99,10 @@ func (m model) pasteIntoShell(text string) (model, tea.Cmd) {
 	if !m.canFocusShell() || text == "" {
 		return m, nil
 	}
-	return m.queueShell(session.Key{Text: text})
+	return m.queueShell(v1.Key{Text: text})
 }
 
-func (m model) queueShell(key session.Key) (model, tea.Cmd) {
+func (m model) queueShell(key v1.Key) (model, tea.Cmd) {
 	m.pending = append(m.pending, key)
 	if b := m.selectedBox(); b != nil && m.pendingTerm == "" {
 		m.pendingTerm = m.activeTerm(b.Name)
@@ -122,15 +120,15 @@ func isMouseEscapeFragment(msg tea.KeyPressMsg) bool {
 	return msg.Text != "" && sgrMouseLeakRe.MatchString(msg.Text)
 }
 
-func shellKeyFromMsg(msg tea.KeyPressMsg) (session.Key, bool) {
+func shellKeyFromMsg(msg tea.KeyPressMsg) (v1.Key, bool) {
 	if isMouseEscapeFragment(msg) {
-		return session.Key{}, false
+		return v1.Key{}, false
 	}
 	if msg.Text != "" && msg.Mod&^tea.ModShift == 0 {
-		return session.Key{Text: msg.Text}, true
+		return v1.Key{Text: msg.Text}, true
 	}
 	name, ok := shellKeyName(msg.String())
-	return session.Key{Name: name}, ok
+	return v1.Key{Name: name}, ok
 }
 
 func shellKeyName(s string) (string, bool) {

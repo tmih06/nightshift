@@ -14,9 +14,10 @@ import (
 
 // Include says which extras a fleet read gathers.
 type Include struct {
-	Configs  bool
-	Live     bool
-	Versions bool
+	Configs   bool
+	Live      bool
+	Versions  bool
+	Terminals bool
 }
 
 // Fleet reads the sandbox fleet.

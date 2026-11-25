@@ -13,7 +13,10 @@ import (
 	"github.com/tmih06/nightshift/internal/services/session"
 )
 
-var rocket = Spec{Target: v1.Target{Kind: v1.TargetPullRequest, Repo: "acme/rocket", Number: 7, Branch: "fix-auth"}}
+// rocket is the pull request most tests check out.
+func rocket() Spec {
+	return Spec{Target: v1.Target{Kind: v1.TargetPullRequest, Repo: "acme/rocket", Number: 7, Branch: "fix-auth"}}
+}
 
 func issue(branch string) Spec {
 	return Spec{Target: v1.Target{Kind: v1.TargetIssue, Repo: "acme/rocket", Number: 42, Branch: branch}}
@@ -24,7 +27,7 @@ func branch(name string) Spec {
 }
 
 func TestCloneScriptClonesTheHeadIntoTheVolume(t *testing.T) {
-	got := rocket.CloneScript()
+	got := rocket().CloneScript()
 	for _, want := range []string{
 		"set -euo pipefail\n",
 		"http.version GIT_CONFIG_VALUE_0=HTTP/1.1",
@@ -45,7 +48,7 @@ func TestCloneScriptClonesTheHeadIntoTheVolume(t *testing.T) {
 	if got := noBranch.CloneScript(); !strings.HasSuffix(got, "git checkout -B pr-7 FETCH_HEAD") {
 		t.Errorf("no branch: %s", got)
 	}
-	if got := rocket.ShellLine(); got != "cd /home/node/workspace/rocket && git status -sb" {
+	if got := rocket().ShellLine(); got != "cd /home/node/workspace/rocket && git status -sb" {
 		t.Errorf("shell line = %s", got)
 	}
 }
@@ -112,6 +115,7 @@ type fakeOps struct {
 	exists, cloned bool
 	cloneErr       error
 	hold           chan struct{} // when set, the clone waits for it
+	open           string        // the sandbox already on the volume
 	volumeFor      cluster.VolumeFor
 	calls          []string
 }
@@ -125,6 +129,10 @@ func (f *fakeOps) note(s string) {
 func (f *fakeOps) ops() Ops {
 	return Ops{
 		PoolTemplate: func(string) (string, error) { return "pi-template", nil },
+		SandboxOn: func(string) (string, error) {
+			f.note("on volume")
+			return f.open, nil
+		},
 		VolumeState: func(string) (bool, bool, error) {
 			f.note("state")
 			return f.exists, f.cloned, nil
@@ -173,7 +181,7 @@ func events(f *fakeOps, s Spec) []v1.CheckoutEvent {
 
 func TestTheCheckoutClonesStartsAndTypesInOrder(t *testing.T) {
 	f := &fakeOps{}
-	evs := events(f, rocket)
+	evs := events(f, rocket())
 	want := []string{"state", "create pr-acme-rocket-7 acme/rocket", "template pi-template", "clone pr-acme-rocket-7 img",
 		"sandbox pi-template pr-acme-rocket-7 /home/node/workspace/rocket", "wait pi-pr-1", "bash pi-pr-1",
 		"type cd /home/node/workspace/rocket && git status -sb"}
@@ -233,7 +241,7 @@ func TestAKeptVolumeSwitchesBranchInsteadOfCloning(t *testing.T) {
 }
 
 func TestAHarnessAndModelStartInTheClone(t *testing.T) {
-	s := rocket
+	s := rocket()
 	s.Harness, s.Model = "claude", "opus"
 	f := &fakeOps{}
 	evs := events(f, s)
@@ -254,7 +262,7 @@ func TestAHarnessAndModelStartInTheClone(t *testing.T) {
 
 func TestACloneThatFailsStopsTheCheckout(t *testing.T) {
 	f := &fakeOps{cloneErr: errors.New("repository not found")}
-	evs := events(f, rocket)
+	evs := events(f, rocket())
 	last := evs[len(evs)-1]
 	if last.Error == "" || last.Step != v1.StepClone {
 		t.Fatalf("last event = %+v", last)
@@ -267,7 +275,7 @@ func TestACloneThatFailsStopsTheCheckout(t *testing.T) {
 }
 
 func request() v1.CheckoutRequest {
-	return v1.CheckoutRequest{Target: rocket.Target, Pool: "pi-pool"}
+	return v1.CheckoutRequest{Target: rocket().Target, Pool: "pi-pool"}
 }
 
 func collect(t *testing.T, m *Manager, id string) []v1.CheckoutEvent {
@@ -346,7 +354,10 @@ func TestAFailedCheckoutIsReportedAsFailed(t *testing.T) {
 		t.Fatal(err)
 	}
 	collect(t, m, co.ID)
-	got, _ := m.Get(co.ID)
+	got, err := m.Get(co.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got.State != v1.CheckoutFailed || got.Last == nil || !strings.Contains(got.Last.Error, "repository not found") {
 		t.Errorf("Get = %+v", got)
 	}
@@ -393,5 +404,29 @@ func TestHarnessForPoolResolvesAllHarnesses(t *testing.T) {
 	}
 	if got := ForPool("custom-pool", "", ""); got.Command != "" || len(got.Models) != 1 {
 		t.Errorf("an unknown pool should leave bash open: %+v", got)
+	}
+}
+
+// A volume holds one sandbox at a time: asking again for a target that is open
+// goes back to its sandbox instead of starting a second one on the same volume.
+func TestACheckoutOfAnOpenTargetGoesBackToItsSandbox(t *testing.T) {
+	f := &fakeOps{open: "pi-pr-9"}
+	m := NewManager(f.ops())
+	t.Cleanup(func() { m.Close(context.Background()) })
+	co, err := m.Start(request())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if co.State != v1.CheckoutDone || co.Sandbox != "pi-pr-9" || co.Last == nil || !co.Last.Done {
+		t.Fatalf("checkout = %+v", co)
+	}
+	for _, c := range f.calls {
+		if c != "on volume" {
+			t.Errorf("an open target still ran %q", c)
+		}
+	}
+	events := collect(t, m, co.ID)
+	if len(events) != 1 || !events[0].Done || events[0].Sandbox != "pi-pr-9" {
+		t.Errorf("the reopened checkout can be followed: %+v", events)
 	}
 }

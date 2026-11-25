@@ -1,7 +1,6 @@
 package v1
 
 import (
-	"fmt"
 	"regexp"
 	"strings"
 )
@@ -11,15 +10,10 @@ import (
 // server applies it to every request, and a frontend can apply it as the person
 // types, so both agree on what a branch can be called.
 func BranchProblem(name string) string {
-	if name == "" {
+	switch {
+	case name == "":
 		return "enter a branch name"
-	}
-	if name == "@" || strings.HasPrefix(name, "-") || strings.HasPrefix(name, "/") ||
-		strings.HasPrefix(name, ".") || strings.HasSuffix(name, "/") ||
-		strings.HasSuffix(name, ".") || strings.HasSuffix(name, ".lock") ||
-		strings.Contains(name, "..") || strings.Contains(name, "//") ||
-		strings.Contains(name, "@{") || strings.Contains(name, "/.") ||
-		strings.Contains(name, ".lock/") {
+	case name == "@", badEdge(name), badMiddle(name):
 		return "invalid git branch name"
 	}
 	for _, r := range name {
@@ -28,6 +22,22 @@ func BranchProblem(name string) string {
 		}
 	}
 	return ""
+}
+
+// badEdge is whether name starts or ends the way a ref cannot.
+func badEdge(name string) bool {
+	return strings.HasPrefix(name, "-") || strings.HasPrefix(name, "/") || strings.HasPrefix(name, ".") ||
+		strings.HasSuffix(name, "/") || strings.HasSuffix(name, ".") || strings.HasSuffix(name, ".lock")
+}
+
+// badMiddle is whether name holds a sequence a ref cannot.
+func badMiddle(name string) bool {
+	for _, bad := range []string{"..", "//", "@{", "/.", ".lock/"} {
+		if strings.Contains(name, bad) {
+			return true
+		}
+	}
+	return false
 }
 
 var repoName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9._-]+$`)
@@ -44,7 +54,7 @@ func (r CheckoutRequest) Problem() string {
 	switch t.Kind {
 	case TargetPullRequest, TargetIssue:
 		if t.Number < 1 {
-			return fmt.Sprintf("target.number is required for a %s", t.Kind)
+			return "target.number is required for a " + t.Kind
 		}
 	case TargetBranch:
 	default:

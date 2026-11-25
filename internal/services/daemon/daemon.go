@@ -74,16 +74,17 @@ func Start(cfg Config) (*Daemon, error) {
 		}
 	}
 	backend := live.New(live.Options{Accounts: cfg.accounts()})
-	s, err := server.New(server.Config{
+	s, err := newServer(server.Config{
 		Token: token, Hosts: cfg.Hosts, AnyHost: cfg.AnyHost, Version: cfg.Version,
 		Cluster: v1.ClusterInfo{Context: cluster.KubeContext(), Namespace: cluster.Namespace},
 		Fleet:   backend.Fleet, Claims: backend.Claims, Checkouts: backend.Checkouts, Volumes: backend.Volumes,
 		Terminals: backend.Terminals, Accounts: accountsOf(backend),
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("start: %w", err)
 	}
-	ln, err := net.Listen("tcp", cfg.Listen)
+	var lc net.ListenConfig
+	ln, err := lc.Listen(context.Background(), "tcp", cfg.Listen)
 	if err != nil {
 		return nil, fmt.Errorf("listen on %s: %w", cfg.Listen, err)
 	}
@@ -94,8 +95,7 @@ func Start(cfg Config) (*Daemon, error) {
 		scheme = "https"
 		cert, err := tls.LoadX509KeyPair(cfg.TLSCert, cfg.TLSKey)
 		if err != nil {
-			_ = ln.Close()
-			return nil, fmt.Errorf("load TLS key pair: %w", err)
+			return nil, errors.Join(fmt.Errorf("load TLS key pair: %w", err), ln.Close())
 		}
 		d.srv.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
 		ln = tls.NewListener(ln, d.srv.TLSConfig)
@@ -110,6 +110,15 @@ func Start(cfg Config) (*Daemon, error) {
 	}()
 	log.Info("nightshiftd is serving", "url", d.url, "cluster", cluster.KubeContext())
 	return d, nil
+}
+
+// newServer is server.New, with its error said as the daemon's.
+func newServer(cfg server.Config) (*server.Server, error) {
+	s, err := server.New(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("start the server: %w", err)
+	}
+	return s, nil
 }
 
 // accountsOf is the backend's accounts, or nil when it has none, so that the
@@ -172,7 +181,7 @@ func (d *Daemon) Wait() error { return <-d.done }
 func (d *Daemon) Close(ctx context.Context) error {
 	err := d.srv.Shutdown(ctx)
 	if err != nil {
-		_ = d.srv.Close()
+		err = errors.Join(fmt.Errorf("shut down: %w", err), d.srv.Close())
 	}
 	d.backend.Close(ctx)
 	return err

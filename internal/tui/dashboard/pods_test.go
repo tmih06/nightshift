@@ -8,15 +8,16 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/tmih06/nightshift/internal/services/cluster"
+	v1 "github.com/tmih06/nightshift/api/v1"
+	"github.com/tmih06/nightshift/internal/tui/fleet"
 )
 
 func fullPodModel() model {
 	created := time.Date(2026, 11, 21, 10, 0, 0, 0, time.UTC)
 	return model{
-		boxes: []cluster.Sandbox{
+		boxes: []fleet.Sandbox{
 			{
-				Name: "pi-pool-w82js", Namespace: cluster.Namespace,
+				Name: "pi-pool-w82js", Namespace: fleet.Namespace,
 				OwnerKind: "SandboxWarmPool", Owner: "pi-pool", Template: "pi-template",
 				NodeName: "control-plane", Phase: "Running", Ready: "1/1", PodIP: "10.244.0.10",
 				Created: created, CPULimitMC: 1000, MemLimitMiB: 2048, CPUUsageMC: 5, MemUsageMiB: 48,
@@ -24,14 +25,14 @@ func fullPodModel() model {
 				CPUReqMC: 100, MemReqMiB: 128,
 			},
 			{
-				Name: "claude-pr-acme-app-1-xyz", Namespace: cluster.Namespace,
+				Name: "claude-pr-acme-app-1-xyz", Namespace: fleet.Namespace,
 				Owner: "pr-acme-app-1", Volume: "pr-acme-app-1", Template: "claude-code-template",
 				NodeName: "control-plane", Phase: "Running", Ready: "1/1", PodIP: "10.244.0.11",
 				Created: created, CPULimitMC: 1000, MemLimitMiB: 2048, CPUUsageMC: 120, MemUsageMiB: 310,
 				Image: "ghcr.io/tmih06/nightshift-claude-code:latest",
 			},
 			{
-				Name: "egress-proxy-6fc5ff4467-5l88s", Namespace: cluster.EgressNamespace,
+				Name: "egress-proxy-6fc5ff4467-5l88s", Namespace: "nightshift-egress", Role: v1.RoleEgress,
 				OwnerKind: "ReplicaSet", Owner: "egress-proxy-6fc5ff4467",
 				NodeName: "control-plane", Phase: "Running", Ready: "1/1", PodIP: "10.244.0.224",
 				Ports:   []string{"8080/proxy", "9090/admin"},
@@ -42,20 +43,20 @@ func fullPodModel() model {
 				ExtraYAML: "## ConfigMap · egress-policy\n```yaml\nkind: ConfigMap\nmetadata:\n  name: egress-policy\n```",
 			},
 			{
-				Name: "agent-sandbox-controller-1", Namespace: cluster.ControllerNamespace,
+				Name: "agent-sandbox-controller-1", Namespace: "agent-sandbox-system", Role: v1.RoleSystem,
 				OwnerKind: "ReplicaSet", Owner: "agent-sandbox-controller",
 				NodeName: "control-plane", Phase: "Running", Ready: "1/1", Restarts: 7, PodIP: "10.244.0.5",
 				Created: created, CPUUsageMC: 2, MemUsageMiB: 18,
 				Image: "registry.k8s.io/agent-sandbox/agent-sandbox-controller:v1.0.11",
 			},
 			{
-				Name: "clone-pr-acme-app-1-abc", Namespace: cluster.Namespace,
+				Name: "clone-pr-acme-app-1-abc", Namespace: fleet.Namespace,
 				OwnerKind: "Job", Owner: "clone-pr-acme-app-1",
 				NodeName: "control-plane", Phase: "Pending", Ready: "0/1", Waiting: "ContainerCreating",
 				Created: created, CPULimitMC: 500, MemLimitMiB: 512,
 			},
 		},
-		pools: map[string]cluster.Pool{
+		pools: map[string]fleet.Pool{
 			"pi-pool": {Name: "pi-pool", Template: "pi-template", Ready: 1, Desired: 1},
 		},
 		selected:  "egress-proxy-6fc5ff4467-5l88s",

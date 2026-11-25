@@ -10,8 +10,8 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	v1 "github.com/tmih06/nightshift/api/v1"
 	ghtheme "github.com/tmih06/nightshift/internal/ghdash/tui/theme"
-	"github.com/tmih06/nightshift/internal/services/accounts"
 	"github.com/tmih06/nightshift/internal/tui/dialog"
 )
 
@@ -49,7 +49,7 @@ func pad(s string, width int) string {
 // listLine is one row of the account list: a heading, a hint under an agent
 // with no accounts, or an account.
 type listLine struct {
-	provider accounts.Provider
+	provider v1.Provider
 	acc      int // index into flat, or -1
 	empty    bool
 	header   bool
@@ -58,9 +58,9 @@ type listLine struct {
 func (m Model) listLines() []listLine {
 	var lines []listLine
 	i := 0
-	for _, p := range accounts.Providers() {
+	for _, p := range m.snap.Providers {
 		lines = append(lines, listLine{provider: p, acc: -1, header: true})
-		n := len(m.snap.ByProvider(p.ID))
+		n := len(byProvider(m.snap, p.ID))
 		if n == 0 {
 			lines = append(lines, listLine{provider: p, acc: -1, empty: true})
 		}
@@ -191,7 +191,7 @@ func (m Model) titleLine() string {
 		} else {
 			parts = append(parts, s.warn.Render("nothing published yet"))
 		}
-		if m.snap.UsageErr != nil {
+		if m.snap.UsageError != "" {
 			parts = append(parts, s.warn.Render("usage unavailable"))
 		}
 	}
@@ -294,7 +294,7 @@ func (m Model) listRow(l listLine, width int) string {
 	s := m.st
 	switch {
 	case l.header:
-		accts := m.snap.ByProvider(l.provider.ID)
+		accts := byProvider(m.snap, l.provider.ID)
 		req := 0
 		for i := range accts {
 			if accts[i].Usage != nil {
@@ -313,23 +313,22 @@ func (m Model) listRow(l listLine, width int) string {
 	return m.accountRow(a, l.acc == m.cursor, width)
 }
 
-func (m Model) accountRow(a accounts.Account, selected bool, width int) string {
+func (m Model) accountRow(a v1.Account, selected bool, width int) string {
 	s := m.st
-	now := m.now()
 	mark := s.faint.Render("○")
 	if a.Active {
 		mark = s.ok.Render("●")
 	}
-	state := a.State(now)
-	stateText := s.faint.Render(state.String())
+	state := a.State
+	stateText := s.faint.Render(stateName(state))
 	switch state {
-	case accounts.StateOK:
+	case v1.AccountOK:
 		stateText = s.ok.Render("ok")
-	case accounts.StateExpiring:
+	case v1.AccountExpiring:
 		stateText = s.warn.Render("expiring")
-	case accounts.StateFailing, accounts.StateSignIn:
-		stateText = s.bad.Render(state.String())
-	case accounts.StateDisabled:
+	case v1.AccountFailing, v1.AccountSignIn:
+		stateText = s.bad.Render(stateName(state))
+	case v1.AccountDisabled:
 		stateText = s.faint.Render("disabled")
 	}
 	req := ""
@@ -338,7 +337,7 @@ func (m Model) accountRow(a accounts.Account, selected bool, width int) string {
 	}
 	tail := lipgloss.NewStyle().Width(10).Render(stateText) + s.faint.Render(lipgloss.NewStyle().Width(9).Align(lipgloss.Right).Render(req))
 	room := max(8, width-3-lipgloss.Width(tail))
-	line := " " + mark + " " + pad(s.text.Render(a.Label()), room) + tail
+	line := " " + mark + " " + pad(s.text.Render(label(a)), room) + tail
 	line = pad(line, width)
 	if selected {
 		line = s.selected.Render(line)
@@ -346,18 +345,18 @@ func (m Model) accountRow(a accounts.Account, selected bool, width int) string {
 	return line
 }
 
-func (m Model) detail(a accounts.Account) []string {
+func (m Model) detail(a v1.Account) []string {
 	s := m.st
 	now := m.now()
-	p, _ := accounts.ProviderByID(a.Provider)
-	title := s.title.Render(a.Label())
+	p := providerByID(m.snap, a.Provider)
+	title := s.title.Render(label(a))
 	if a.Active {
 		title += "  " + s.ok.Render("in use by sandboxes")
 	}
 	rows := m.statusRows(a, p)
 	rows = append(rows,
-		[2]string{"Token", "expires " + until(now, a.Expires)},
-		[2]string{"Refreshed", ago(now, a.LastRefresh) + nextCheck(now, a)},
+		[2]string{"Token", "expires " + until(now, a.ExpiresAt)},
+		[2]string{"Refreshed", ago(now, a.LastRefreshAt) + nextCheck(now, a)},
 	)
 	if pub, ok := m.snap.Published[a.Provider]; ok && a.Active {
 		rows = append(rows, [2]string{"Published", ago(now, m.snap.PublishedAt) + s.faint.Render(" as "+pub.Label)})
@@ -376,18 +375,18 @@ func (m Model) detail(a accounts.Account) []string {
 }
 
 // statusRows are the detail pane's rows about the account's health.
-func (m Model) statusRows(a accounts.Account, p accounts.Provider) [][2]string {
+func (m Model) statusRows(a v1.Account, p v1.Provider) [][2]string {
 	s := m.st
-	state := a.State(m.now())
-	text := state.String()
+	state := a.State
+	text := stateName(state)
 	switch state {
-	case accounts.StateOK:
+	case v1.AccountOK:
 		text = s.ok.Render(text)
-	case accounts.StateExpiring:
+	case v1.AccountExpiring:
 		text = s.warn.Render(text)
-	case accounts.StateDisabled:
+	case v1.AccountDisabled:
 		text = s.faint.Render(text)
-	case accounts.StateFailing, accounts.StateSignIn:
+	case v1.AccountFailing, v1.AccountSignIn:
 		text = s.bad.Render(text)
 	}
 	rows := [][2]string{{"Status", text}}
@@ -397,7 +396,7 @@ func (m Model) statusRows(a accounts.Account, p accounts.Provider) [][2]string {
 	if a.RefreshError != "" {
 		rows = append(rows, [2]string{"Problem", s.bad.Render(a.RefreshError)})
 	}
-	if a.NeedsSignIn {
+	if a.State == v1.AccountSignIn {
 		rows = append(rows, [2]string{"", s.warn.Render("Sign in again: press a, pick " + p.Name + ", then remove the old entry.")})
 	}
 	if a.QuotaBlocked {
@@ -407,17 +406,17 @@ func (m Model) statusRows(a accounts.Account, p accounts.Provider) [][2]string {
 }
 
 // nextCheck says when CLIProxyAPI will next look at the account's token.
-func nextCheck(now time.Time, a accounts.Account) string {
-	if a.NextRefresh.IsZero() || !a.NextRefresh.After(now) {
+func nextCheck(now time.Time, a v1.Account) string {
+	if a.NextRefreshAt.IsZero() || !a.NextRefreshAt.After(now) {
 		return ""
 	}
-	return "  ·  next check " + until(now, a.NextRefresh)
+	return "  ·  next check " + until(now, a.NextRefreshAt)
 }
 
-func (m Model) usageBlock(a accounts.Account) []string {
+func (m Model) usageBlock(a v1.Account) []string {
 	s := m.st
-	if m.snap.UsageErr != nil {
-		return []string{s.head.Render("Usage"), s.warn.Render("unavailable: " + m.snap.UsageErr.Error())}
+	if m.snap.UsageError != "" {
+		return []string{s.head.Render("Usage"), s.warn.Render("unavailable: " + m.snap.UsageError)}
 	}
 	u := a.Usage
 	if u == nil {
@@ -443,13 +442,13 @@ func (m Model) usageBlock(a accounts.Account) []string {
 	if len(bad) > 0 {
 		out = append(out, strings.Join(bad, s.faint.Render("  ·  ")))
 	}
-	out = append(out, s.faint.Render("last request "+ago(now, u.Last)))
+	out = append(out, s.faint.Render("last request "+ago(now, u.LastAt)))
 	width := min(48, max(12, m.width-m.leftWidth()-8))
 	out = append(out, "", s.faint.Render("last 24 hours"), s.ok.Render(spark(u.Recent, width)))
 	return out
 }
 
-func (m Model) stateHint(a accounts.Account) string {
+func (m Model) stateHint(a v1.Account) string {
 	switch {
 	case a.Disabled:
 		return m.st.faint.Render("d enables it again, x removes it")
@@ -479,7 +478,7 @@ func (m Model) providerBox() string {
 	s := m.st
 	inner := m.modalInner()
 	lines := []string{s.title.Render("Sign in an account"), ""}
-	for i, p := range accounts.Providers() {
+	for i, p := range m.snap.Providers {
 		row := "  " + p.Name
 		if i == m.modal.choice {
 			row = s.selected.Render(dialog.Line(s.text.Bold(true), "▸ "+p.Name, inner))
@@ -497,7 +496,7 @@ func (m Model) providerBox() string {
 func (m Model) linkBox() string {
 	s := m.st
 	inner := m.modalInner()
-	p, _ := accounts.ProviderByID(m.modal.login.Provider)
+	p := providerByID(m.snap, m.modal.login.Provider)
 	lines := []string{s.title.Render("Sign in to " + p.Name), "",
 		s.text.Render("1. Open this link and approve the sign-in:"), ""}
 	for _, l := range wrap(m.modal.login.URL, inner) {

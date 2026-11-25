@@ -10,13 +10,22 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/tmih06/nightshift/internal/services/cluster"
-	"github.com/tmih06/nightshift/internal/services/session"
+	v1 "github.com/tmih06/nightshift/api/v1"
+	ghtheme "github.com/tmih06/nightshift/internal/ghdash/tui/theme"
+	"github.com/tmih06/nightshift/internal/tui/fleet"
 )
 
-func testBoxes() []cluster.Sandbox {
+func testBoxes() []fleet.Sandbox {
+	boxes := rawBoxes()
+	for i := range boxes {
+		boxes[i].UsageKnown = true
+	}
+	return boxes
+}
+
+func rawBoxes() []fleet.Sandbox {
 	created := time.Date(2026, 11, 19, 8, 0, 0, 0, time.UTC)
-	return []cluster.Sandbox{
+	return []fleet.Sandbox{
 		{Name: "agent-pool-5ss7w", OwnerKind: "SandboxWarmPool", Owner: "agent-pool",
 			Phase: "Running", Created: created, CPULimitMC: 500, MemLimitMiB: 256, CPUUsageMC: 2, MemUsageMiB: 6,
 			Image: "debian:12-slim", Command: "/bin/bash -c sleep infinity", RestartPolicy: "OnFailure",
@@ -31,8 +40,8 @@ func testBoxes() []cluster.Sandbox {
 }
 
 func baseModel() model {
-	return model{boxes: testBoxes(), selected: "agent-pool-5ss7w",
-		pools: map[string]cluster.Pool{"agent-pool": {Name: "agent-pool", Template: "agent-bash-template",
+	return model{api: &fakeAPI{}, boxes: testBoxes(), selected: "agent-pool-5ss7w",
+		pools: map[string]fleet.Pool{"agent-pool": {Name: "agent-pool", Template: "agent-bash-template",
 			Ready: 2, Desired: 2, UpdateStrategy: "Recreate"}},
 		sessions: map[string]bool{}, metricsOK: true,
 		loaded: true, width: 140, height: 30}
@@ -100,7 +109,7 @@ func TestTemplateSubtitle(t *testing.T) {
 func TestAgentVersionShown(t *testing.T) {
 	for _, width := range []int{68, 100} {
 		m := baseModel()
-		m.agentVersions = map[string]string{"agent-pool-5ss7w": "1.6.0"}
+		m.boxes[0].AgentVersion = "1.6.0"
 		row := m.renderRow(0, width, false)
 		if !strings.Contains(ansi.Strip(row[1]), "1.6.0") {
 			t.Errorf("width %d second line missing the version: %s", width, ansi.Strip(row[1]))
@@ -108,7 +117,7 @@ func TestAgentVersionShown(t *testing.T) {
 	}
 
 	m := baseModel()
-	m.agentVersions = map[string]string{"agent-pool-5ss7w": "codex-cli 0.171.0"}
+	m.boxes[0].AgentVersion = "codex-cli 0.171.0"
 	m.boxes[0].Image = "ghcr.io/tmih06/nightshift-codex:latest"
 	head := ansi.Strip(strings.Join(m.infoLines(60), "\n"))
 	if !strings.Contains(head, "nightshift-codex:0.171.0") || strings.Contains(head, ":latest") {
@@ -243,7 +252,7 @@ func TestSectionsFilterTheTable(t *testing.T) {
 
 func TestTreesHandleEmptyAndOtherGroups(t *testing.T) {
 	m := baseModel()
-	m.boxes = []cluster.Sandbox{
+	m.boxes = []fleet.Sandbox{
 		{Name: "unknown", OwnerKind: "Other", NodeName: "node-a"},
 		{Name: "claimed", OwnerKind: "SandboxClaim", NodeName: "node-a"},
 	}
@@ -260,10 +269,10 @@ func TestTreesHandleEmptyAndOtherGroups(t *testing.T) {
 func TestNodeTreeScrollKeepsSelectedLeafVisible(t *testing.T) {
 	m := baseModel()
 	m.height = 16
-	m.boxes = make([]cluster.Sandbox, 8)
+	m.boxes = make([]fleet.Sandbox, 8)
 	for i := range m.boxes {
 		letter := string(rune('a' + i))
-		m.boxes[i] = cluster.Sandbox{Name: "sandbox-" + letter, NodeName: "node-" + letter, OwnerKind: "SandboxWarmPool"}
+		m.boxes[i] = fleet.Sandbox{Name: "sandbox-" + letter, NodeName: "node-" + letter, OwnerKind: "SandboxWarmPool"}
 	}
 	m.selected = "sandbox-h"
 	y := rowOf(t, m, "sandbox-h")
@@ -561,7 +570,7 @@ func TestUpdateMessages(t *testing.T) {
 	// old index.
 	short := m
 	short.selected = "agent-pool-bkl2p" // position 0 in All (Claimed group), destroyed
-	shrunk := append([]cluster.Sandbox{}, m.boxes[0], m.boxes[1])
+	shrunk := append([]fleet.Sandbox{}, m.boxes[0], m.boxes[1])
 	newM, _ := short.Update(loadedMsg{boxes: shrunk, sessions: map[string]bool{}})
 	if newM.selected != "agent-pool-5ss7w" {
 		t.Errorf("selection after shrink = %q, want the neighbor agent-pool-5ss7w", newM.selected)
@@ -582,9 +591,43 @@ func TestUpdateMessages(t *testing.T) {
 		t.Errorf("attach failure status = %q", newM.status)
 	}
 
-	newM, _ = m.Update(resumeMsg{})
-	if !strings.Contains(newM.status, "session still running") {
-		t.Errorf("detach status = %q", newM.status)
+}
+
+// Zoom gives the shell the whole window, drawn from the same screen API, and
+// gives it back.
+func TestZoomGivesTheShellTheWholeWindow(t *testing.T) {
+	m := baseModel()
+	pod := "agent-pool-bkl2p"
+	m.selected = pod
+	m.sessions[pod] = true
+	m.windows = map[string][]v1.Terminal{pod: {{Address: "t1", Label: "bash"}}}
+	normal := m.layout()
+
+	m, cmd := m.zoomShell(m.selectedBox())
+	zl := m.layout()
+	if !m.zoom || cmd == nil || m.focus != focusShell || zl.docW <= normal.docW || zl.tableW != 0 || zl.sideW != m.width {
+		t.Fatalf("zoom=%v cmd=%v focus=%v docW %d (was %d) tableW %d sideW %d", m.zoom, cmd != nil, m.focus, zl.docW, normal.docW, zl.tableW, zl.sideW)
+	}
+	view := m.plainView()
+	if strings.Contains(view, "WARM POOLS") {
+		t.Errorf("the table is still drawn while zoomed:\n%s", view)
+	}
+	if rows := strings.Split(view, "\n"); len(rows) != m.height {
+		t.Errorf("zoomed view is %d rows, want %d", len(rows), m.height)
+	}
+	if size := func() [2]int { w, h := m.shellPaneSize(); return [2]int{w, h} }(); size != [2]int{zl.docW, zl.docH} {
+		t.Errorf("the shell is asked for %v, want the zoomed pane %dx%d", size, zl.docW, zl.docH)
+	}
+
+	m, _ = m.zoomShell(m.selectedBox())
+	if m.zoom || m.layout().docW != normal.docW {
+		t.Error("zooming again did not give the window back")
+	}
+	m.zoom = true
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'b', Mod: tea.ModCtrl})
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	if m.zoom {
+		t.Error("leaving the shell must end the zoom")
 	}
 }
 
@@ -1021,7 +1064,7 @@ func TestShellInputQueue(t *testing.T) {
 	// A failed drain drops the queue instead of replaying stale keys.
 	failed := newM
 	failed.sending = true
-	failed.pending = []session.Key{{Text: "z"}}
+	failed.pending = []v1.Key{{Text: "z"}}
 	newM, cmd = failed.Update(sentMsg{pod: "agent-pool-bkl2p", count: 1, err: errFixture})
 	if cmd != nil {
 		t.Error("failed drain started another drain")
@@ -1120,7 +1163,7 @@ func TestClaimCreatesBashImmediately(t *testing.T) {
 	}
 
 	adopted := newM
-	adopted.boxes = append(adopted.boxes, cluster.Sandbox{
+	adopted.boxes = append(adopted.boxes, fleet.Sandbox{
 		Name: "agent-pool-new1", OwnerKind: "SandboxClaim", Owner: "dash-claim-1",
 		Phase: "Running", CPULimitMC: 500, MemLimitMiB: 256})
 	adopted.sessions["agent-pool-new1"] = true
@@ -1249,10 +1292,10 @@ func TestSelectionFollowsNameAcrossResort(t *testing.T) {
 	m := baseModel()
 	m.selected = "agent-pool-bkl2p" // index 2 in the base fleet
 
-	refilled := append([]cluster.Sandbox{}, m.boxes...)
-	newWarm := cluster.Sandbox{Name: "agent-pool-2pj7v", OwnerKind: "SandboxWarmPool",
+	refilled := append([]fleet.Sandbox{}, m.boxes...)
+	newWarm := fleet.Sandbox{Name: "agent-pool-2pj7v", OwnerKind: "SandboxWarmPool",
 		Owner: "agent-pool", Phase: "Running"}
-	refilled = append([]cluster.Sandbox{newWarm}, refilled...) // sorts to index 0
+	refilled = append([]fleet.Sandbox{newWarm}, refilled...) // sorts to index 0
 
 	newM, _ := m.Update(loadedMsg{boxes: refilled, sessions: m.sessions, metricsOK: true})
 	if newM.selected != "agent-pool-bkl2p" {
@@ -1269,7 +1312,7 @@ func TestSelectionFallbackUsesNodeOrder(t *testing.T) {
 	m.boxes[1].NodeName = "worker-a"
 	m.boxes[2].NodeName = "worker-a"
 	m.selected = "agent-pool-lqbmx"
-	refilled := []cluster.Sandbox{m.boxes[0], m.boxes[2]}
+	refilled := []fleet.Sandbox{m.boxes[0], m.boxes[2]}
 
 	newM, _ := m.Update(loadedMsg{boxes: refilled, sessions: m.sessions, metricsOK: true})
 	if got := newM.selected; got != "agent-pool-5ss7w" {
@@ -1536,7 +1579,7 @@ func TestHiddenTabSkipsShellCapture(t *testing.T) {
 func TestReloadIntoEmptySection(t *testing.T) {
 	m := baseModel()
 	m.setSection(sectionClaimed)
-	var warm []cluster.Sandbox
+	var warm []fleet.Sandbox
 	for _, b := range m.boxes {
 		if b.OwnerKind != "SandboxClaim" {
 			warm = append(warm, b)
@@ -1575,37 +1618,30 @@ func TestHelpToggles(t *testing.T) {
 	}
 }
 
-// A claimed sandbox's own counters override metrics-server: memory from the
-// first sample, CPU as the rate between two, even with metrics-server down.
-func TestLiveUsageFromCgroups(t *testing.T) {
+// The history graph only takes numbers the services measured: a sandbox whose
+// usage is unknown does not draw a flat zero.
+func TestUsageHistoryRecordsOnlyWhatWasMeasured(t *testing.T) {
 	m := baseModel()
-	m.metricsOK = false
 	pod := "agent-pool-bkl2p"
-	load := func(up float64, usec, mem int64) {
+	load := func(known bool, cpu int64) {
 		boxes := testBoxes()
-		next, _ := m.Update(loadedMsg{boxes: boxes, sessions: m.sessions,
-			cgroups: map[string]cluster.CgroupSample{pod: {Uptime: up, CPUUsec: usec, MemBytes: mem}}})
-		m = next
-	}
-	box := func() cluster.Sandbox {
-		for _, b := range m.boxes {
-			if b.Name == pod {
-				return b
+		for i := range boxes {
+			if boxes[i].Name == pod {
+				boxes[i].UsageKnown, boxes[i].CPUUsageMC = known, cpu
 			}
 		}
-		t.Fatal("pod missing")
-		return cluster.Sandbox{}
+		next, _ := m.Update(loadedMsg{boxes: boxes, sessions: m.sessions})
+		m = next
 	}
-	load(100, 1_000_000, 40<<20)
-	if b := box(); b.MemUsageMiB != 40 || m.usageKnown(pod) {
-		t.Fatalf("first sample: mem %d, known %v", b.MemUsageMiB, m.usageKnown(pod))
+	before := len(m.hist[pod].cpu)
+	load(false, 0)
+	if got := len(m.hist[pod].cpu); got != before {
+		t.Fatalf("unmeasured usage was recorded: %d -> %d samples", before, got)
 	}
-	load(102, 1_800_000, 41<<20) // 0.8 s CPU over 2 s = 400m
-	if b := box(); b.CPUUsageMC != 400 || b.MemUsageMiB != 41 || !m.usageKnown(pod) {
-		t.Fatalf("second sample: cpu %d mem %d known %v", b.CPUUsageMC, b.MemUsageMiB, m.usageKnown(pod))
-	}
-	if h := m.hist[pod]; len(h.cpu) == 0 || h.cpu[len(h.cpu)-1] != 400.0/500 {
-		t.Fatalf("history did not record the live rate: %v", h.cpu)
+	load(true, 400)
+	h := m.hist[pod]
+	if len(h.cpu) != before+1 || h.cpu[len(h.cpu)-1] != 400.0/500 {
+		t.Fatalf("history did not record the measured rate: %v", h.cpu)
 	}
 }
 
@@ -1614,11 +1650,11 @@ func TestWindowTabBarLayoutAndMouse(t *testing.T) {
 	m := baseModel()
 	m.selected = pod
 	m.sessions[pod] = true
-	m.windows = map[string][]session.Terminal{
+	m.windows = map[string][]v1.Terminal{
 		pod: {
-			{Address: "t1", Command: "bash"},
-			{Address: "t2", Name: "claude", Command: "node", Status: "working"},
-			{Address: "t3", Command: "tests"},
+			{Address: "t1", Command: "bash", Label: "bash"},
+			{Address: "t2", Name: "claude", Command: "node", Status: "working", Label: "claude"},
+			{Address: "t3", Command: "tests", Label: "tests"},
 		},
 	}
 	m.activeWindow = map[string]string{pod: "t1"}
@@ -1656,7 +1692,7 @@ func TestWindowTabBarLayoutAndMouse(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			tm := m
 			tm.width = tc.width
-			tm.boxes = append([]cluster.Sandbox(nil), m.boxes...)
+			tm.boxes = append([]fleet.Sandbox(nil), m.boxes...)
 			tm.boxes[2].Volume = tc.volume
 			plainRows := strings.Split(tm.plainView(), "\n")
 			y := tm.windowTabRow()
@@ -1718,11 +1754,11 @@ func TestPrefixWindowKeybindings(t *testing.T) {
 	m := baseModel()
 	m.selected = pod
 	m.sessions[pod] = true
-	m.windows = map[string][]session.Terminal{
+	m.windows = map[string][]v1.Terminal{
 		pod: {
-			{Address: "t1", Command: "bash"},
-			{Address: "t2", Command: "claude"},
-			{Address: "t3", Command: "tests"},
+			{Address: "t1", Command: "bash", Label: "bash"},
+			{Address: "t2", Command: "claude", Label: "claude"},
+			{Address: "t3", Command: "tests", Label: "tests"},
 		},
 	}
 	m.activeWindow = map[string]string{pod: "t1"}
@@ -1780,10 +1816,13 @@ func TestPrefixWindowKeybindings(t *testing.T) {
 		t.Fatalf("C-b C-b pending = %+v, want C-b", fwd.pending)
 	}
 
-	// C-b F opens fullscreen attach.
-	fullM, cmd := chord(m, tea.KeyPressMsg{Code: 'F', Text: "F"})
-	if cmd == nil || fullM.focus != focusNav {
-		t.Fatalf("C-b F = focus %v cmd=%v", fullM.focus, cmd != nil)
+	// C-b F gives the shell the whole window, and again gives it back.
+	zoomed, _ := chord(m, tea.KeyPressMsg{Code: 'F', Text: "F"})
+	if !zoomed.zoom || zoomed.focus != focusShell {
+		t.Fatalf("C-b F = zoom %v focus %v", zoomed.zoom, zoomed.focus)
+	}
+	if back, _ := chord(zoomed, tea.KeyPressMsg{Code: 'F', Text: "F"}); back.zoom {
+		t.Fatal("C-b F again did not give the window back")
 	}
 
 	// C-b d leaves shell like C-b q.
@@ -1798,13 +1837,13 @@ func TestWindowLifecycleMessages(t *testing.T) {
 	m := baseModel()
 	m.selected = pod
 	m.sessions[pod] = true
-	m.windows = map[string][]session.Terminal{
-		pod: {{Address: "t1", Command: "bash"}},
+	m.windows = map[string][]v1.Terminal{
+		pod: {{Address: "t1", Command: "bash", Label: "bash"}},
 	}
 	m.activeWindow = map[string]string{pod: "t1"}
 
 	// Creating a window adds it, selects it, and focuses the shell.
-	next, cmd := m.Update(windowCreatedMsg{pod: pod, term: session.Terminal{Address: "t2", Command: "bash"}})
+	next, cmd := m.Update(windowCreatedMsg{pod: pod, term: v1.Terminal{Address: "t2", Command: "bash", Label: "bash"}})
 	if cmd == nil || next.focus != focusShell || next.activeTerm(pod) != "t2" || len(next.podWindows(pod)) != 2 {
 		t.Fatalf("after create: focus=%v active=%q wins=%d", next.focus, next.activeTerm(pod), len(next.podWindows(pod)))
 	}
@@ -1819,5 +1858,27 @@ func TestWindowLifecycleMessages(t *testing.T) {
 	next, _ = next.Update(windowKilledMsg{pod: pod, term: "t1"})
 	if next.focus != focusNav || next.hasSession(pod) || len(next.podWindows(pod)) != 0 {
 		t.Fatalf("after kill last: focus=%v hasSession=%v wins=%d", next.focus, next.hasSession(pod), len(next.podWindows(pod)))
+	}
+}
+
+// The first read of the fleet goes through the tab's own API: Init once ran it
+// with none, which only a real terminal noticed. Init's first command is that
+// read; the others are timers, which are left unrun.
+func TestInitReadsTheFleetThroughTheTabsAPI(t *testing.T) {
+	api := &fakeAPI{fleet: v1.Fleet{Pods: []v1.Pod{{Name: "pi-1", Namespace: "nightshift", Phase: "Running"}}}}
+	m := New(*ghtheme.DefaultTheme, api)
+	batch, ok := m.Init()().(tea.BatchMsg)
+	if !ok || len(batch) == 0 {
+		t.Fatalf("Init did not return a batch of commands")
+	}
+	loaded, ok := batch[0]().(loadedMsg)
+	if !ok || loaded.err != nil || len(loaded.boxes) != 1 || loaded.boxes[0].Name != "pi-1" {
+		t.Fatalf("the first command of Init loaded %+v", loaded)
+	}
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	want := []string{v1.IncludeConfigs, v1.IncludeLive, v1.IncludeVersions, v1.IncludeTerminals}
+	if api.fleets != 1 || strings.Join(api.include, ",") != strings.Join(want, ",") {
+		t.Errorf("fleet read %d times with %v, want once with %v", api.fleets, api.include, want)
 	}
 }

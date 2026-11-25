@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -12,6 +13,9 @@ import (
 	v1 "github.com/tmih06/nightshift/api/v1"
 	"github.com/tmih06/nightshift/internal/services/checkout"
 )
+
+// aboutBlank is the problem type that says the code says it all.
+const aboutBlank = "about:blank"
 
 // apiError is an error with the status and code it is reported under.
 type apiError struct {
@@ -34,14 +38,29 @@ func unavailable(detail string) error {
 	return &apiError{status: http.StatusNotImplemented, code: v1.CodeUnavailable, detail: detail}
 }
 
-var titles = map[string]string{
-	v1.CodeInvalid:      "Invalid request",
-	v1.CodeUnauthorized: "Unauthorized",
-	v1.CodeNotFound:     "Not found",
-	v1.CodeConflict:     "Conflict",
-	v1.CodeUnavailable:  "Unavailable",
-	v1.CodeTimeout:      "Timed out",
-	v1.CodeInternal:     "Internal error",
+// title is the short summary that goes with a code.
+func title(code string) string {
+	switch code {
+	case v1.CodeInvalid:
+		return "Invalid request"
+	case v1.CodeUnauthorized:
+		return "Unauthorized"
+	case v1.CodeNotFound:
+		return "Not found"
+	case v1.CodeConflict:
+		return "Conflict"
+	case v1.CodeUnavailable:
+		return "Unavailable"
+	case v1.CodeTimeout:
+		return "Timed out"
+	}
+	return "Internal error"
+}
+
+// problemOf is the Problem an error is reported as.
+func problemOf(err error) v1.Problem {
+	ae := classify(err)
+	return v1.Problem{Type: aboutBlank, Title: title(ae.code), Status: ae.status, Detail: ae.detail, Code: ae.code}
 }
 
 // classify turns anything a backend returned into the status and code the
@@ -80,19 +99,12 @@ func unreachable(msg string) bool {
 
 // writeProblem answers with err as application/problem+json.
 func writeProblem(w http.ResponseWriter, err error) {
-	ae := classify(err)
-	if ae.status >= http.StatusInternalServerError && ae.status != http.StatusNotImplemented {
-		log.Error("request failed", "status", ae.status, "err", ae.detail)
-	}
-	body := v1.Problem{
-		Type:   "about:blank",
-		Title:  titles[ae.code],
-		Status: ae.status,
-		Detail: ae.detail,
-		Code:   ae.code,
+	body := problemOf(err)
+	if body.Status >= http.StatusInternalServerError && body.Status != http.StatusNotImplemented {
+		log.Error("request failed", "status", body.Status, "err", body.Detail)
 	}
 	w.Header().Set("Content-Type", "application/problem+json")
-	w.WriteHeader(ae.status)
+	w.WriteHeader(body.Status)
 	if err := json.NewEncoder(w).Encode(body); err != nil {
 		log.Debug("write problem", "err", err)
 	}
@@ -105,4 +117,12 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		log.Debug("write response", "err", err)
 	}
+}
+
+// wrap says what was being done when err happened; nil stays nil.
+func wrap(what string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", what, err)
 }

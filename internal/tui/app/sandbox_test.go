@@ -7,21 +7,43 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	v1 "github.com/tmih06/nightshift/api/v1"
 	ghtui "github.com/tmih06/nightshift/internal/ghdash/tui"
-	"github.com/tmih06/nightshift/internal/services/cluster"
 	"github.com/tmih06/nightshift/internal/tui/dashboard"
+	"github.com/tmih06/nightshift/internal/tui/fleet"
 )
 
 var rocket7 = ghtui.SandboxPullRequestMsg{Repo: "acme/rocket", Number: 7,
 	URL: "https://github.com/acme/rocket/pull/7", Branch: "fix-auth"}
 
+// piHarness and codexHarness are what the services report for the two pools.
+func piHarness() v1.Harness {
+	return v1.Harness{Name: "pi", Label: "Pi", Command: "pi", Models: []v1.HarnessModel{
+		{ID: "anthropic/claude-sonnet", Label: "anthropic/claude-sonnet", Note: "anthropic"},
+		{ID: "anthropic/claude-opus", Label: "anthropic/claude-opus", Note: "anthropic"},
+		{ID: "openai/gpt-5.3-codex", Label: "openai/gpt-5.3-codex", Note: "openai"},
+		{ID: "google/gemini-2.5-pro", Label: "google/gemini-2.5-pro", Note: "google"},
+		{ID: "", Label: "default", Note: "harness default"},
+	}}
+}
+
+func codexHarness() v1.Harness {
+	return v1.Harness{Name: "codex", Label: "Codex", Command: "codex", Models: []v1.HarnessModel{
+		{ID: "gpt-5.3-codex", Label: "gpt-5.3-codex", Note: "coding"},
+		{ID: "gpt-5.2-codex", Label: "gpt-5.2-codex", Note: "coding"},
+		{ID: "gpt-5.5", Label: "gpt-5.5", Note: "general"},
+		{ID: "gpt-5.2", Label: "gpt-5.2", Note: "general"},
+		{ID: "", Label: "default", Note: "harness default"},
+	}}
+}
+
 // withPools is m on the GitHub tab over a fleet of two pools.
 func withPools(t *testing.T) (Model, *fakePRs) {
 	t.Helper()
 	m, gh := newModel(t)
-	m.sandboxes = m.sandboxes.WithFleet(nil, map[string]cluster.Pool{
-		"pi-pool":    {Name: "pi-pool", Template: "pi-template", Ready: 1, Desired: 1},
-		"codex-pool": {Name: "codex-pool", Template: "codex-template", Ready: 0, Desired: 1},
+	m.sandboxes = m.sandboxes.WithFleet(nil, map[string]fleet.Pool{
+		"pi-pool":    {Name: "pi-pool", Template: "pi-template", Ready: 1, Desired: 1, Harness: piHarness()},
+		"codex-pool": {Name: "codex-pool", Template: "codex-template", Ready: 0, Desired: 1, Harness: codexHarness()},
 	})
 	return press(m, "tab"), gh
 }
@@ -436,13 +458,13 @@ func TestIssuePickerMouseFocusesBranchAndPicksPool(t *testing.T) {
 
 func TestValidateBranchName(t *testing.T) {
 	for _, good := range []string{"issue-42", "feat/dark-mode", "fix/user_login.v2", "main"} {
-		if got := validateBranchName(good); got != "" {
-			t.Errorf("validateBranchName(%q) = %q, want valid", good, got)
+		if got := v1.BranchProblem(good); got != "" {
+			t.Errorf("v1.BranchProblem(%q) = %q, want valid", good, got)
 		}
 	}
 	for _, bad := range []string{"", "has space", "-leading", "/leading", ".leading", "trailing/", "trailing.", "foo.lock", "a..b", "a//b", "a@{b", "@", "a~1", "a^2", "a:b", "a?b", "a*b", "a[b", `a\b`} {
-		if got := validateBranchName(bad); got == "" {
-			t.Errorf("validateBranchName(%q) = valid, want error", bad)
+		if got := v1.BranchProblem(bad); got == "" {
+			t.Errorf("v1.BranchProblem(%q) = valid, want error", bad)
 		}
 	}
 }

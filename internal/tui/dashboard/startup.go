@@ -6,20 +6,19 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
-
-	"github.com/tmih06/nightshift/internal/services/cluster"
+	"github.com/tmih06/nightshift/internal/tui/fleet"
 )
 
 const startingLabel = "starting"
 
 // stageLabel is the startup stage as the row and sidebar name it.
-func stageLabel(stage cluster.StartupStage) string {
+func stageLabel(stage fleet.StartupStage) string {
 	switch stage {
-	case cluster.StageScheduling:
+	case fleet.StageScheduling:
 		return "scheduling"
-	case cluster.StagePulling:
+	case fleet.StagePulling:
 		return "pulling"
-	case cluster.StageReadying:
+	case fleet.StageReadying:
 		return "readying"
 	default:
 		return startingLabel
@@ -27,9 +26,9 @@ func stageLabel(stage cluster.StartupStage) string {
 }
 
 // startupBar is one glyph per startup stage: done, current, and pending.
-func startupBar(stage cluster.StartupStage, failing bool, bg func(lipgloss.Style) lipgloss.Style) string {
+func startupBar(stage fleet.StartupStage, failing bool, bg func(lipgloss.Style) lipgloss.Style) string {
 	var b strings.Builder
-	for s := 0; s < cluster.StartupStageCount; s++ {
+	for s := 0; s < fleet.StartupStageCount; s++ {
 		switch {
 		case s < int(stage):
 			b.WriteString(bg(lipgloss.NewStyle().Foreground(warmColor)).Render("█"))
@@ -49,8 +48,8 @@ func startupBar(stage cluster.StartupStage, failing bool, bg func(lipgloss.Style
 // startupSubtitle is the row's bottom-left cell while a pod starts up: an
 // animated marker, the stage with its failure count, a stage bar, and how
 // long the stage has been going.
-func startupSubtitle(st *cluster.Startup, now time.Time, compact bool, bg func(lipgloss.Style) lipgloss.Style) string {
-	frame := spinner[int(now.UnixMilli()/100)%len(spinner)]
+func startupSubtitle(st *fleet.Startup, now time.Time, compact bool, bg func(lipgloss.Style) lipgloss.Style) string {
+	frame := spinnerFrame(now)
 	active := bg(lipgloss.NewStyle().Foreground(warnColor))
 	if st.Failing() {
 		frame = "✗"
@@ -69,15 +68,15 @@ func startupSubtitle(st *cluster.Startup, now time.Time, compact bool, bg func(l
 
 // startupStageLine is the sidebar's pipeline checklist: past stages ticked,
 // the current one spinning with its elapsed time, pending ones faint.
-func startupStageLine(st *cluster.Startup, now time.Time) string {
-	parts := make([]string, 0, cluster.StartupStageCount)
-	for s := 0; s < cluster.StartupStageCount; s++ {
-		name := stageLabel(cluster.StartupStage(s))
+func startupStageLine(st *fleet.Startup, now time.Time) string {
+	parts := make([]string, 0, fleet.StartupStageCount)
+	for s := 0; s < fleet.StartupStageCount; s++ {
+		name := stageLabel(fleet.StartupStage(s))
 		switch {
 		case s < int(st.Stage):
 			parts = append(parts, warmStyle.Render("✓ "+name))
 		case s == int(st.Stage):
-			frame := spinner[int(now.UnixMilli()/100)%len(spinner)]
+			frame := spinnerFrame(now)
 			style := warnStyle
 			if st.Failing() {
 				frame, style = "✗", badStyle
@@ -117,7 +116,7 @@ func tailCut(s string, width int) string {
 
 // startupInfoLines is the sidebar's startup block: the pipeline checklist,
 // and a failure line when the startup is backing off.
-func startupInfoLines(st *cluster.Startup, now time.Time, width int) []string {
+func startupInfoLines(st *fleet.Startup, now time.Time, width int) []string {
 	lines := []string{truncateANSI(startupStageLine(st, now), max(width, 1))}
 	if st.Failing() {
 		label := st.Err
@@ -133,7 +132,7 @@ func startupInfoLines(st *cluster.Startup, now time.Time, width int) []string {
 
 // startupLineCount is how many lines the sidebar's startup block takes, so
 // the layout can make room for it.
-func startupLineCount(st *cluster.Startup) int {
+func startupLineCount(st *fleet.Startup) int {
 	if st == nil {
 		return 0
 	}

@@ -2,6 +2,7 @@ package live
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -97,7 +98,7 @@ func (t *Terminals) guard(ctx context.Context, pod string) error {
 
 func terminalOf(x session.Terminal) v1.Terminal {
 	return v1.Terminal{
-		Address: x.Address, Name: x.Name, Command: x.Command, Title: x.Title,
+		Address: x.Address, Name: x.Name, Command: x.Command, Title: x.Title, Label: x.Label(),
 		Status: x.Status, CWD: x.CWD, CreatedAt: x.Created(),
 	}
 }
@@ -136,7 +137,7 @@ func open(pod string, req v1.TerminalRequest) (session.Terminal, error) {
 	plain := req.Name == "" && req.From == "" && req.CWD == ""
 	if existing, err := session.List(pod); plain && err == nil && len(existing) == 0 {
 		if err := session.Ensure(pod); err != nil {
-			return session.Terminal{}, err
+			return session.Terminal{}, fmt.Errorf("open: %w", err)
 		}
 		terms, err := session.List(pod)
 		if err != nil || len(terms) == 0 {
@@ -144,13 +145,19 @@ func open(pod string, req v1.TerminalRequest) (session.Terminal, error) {
 		}
 		return terms[0], nil
 	}
+	var (
+		term session.Terminal
+		err  error
+	)
 	switch {
 	case req.From != "":
-		return session.CreateFrom(pod, req.Name, req.From)
+		term, err = session.CreateFrom(pod, req.Name, req.From)
 	case req.CWD != "":
-		return session.CreateIn(pod, req.Name, req.CWD)
+		term, err = session.CreateIn(pod, req.Name, req.CWD)
+	default:
+		term, err = session.Create(pod, req.Name)
 	}
-	return session.Create(pod, req.Name)
+	return term, wrapErr("open a terminal", err)
 }
 
 // CloseTerminal stops a terminal.
@@ -171,7 +178,7 @@ func (t *Terminals) Screen(ctx context.Context, pod, address string, q server.Sc
 	t.touch(ref)
 	defer t.touch(ref)
 	lines, err := call(ctx, func() ([]string, error) {
-		return session.WatchScreenAs(pod, address, q.Viewer, q.Cols, q.Rows, q.Resize, q.Wait)
+		return session.WatchScreenFor(session.Watch{Pod: pod, Term: address, Viewer: q.Viewer, W: q.Cols, H: q.Rows, Resize: q.Resize, Wait: q.Wait})
 	})
 	if err != nil {
 		return v1.Screen{}, err

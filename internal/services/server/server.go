@@ -182,16 +182,16 @@ func need[T any](x T, what string) (T, error) {
 
 func (s *Server) metaRoutes() []route {
 	return []route{
-		{method: "GET", pattern: "/v1/healthz", public: true, handle: func(w http.ResponseWriter, _ *http.Request) error {
+		{method: http.MethodGet, pattern: "/v1/healthz", public: true, handle: func(w http.ResponseWriter, _ *http.Request) error {
 			w.Header().Set("Content-Type", "text/plain")
 			_, err := w.Write([]byte("ok\n"))
-			return err
+			return wrap("write the answer", err)
 		}},
-		{method: "GET", pattern: "/v1", handle: s.info},
-		{method: "GET", pattern: "/v1/openapi.yaml", handle: func(w http.ResponseWriter, _ *http.Request) error {
+		{method: http.MethodGet, pattern: "/v1", handle: s.info},
+		{method: http.MethodGet, pattern: "/v1/openapi.yaml", handle: func(w http.ResponseWriter, _ *http.Request) error {
 			w.Header().Set("Content-Type", "application/yaml")
 			_, err := w.Write(api.OpenAPI)
-			return err
+			return wrap("write the answer", err)
 		}},
 	}
 }

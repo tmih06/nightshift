@@ -65,12 +65,33 @@ func parseVolumes(raw []byte) ([]KeptVolume, error) {
 		switch {
 		case a[prAnnotation] != "":
 			v.For.Kind = VolumePR
-			v.For.Number, _ = strconv.Atoi(a[prAnnotation])
+			v.For.Number = atoi(a[prAnnotation])
 		case a[issueAnnotation] != "":
 			v.For.Kind = VolumeIssue
-			v.For.Number, _ = strconv.Atoi(a[issueAnnotation])
+			v.For.Number = atoi(a[issueAnnotation])
 		}
 		vols = append(vols, v)
 	}
 	return vols, nil
+}
+
+// SandboxOnVolume is the sandbox that mounts the volume, or "" when none does.
+func SandboxOnVolume(volume string) (string, error) {
+	out, err := runKubectl(nil, "get", "sandbox", "-l", VolumeLabel+"="+volume,
+		"-o", "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}")
+	if err != nil {
+		return "", err
+	}
+	name, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
+	return name, nil
+}
+
+// atoi is the number s says, or 0 when it says none: an annotation somebody
+// edited by hand is not worth failing a listing for.
+func atoi(s string) int {
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0
+	}
+	return n
 }

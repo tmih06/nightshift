@@ -106,7 +106,7 @@ func (m model) clickWindowBar(x, y int, button tea.MouseButton) (model, tea.Cmd,
 			if button == tea.MouseMiddle {
 				m.prefix = false
 				m.flash("closing window…")
-				return m, killWindowCmd(b.Name, s.address), true
+				return m, killWindowCmd(m.api, b.Name, s.address), true
 			}
 			if button != tea.MouseLeft {
 				return m, nil, false
@@ -124,7 +124,7 @@ func (m model) clickWindowBar(x, y int, button tea.MouseButton) (model, tea.Cmd,
 			}
 			m.prefix = false
 			m.flash("opening new window…")
-			return m, createWindowCmd(b.Name, m.activeTerm(b.Name)), true
+			return m, createWindowCmd(m.api, b.Name, m.activeTerm(b.Name)), true
 		case winActionClose:
 			if button != tea.MouseLeft {
 				return m, nil, false
@@ -135,7 +135,7 @@ func (m model) clickWindowBar(x, y int, button tea.MouseButton) (model, tea.Cmd,
 			}
 			m.prefix = false
 			m.flash("closing window…")
-			return m, killWindowCmd(b.Name, term), true
+			return m, killWindowCmd(m.api, b.Name, term), true
 		}
 	}
 	return m, nil, false
@@ -178,7 +178,7 @@ func (m model) applyClick(x, y int) (model, tea.Cmd) {
 		}
 		if b := m.selectedBox(); b != nil && b.Claimed() && b.Phase == "Running" {
 			m.flash("starting bash in " + b.Name)
-			return m, attachCmd(b.Name)
+			return m, attachCmd(m.api, b.Name)
 		}
 		return m, nil
 	}

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -20,11 +21,11 @@ var viewerID = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
 func (s *Server) terminalRoutes() []route {
 	const base = "/v1/sandboxes/{name}/terminals"
 	return []route{
-		{method: "GET", pattern: base, handle: s.listTerminals},
-		{method: "POST", pattern: base, handle: s.createTerminal},
-		{method: "DELETE", pattern: base + "/{address}", handle: s.deleteTerminal},
-		{method: "GET", pattern: base + "/{address}/screen", handle: s.getScreen},
-		{method: "POST", pattern: base + "/{address}/input", handle: s.sendInput},
+		{method: http.MethodGet, pattern: base, handle: s.listTerminals},
+		{method: http.MethodPost, pattern: base, handle: s.createTerminal},
+		{method: http.MethodDelete, pattern: base + "/{address}", handle: s.deleteTerminal},
+		{method: http.MethodGet, pattern: base + "/{address}/screen", handle: s.getScreen},
+		{method: http.MethodPost, pattern: base + "/{address}/input", handle: s.sendInput},
 	}
 }
 
@@ -35,7 +36,7 @@ func (s *Server) listTerminals(w http.ResponseWriter, r *http.Request) error {
 	}
 	terms, err := t.Terminals(r.Context(), r.PathValue("name"))
 	if err != nil {
-		return err
+		return fmt.Errorf("list terminals: %w", err)
 	}
 	if terms == nil {
 		terms = []v1.Terminal{}
@@ -57,7 +58,7 @@ func (s *Server) createTerminal(w http.ResponseWriter, r *http.Request) error {
 	}
 	term, err := t.OpenTerminal(r.Context(), r.PathValue("name"), req)
 	if err != nil {
-		return err
+		return fmt.Errorf("create terminal: %w", err)
 	}
 	writeJSON(w, http.StatusCreated, term)
 	return nil
@@ -69,7 +70,7 @@ func (s *Server) deleteTerminal(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	if err := t.CloseTerminal(r.Context(), r.PathValue("name"), r.PathValue("address")); err != nil {
-		return err
+		return fmt.Errorf("delete terminal: %w", err)
 	}
 	w.WriteHeader(http.StatusNoContent)
 	return nil
@@ -113,7 +114,7 @@ func (s *Server) getScreen(w http.ResponseWriter, r *http.Request) error {
 	}
 	screen, err := t.Screen(r.Context(), r.PathValue("name"), r.PathValue("address"), q)
 	if err != nil {
-		return err
+		return fmt.Errorf("get screen: %w", err)
 	}
 	writeJSON(w, http.StatusOK, screen)
 	return nil
@@ -132,7 +133,7 @@ func (s *Server) sendInput(w http.ResponseWriter, r *http.Request) error {
 		return invalid("too many keys in one request")
 	}
 	if err := t.Input(r.Context(), r.PathValue("name"), r.PathValue("address"), in.Keys); err != nil {
-		return err
+		return fmt.Errorf("send input: %w", err)
 	}
 	w.WriteHeader(http.StatusNoContent)
 	return nil

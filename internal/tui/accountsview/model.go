@@ -1,7 +1,7 @@
 // Package accountsview is the Accounts tab: the coding-agent accounts signed
 // in to Nightshift, which one each agent's sandboxes use, and how much each has
 // been used. It draws what internal/accounts fetches and sends its actions
-// back; it reaches the cluster only through accounts.Service.
+// back; it reaches the cluster only through API.
 package accountsview
 
 import (
@@ -15,8 +15,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/log/v2"
 
+	v1 "github.com/tmih06/nightshift/api/v1"
 	ghtheme "github.com/tmih06/nightshift/internal/ghdash/tui/theme"
-	"github.com/tmih06/nightshift/internal/services/accounts"
 	"github.com/tmih06/nightshift/internal/tui/dialog"
 )
 
@@ -49,7 +49,7 @@ type modal struct {
 	choice int
 
 	// sign-in link
-	login accounts.Login
+	login v1.Login
 	input textinput.Model
 	busy  bool
 	err   string
@@ -61,17 +61,17 @@ type modal struct {
 
 // Model is the tab.
 type Model struct {
-	svc   accounts.Service
+	svc   API
 	theme ghtheme.Theme
 	st    styles
 	now   func() time.Time
 
-	snap    accounts.Snapshot
+	snap    v1.Accounts
 	loaded  bool
 	loading bool
 	err     error
 
-	flat   []accounts.Account // accounts in the order the list shows them
+	flat   []v1.Account // accounts in the order the list shows them
 	cursor int
 	top    int // first list line in view
 
@@ -89,7 +89,7 @@ type Model struct {
 }
 
 // New returns the tab, hidden until it is first shown.
-func New(theme ghtheme.Theme, svc accounts.Service) Model {
+func New(theme ghtheme.Theme, svc API) Model {
 	return Model{svc: svc, theme: theme, st: newStyles(theme), now: time.Now, hidden: true}
 }
 
@@ -102,7 +102,7 @@ func (m Model) Capturing() bool { return m.modal.kind != modalNone }
 // Messages the tab owns; the root model routes them here and nowhere else.
 type (
 	snapshotMsg struct {
-		snap accounts.Snapshot
+		snap v1.Accounts
 		err  error
 	}
 	tickMsg struct{ gen int }
@@ -113,7 +113,7 @@ type (
 		refetch bool
 	}
 	loginStartedMsg struct {
-		login accounts.Login
+		login v1.Login
 		err   error
 	}
 	loginDoneMsg struct {
@@ -160,7 +160,7 @@ func (m Model) fetch() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), fetchWindow)
 		defer cancel()
-		snap, err := svc.Fetch(ctx)
+		snap, err := svc.Accounts(ctx)
 		return snapshotMsg{snap: snap, err: err}
 	}
 }
@@ -246,15 +246,15 @@ func (m Model) paste(msg tea.PasteMsg) (Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m *Model) setSnapshot(s accounts.Snapshot) {
+func (m *Model) setSnapshot(s v1.Accounts) {
 	selected := ""
 	if a, ok := m.selected(); ok {
 		selected = a.Name
 	}
 	m.snap = s
 	m.flat = m.flat[:0]
-	for _, p := range accounts.Providers() {
-		m.flat = append(m.flat, s.ByProvider(p.ID)...)
+	for _, p := range m.snap.Providers {
+		m.flat = append(m.flat, byProvider(s, p.ID)...)
 	}
 	m.cursor = 0
 	for i := range m.flat {
@@ -265,9 +265,9 @@ func (m *Model) setSnapshot(s accounts.Snapshot) {
 	m.keepCursorInView()
 }
 
-func (m Model) selected() (accounts.Account, bool) {
+func (m Model) selected() (v1.Account, bool) {
 	if m.cursor < 0 || m.cursor >= len(m.flat) {
-		return accounts.Account{}, false
+		return v1.Account{}, false
 	}
 	return m.flat[m.cursor], true
 }
@@ -338,7 +338,7 @@ func (m Model) actionKey(k string) (Model, tea.Cmd) {
 		return m.toggleSelected()
 	case "x":
 		if a, ok := m.selected(); ok {
-			m.modal = modal{kind: modalRemove, name: a.Name, label: a.Label()}
+			m.modal = modal{kind: modalRemove, name: a.Name, label: label(a)}
 		}
 	case "r":
 		return m.refreshSelected()
@@ -351,7 +351,7 @@ func (m Model) actionKey(k string) (Model, tea.Cmd) {
 func (m Model) openProviderPicker() Model {
 	choice := 0
 	if a, ok := m.selected(); ok {
-		for i, p := range accounts.Providers() {
+		for i, p := range m.snap.Providers {
 			if p.ID == a.Provider {
 				choice = i
 			}
@@ -362,7 +362,7 @@ func (m Model) openProviderPicker() Model {
 }
 
 func (m Model) keyProvider(msg tea.KeyPressMsg) (Model, tea.Cmd) {
-	n := len(accounts.Providers())
+	n := len(m.snap.Providers)
 	switch msg.String() {
 	case keyEsc, "q", keyCtrlC:
 		m.modal = modal{}
@@ -371,7 +371,7 @@ func (m Model) keyProvider(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "k", "up", "shift+tab":
 		m.modal.choice = (m.modal.choice + n - 1) % n
 	case keyEnter:
-		p := accounts.Providers()[m.modal.choice]
+		p := m.snap.Providers[m.modal.choice]
 		m.modal.busy = true
 		svc := m.svc
 		return m, func() tea.Msg {
@@ -449,7 +449,7 @@ func (m Model) loginDone(msg loginDoneMsg) (Model, tea.Cmd) {
 		return m, nil
 	}
 	m.modal = modal{}
-	p, _ := accounts.ProviderByID(msg.label)
+	p := providerByID(m.snap, msg.label)
 	m.loading = true
 	return m, tea.Batch(m.fetch(), m.say("Signed in to "+p.Name+". Press enter on it to use it for sandboxes.", false))
 }
@@ -462,7 +462,7 @@ func (m Model) keyRemove(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m, func() tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), fetchWindow)
 			defer cancel()
-			if err := svc.Remove(ctx, name); err != nil {
+			if err := svc.RemoveAccount(ctx, name); err != nil {
 				return doneMsg{err: err}
 			}
 			return doneMsg{text: "Removed " + label, refetch: true}
@@ -482,19 +482,19 @@ func (m Model) useSelected() (Model, tea.Cmd) {
 		cmd := m.say("That account is disabled; press d to enable it first.", true)
 		return m, cmd
 	}
-	p, _ := accounts.ProviderByID(a.Provider)
+	p := providerByID(m.snap, a.Provider)
 	svc := m.svc
-	m.notice, m.noticeBad, m.noticeAt = "Switching "+p.Name+" to "+a.Label()+"…", false, m.now()
+	m.notice, m.noticeBad, m.noticeAt = "Switching "+p.Name+" to "+label(a)+"…", false, m.now()
 	return m, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 		if err := svc.SetActive(ctx, a.Provider, a.Name); err != nil {
 			return doneMsg{err: err}
 		}
-		if _, err := svc.PublishNow(ctx); err != nil {
+		if _, err := svc.Publish(ctx); err != nil {
 			return doneMsg{err: err, refetch: true}
 		}
-		return doneMsg{text: p.Name + " sandboxes now use " + a.Label() + " (new sandboxes; running ones keep their login)", refetch: true}
+		return doneMsg{text: p.Name + " sandboxes now use " + label(a) + " (new sandboxes; running ones keep their login)", refetch: true}
 	}
 }
 
@@ -515,7 +515,7 @@ func (m Model) toggleSelected() (Model, tea.Cmd) {
 		if err := svc.SetDisabled(ctx, a.Name, disable); err != nil {
 			return doneMsg{err: err}
 		}
-		return doneMsg{text: verb + a.Label() + ". Press p to publish the change.", refetch: true}
+		return doneMsg{text: verb + label(a) + ". Press p to publish the change.", refetch: true}
 	}
 }
 
@@ -528,10 +528,10 @@ func (m Model) refreshSelected() (Model, tea.Cmd) {
 	return m, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), fetchWindow)
 		defer cancel()
-		if err := svc.Refresh(ctx, a.Name); err != nil {
+		if err := svc.RefreshAccount(ctx, a.Name); err != nil {
 			return doneMsg{err: err}
 		}
-		return doneMsg{text: "Refreshed " + a.Label(), refetch: true}
+		return doneMsg{text: "Refreshed " + label(a), refetch: true}
 	}
 }
 
@@ -541,7 +541,7 @@ func (m Model) publishNow(label string) (Model, tea.Cmd) {
 	return m, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		if _, err := svc.PublishNow(ctx); err != nil {
+		if _, err := svc.Publish(ctx); err != nil {
 			return doneMsg{err: err}
 		}
 		return doneMsg{text: "Published. New sandboxes pick it up; running ones keep their login.", refetch: true}

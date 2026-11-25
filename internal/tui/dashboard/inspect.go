@@ -7,8 +7,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
-
-	"github.com/tmih06/nightshift/internal/services/cluster"
+	"github.com/tmih06/nightshift/internal/tui/fleet"
 )
 
 func (m model) inspectPageSize() int {
@@ -116,11 +115,11 @@ func (m model) docInspectView(l layout) (lines []string, footerText string) {
 	return doc[offset:end], strings.Join(footer, " · ")
 }
 
-func buildPodMarkdown(p cluster.Pool, b *cluster.Sandbox) string {
+func buildPodMarkdown(p fleet.Pool, b *fleet.Sandbox) string {
 	switch b.PodRole() {
-	case cluster.RoleWarm:
+	case fleet.RoleWarm:
 		return buildWarmMarkdown(p, b)
-	case cluster.RoleEgress:
+	case fleet.RoleEgress:
 		return buildEgressMarkdown(b)
 	default:
 		return buildGenericPodMarkdown(b)
@@ -137,7 +136,7 @@ func appendYAMLSection(sections *[]string, kind, name, body string) {
 	*sections = append(*sections, "## "+kind+"\n```yaml\n"+body+"\n```")
 }
 
-func buildWarmMarkdown(p cluster.Pool, b *cluster.Sandbox) string {
+func buildWarmMarkdown(p fleet.Pool, b *fleet.Sandbox) string {
 	var sections []string
 
 	var intro strings.Builder
@@ -162,7 +161,7 @@ func buildWarmMarkdown(p cluster.Pool, b *cluster.Sandbox) string {
 	return strings.Join(sections, "\n\n---\n\n")
 }
 
-func buildEgressMarkdown(b *cluster.Sandbox) string {
+func buildEgressMarkdown(b *fleet.Sandbox) string {
 	var sections []string
 	var intro strings.Builder
 	fmt.Fprintf(&intro, "# %s · egress proxy\n", b.Name)
@@ -186,7 +185,7 @@ func buildEgressMarkdown(b *cluster.Sandbox) string {
 	return strings.Join(sections, "\n\n---\n\n")
 }
 
-func buildGenericPodMarkdown(b *cluster.Sandbox) string {
+func buildGenericPodMarkdown(b *fleet.Sandbox) string {
 	sections := make([]string, 0, 3)
 	kind, _ := kindName(b)
 	var intro strings.Builder

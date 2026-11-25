@@ -64,6 +64,24 @@ func loadSpec(t *testing.T) object {
 	return spec
 }
 
+// asObject is v as a YAML mapping, or nil when it is not one.
+func asObject(v any) object {
+	m, ok := v.(object)
+	if !ok {
+		return nil
+	}
+	return m
+}
+
+// asText is v as a string, or "" when it is not one.
+func asText(v any) string {
+	s, ok := v.(string)
+	if !ok {
+		return ""
+	}
+	return s
+}
+
 func dig(m object, keys ...string) object {
 	cur := m
 	for _, k := range keys {
@@ -114,13 +132,13 @@ func compare(spec, schema object, typ reflect.Type, where string) []string {
 	}
 	switch typ.Kind() {
 	case reflect.Slice:
-		items, _ := schema["items"].(object)
+		items := asObject(schema["items"])
 		if items == nil {
 			return nil
 		}
 		return compare(spec, items, typ.Elem(), where+"[]")
 	case reflect.Map:
-		extra, _ := schema["additionalProperties"].(object)
+		extra := asObject(schema["additionalProperties"])
 		if extra == nil {
 			return nil
 		}
@@ -137,7 +155,7 @@ func compare(spec, schema object, typ reflect.Type, where string) []string {
 
 func compareObject(spec, schema object, typ reflect.Type, where string) []string {
 	var bad []string
-	props, _ := schema["properties"].(object)
+	props := asObject(schema["properties"])
 	fields := jsonFields(typ)
 	required := map[string]bool{}
 	if list, ok := schema["required"].([]any); ok {
@@ -206,13 +224,13 @@ func TestEveryOperationIsDocumented(t *testing.T) {
 	spec := loadSpec(t)
 	seen := map[string]string{}
 	for path, item := range dig(spec, "paths") {
-		for method, op := range item.(object) {
+		for method, op := range asObject(item) {
 			o, ok := op.(object)
 			if !ok || method == "parameters" {
 				continue
 			}
 			where := strings.ToUpper(method) + " " + path
-			id, _ := o["operationId"].(string)
+			id := asText(o["operationId"])
 			if id == "" {
 				t.Errorf("%s has no operationId", where)
 			} else if prev, dup := seen[id]; dup {
@@ -243,7 +261,7 @@ func TestNoCredentialFields(t *testing.T) {
 	}
 	spec := loadSpec(t)
 	for name, s := range dig(spec, "components", "schemas") {
-		for prop := range dig(s.(object), "properties") {
+		for prop := range dig(asObject(s), "properties") {
 			if credentialName.MatchString(prop) {
 				t.Errorf("schema %s.%s looks like a credential. The API never returns one.", name, prop)
 			}

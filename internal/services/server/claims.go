@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
@@ -11,9 +12,9 @@ const maxClaimWait = 120
 
 func (s *Server) claimRoutes() []route {
 	return []route{
-		{method: "POST", pattern: "/v1/claims", handle: s.createClaim},
-		{method: "GET", pattern: "/v1/claims/{name}", handle: s.getClaim},
-		{method: "DELETE", pattern: "/v1/claims/{name}", handle: s.deleteClaim},
+		{method: http.MethodPost, pattern: "/v1/claims", handle: s.createClaim},
+		{method: http.MethodGet, pattern: "/v1/claims/{name}", handle: s.getClaim},
+		{method: http.MethodDelete, pattern: "/v1/claims/{name}", handle: s.deleteClaim},
 	}
 }
 
@@ -31,7 +32,7 @@ func (s *Server) createClaim(w http.ResponseWriter, r *http.Request) error {
 	}
 	claim, err := c.Claim(r.Context(), req.Pool)
 	if err != nil {
-		return err
+		return fmt.Errorf("create claim: %w", err)
 	}
 	writeJSON(w, http.StatusAccepted, claim)
 	return nil
@@ -48,7 +49,7 @@ func (s *Server) getClaim(w http.ResponseWriter, r *http.Request) error {
 	}
 	claim, err := c.Claimed(r.Context(), r.PathValue("name"), time.Duration(wait)*time.Second)
 	if err != nil {
-		return err
+		return fmt.Errorf("get claim: %w", err)
 	}
 	writeJSON(w, http.StatusOK, claim)
 	return nil
@@ -60,7 +61,7 @@ func (s *Server) deleteClaim(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	if err := c.DeleteClaim(r.Context(), r.PathValue("name")); err != nil {
-		return err
+		return fmt.Errorf("delete claim: %w", err)
 	}
 	w.WriteHeader(http.StatusNoContent)
 	return nil

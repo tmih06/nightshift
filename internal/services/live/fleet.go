@@ -9,6 +9,7 @@ import (
 	"github.com/tmih06/nightshift/internal/services/checkout"
 	"github.com/tmih06/nightshift/internal/services/cluster"
 	"github.com/tmih06/nightshift/internal/services/server"
+	"github.com/tmih06/nightshift/internal/services/session"
 )
 
 // snapshotTTL is how long a read of the fleet answers the questions that only
@@ -58,6 +59,12 @@ func (f *Fleet) Fleet(ctx context.Context, inc server.Include) (v1.Fleet, error)
 		f.probe(ctx, snap.boxes)
 	}
 	targets := f.targets(ctx, snap.boxes)
+	var terms map[string][]session.Terminal
+	if inc.Terminals {
+		if got, err := call(ctx, func() (map[string][]session.Terminal, error) { return session.LiveTerminals(snap.boxes), nil }); err == nil {
+			terms = got
+		}
+	}
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -69,6 +76,9 @@ func (f *Fleet) Fleet(ctx context.Context, inc server.Include) (v1.Fleet, error)
 		p.Target = targets[b.Volume]
 		p.AgentVersion = f.versions[b.Name]
 		p.Usage = f.usageOf(b, samples, snap.metricsOK)
+		for _, x := range terms[b.Name] {
+			p.Terminals = append(p.Terminals, terminalOf(x))
+		}
 		out.Pods = append(out.Pods, p)
 	}
 	return out, nil
@@ -79,12 +89,11 @@ func (f *Fleet) refresh(ctx context.Context) (snapshot, error) {
 	type read struct {
 		boxes     []cluster.Sandbox
 		pools     map[string]cluster.Pool
-		egress    bool
 		metricsOK bool
 	}
 	r, err := call(ctx, func() (read, error) {
 		boxes, pools, metricsOK, err := cluster.Fetch()
-		return read{boxes: boxes, pools: pools, metricsOK: metricsOK}, err
+		return read{boxes: boxes, pools: pools, metricsOK: metricsOK}, wrapErr("read the cluster", err)
 	})
 	if err != nil {
 		return snapshot{}, err

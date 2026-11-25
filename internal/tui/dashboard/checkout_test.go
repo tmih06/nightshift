@@ -4,313 +4,23 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/tmih06/nightshift/internal/services/cluster"
-	"github.com/tmih06/nightshift/internal/services/session"
+	v1 "github.com/tmih06/nightshift/api/v1"
+	"github.com/tmih06/nightshift/internal/tui/fleet"
 )
 
-var rocket = Checkout{Repo: "acme/rocket", Number: 7, Branch: "fix-auth"}
-
-func TestCloneScriptClonesTheHeadIntoTheVolume(t *testing.T) {
-	got := rocket.CloneScript()
-	for _, want := range []string{
-		"set -euo pipefail\n",
-		"http.version GIT_CONFIG_VALUE_0=HTTP/1.1",
-		"http.lowSpeedLimit GIT_CONFIG_VALUE_1=1024",
-		"http.lowSpeedTime GIT_CONFIG_VALUE_2=20",
-		"rm -rf repo\n",
-		"git clone --progress https://github.com/acme/rocket.git repo 2>&1 | lines",
-		"\ncd repo\n",
-		"git fetch --progress origin pull/7/head 2>&1 | lines",
-		"\ngit checkout -B fix-auth FETCH_HEAD",
-		`tr '\r' '\n'`,
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("script lacks %q:\n%s", want, got)
-		}
-	}
-	if got := (Checkout{Repo: "acme/rocket", Number: 7}).CloneScript(); !strings.HasSuffix(got, "git checkout -B pr-7 FETCH_HEAD") {
-		t.Errorf("no branch: %s", got)
-	}
-	if got := rocket.ShellLine(); got != "cd /home/node/workspace/rocket && git status -sb" {
-		t.Errorf("shell line = %s", got)
-	}
-}
-
-func TestCloneScriptQuotesBranchNames(t *testing.T) {
-	got := Checkout{Repo: "acme/rocket", Number: 7, Branch: "it's;$(rm -rf ~)"}.CloneScript()
-	if !strings.HasSuffix(got, `git checkout -B 'it'\''s;$(rm -rf ~)' FETCH_HEAD`) {
-		t.Errorf("branch not quoted: %s", got)
-	}
-	if q := shellQuote("-x"); q != "'-x'" {
-		t.Errorf("a leading dash is left bare: %s", q)
-	}
-}
-
-func TestIssueCloneScriptChecksOutTheRequestedBranch(t *testing.T) {
-	issue := Checkout{Repo: "acme/rocket", Number: 42, Branch: "feat/dark-mode", Kind: CheckoutIssue}
-	if got := issue.Volume(); got != "issue-acme-rocket-42" {
-		t.Errorf("volume = %q", got)
-	}
-	got := issue.CloneScript()
-	for _, want := range []string{
-		"set -euo pipefail\n",
-		"http.version GIT_CONFIG_VALUE_0=HTTP/1.1",
-		"rm -rf repo\n",
-		"git clone --progress https://github.com/acme/rocket.git repo 2>&1 | lines",
-		"\ncd repo\n",
-		"if git show-ref --verify --quiet refs/remotes/origin/feat/dark-mode; then git checkout -B feat/dark-mode --track refs/remotes/origin/feat/dark-mode; else git checkout -B feat/dark-mode; fi",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("script lacks %q:\n%s", want, got)
-		}
-	}
-	if strings.Contains(got, "pull/") {
-		t.Errorf("issue script fetches a pull request ref:\n%s", got)
-	}
-	defaultIssue := Checkout{Repo: "acme/rocket", Number: 42, Kind: CheckoutIssue}
-	if s := defaultIssue.CloneScript(); !strings.Contains(s, "git checkout -B issue-42;") {
-		t.Errorf("default branch script:\n%s", s)
-	}
-	if s := (Checkout{Repo: "acme/rocket", Number: 42, Branch: "it's;$(rm)", Kind: CheckoutIssue}).CloneScript(); !strings.Contains(s, `'it'\''s;$(rm)'`) {
-		t.Errorf("issue branch not quoted:\n%s", s)
-	}
-}
-
-func TestIssueCheckoutClonesFreshAndSwitchesBranchOnKeptVolume(t *testing.T) {
-	issue := Checkout{Repo: "acme/rocket", Number: 42, Branch: "feat/login", Kind: CheckoutIssue}
-
-	fresh := &fakeOps{}
-	var evs []checkoutEvent
-	runCheckout(fresh.ops(), issue, "pi-template", func(ev checkoutEvent) { evs = append(evs, ev) })
-	wantFresh := []string{
-		"state",
-		"create issue-acme-rocket-42 acme/rocket",
-		"template pi-template",
-		"clone issue-acme-rocket-42 img",
-		"sandbox pi-template issue-acme-rocket-42 /home/node/workspace/rocket",
-		"wait pi-pr-1",
-		"bash pi-pr-1",
-		"type cd /home/node/workspace/rocket && git status -sb",
-	}
-	if strings.Join(fresh.calls, "\n") != strings.Join(wantFresh, "\n") {
-		t.Errorf("fresh calls:\n%s", strings.Join(fresh.calls, "\n"))
-	}
-	if fresh.volumeFor.Kind != cluster.VolumeIssue || fresh.volumeFor.Number != 42 || fresh.volumeFor.Branch != "feat/login" {
-		t.Errorf("volumeFor = %+v", fresh.volumeFor)
-	}
-	if !evs[len(evs)-1].done {
-		t.Errorf("fresh checkout did not finish: %+v", evs[len(evs)-1])
-	}
-
-	kept := &fakeOps{exists: true, cloned: true}
-	evs = nil
-	runCheckout(kept.ops(), issue, "pi-template", func(ev checkoutEvent) { evs = append(evs, ev) })
-	wantLine := "type cd /home/node/workspace/rocket && (git checkout feat/login 2>/dev/null || git checkout -b feat/login) && git status -sb"
-	if got := kept.calls[len(kept.calls)-1]; got != wantLine {
-		t.Errorf("kept shell command = %q, want %q", got, wantLine)
-	}
-	if !evs[len(evs)-1].done {
-		t.Errorf("kept checkout did not finish: %+v", evs[len(evs)-1])
-	}
-}
-
-func TestRepoCheckoutScriptVolumeAndRun(t *testing.T) {
-	repo := Checkout{Repo: "acme/rocket", Branch: "feat/search", Kind: CheckoutRepo}
-	if got := repo.String(); got != "acme/rocket@feat/search" {
-		t.Errorf("String() = %q, want acme/rocket@feat/search", got)
-	}
-	if got := repo.Volume(); got != "repo-acme-rocket-feat-search" {
-		t.Errorf("Volume() = %q, want repo-acme-rocket-feat-search", got)
-	}
-	got := repo.CloneScript()
-	for _, want := range []string{
-		"set -euo pipefail\n",
-		"git clone --progress https://github.com/acme/rocket.git repo 2>&1 | lines",
-		"\ncd repo\n",
-		"if git show-ref --verify --quiet refs/remotes/origin/feat/search; then git checkout -B feat/search --track refs/remotes/origin/feat/search; else git checkout -B feat/search; fi",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("repo script lacks %q:\n%s", want, got)
-		}
-	}
-	if strings.Contains(got, "pull/") {
-		t.Errorf("repo script fetches a pull request ref:\n%s", got)
-	}
-
-	defaultRepo := Checkout{Repo: "acme/rocket", Kind: CheckoutRepo}
-	if got := defaultRepo.String(); got != "acme/rocket@main" {
-		t.Errorf("default String() = %q, want acme/rocket@main", got)
-	}
-	if got := defaultRepo.Volume(); got != "repo-acme-rocket-main" {
-		t.Errorf("default Volume() = %q, want repo-acme-rocket-main", got)
-	}
-	if s := defaultRepo.CloneScript(); !strings.Contains(s, "git checkout -B main;") {
-		t.Errorf("default repo script:\n%s", s)
-	}
-
-	fresh := &fakeOps{}
-	var evs []checkoutEvent
-	runCheckout(fresh.ops(), repo, "pi-template", func(ev checkoutEvent) { evs = append(evs, ev) })
-	if fresh.volumeFor.Kind != cluster.VolumeRepo || fresh.volumeFor.Repo != "acme/rocket" || fresh.volumeFor.Branch != "feat/search" || fresh.volumeFor.Number != 0 {
-		t.Errorf("repo volumeFor = %+v", fresh.volumeFor)
-	}
-	if got := fresh.calls[len(fresh.calls)-1]; got != "type cd /home/node/workspace/rocket && git status -sb" {
-		t.Errorf("fresh repo shell command = %q", got)
-	}
-	if !evs[len(evs)-1].done {
-		t.Errorf("fresh repo checkout did not finish: %+v", evs[len(evs)-1])
-	}
-
-	kept := &fakeOps{exists: true, cloned: true}
-	evs = nil
-	runCheckout(kept.ops(), repo, "pi-template", func(ev checkoutEvent) { evs = append(evs, ev) })
-	wantLine := "type cd /home/node/workspace/rocket && (git checkout feat/search 2>/dev/null || git checkout -b feat/search) && git status -sb"
-	if got := kept.calls[len(kept.calls)-1]; got != wantLine {
-		t.Errorf("kept repo shell command = %q, want %q", got, wantLine)
-	}
-	if !evs[len(evs)-1].done {
-		t.Errorf("kept repo checkout did not finish: %+v", evs[len(evs)-1])
-	}
-}
-
-func TestGitProgressIsRead(t *testing.T) {
-	phase, pct, rest, ok := parseProgress("Receiving objects:  49% (48647/99278), 34.21 MiB | 10.97 MiB/s")
-	if !ok || phase != "Receiving objects" || pct != 49 || rest != "34.21 MiB | 10.97 MiB/s" {
-		t.Errorf("got %q %d %q %v", phase, pct, rest, ok)
-	}
-	phase, pct, rest, ok = parseProgress("Resolving deltas: 100% (68158/68158), done.")
-	if !ok || phase != "Resolving deltas" || pct != 100 || rest != "" {
-		t.Errorf("done line: %q %d %q %v", phase, pct, rest, ok)
-	}
-	if _, _, _, ok := parseProgress("Cloning into 'repo'..."); ok {
-		t.Error("a plain line read as progress")
-	}
-	if cloneDetail("remote: Counting objects:  10% (1/10)") != "Counting objects:  10% (1/10)" || cloneDetail("") != "starting the clone pod" {
-		t.Error("clone lines are not tidied")
-	}
-	if podDetail("Pending ContainerCreating") != "pod Pending · pulling the image" {
-		t.Errorf("pod detail = %q", podDetail("Pending ContainerCreating"))
-	}
-}
-
-// fakeOps records what the pipeline asks of the cluster.
-type fakeOps struct {
-	exists, cloned bool
-	cloneErr       error
-	volumeFor      cluster.VolumeFor
-	calls          []string
-}
-
-func (f *fakeOps) ops() checkoutOps {
-	return checkoutOps{
-		volumeState: func(string) (bool, bool, error) { f.calls = append(f.calls, "state"); return f.exists, f.cloned, nil },
-		createVolume: func(name string, target cluster.VolumeFor) error {
-			f.volumeFor = target
-			f.calls = append(f.calls, "create "+name+" "+target.Repo)
-			return nil
-		},
-		templatePod: func(tpl string) (map[string]any, string, error) {
-			f.calls = append(f.calls, "template "+tpl)
-			return map[string]any{}, "img", nil
-		},
-		clone: func(vol, image, script string, _ time.Duration, progress func(string)) error {
-			f.calls = append(f.calls, "clone "+vol+" "+image)
-			progress("")
-			progress("Receiving objects:  45% (1/2), 1 MiB | 2 MiB/s")
-			progress("Receiving objects:  45% (1/2), 1 MiB | 2 MiB/s")
-			return f.cloneErr
-		},
-		createSandbox: func(tpl string, _ map[string]any, vol, mount string) (string, error) {
-			f.calls = append(f.calls, "sandbox "+tpl+" "+vol+" "+mount)
-			return "pi-pr-1", nil
-		},
-		waitPod: func(pod string, _ time.Duration, progress func(string)) error {
-			f.calls = append(f.calls, "wait "+pod)
-			progress("Pending ContainerCreating")
-			return nil
-		},
-		ensure: func(pod string) error { f.calls = append(f.calls, "bash "+pod); return nil },
-		send: func(pod string, keys []session.Key) error {
-			f.calls = append(f.calls, "type "+keys[0].Text)
-			return nil
-		},
-	}
-}
-
-func run(f *fakeOps) []checkoutEvent {
-	var evs []checkoutEvent
-	runCheckout(f.ops(), rocket, "pi-template", func(ev checkoutEvent) { evs = append(evs, ev) })
-	return evs
-}
-
-func TestTheCheckoutClonesStartsAndTypesInOrder(t *testing.T) {
-	f := &fakeOps{}
-	evs := run(f)
-	want := []string{"state", "create pr-acme-rocket-7 acme/rocket", "template pi-template", "clone pr-acme-rocket-7 img",
-		"sandbox pi-template pr-acme-rocket-7 /home/node/workspace/rocket", "wait pi-pr-1", "bash pi-pr-1",
-		"type cd /home/node/workspace/rocket && git status -sb"}
-	if strings.Join(f.calls, "\n") != strings.Join(want, "\n") {
-		t.Errorf("calls:\n%s", strings.Join(f.calls, "\n"))
-	}
-	last := evs[len(evs)-1]
-	if !last.done || last.pod != "pi-pr-1" {
-		t.Errorf("last event = %+v", last)
-	}
-	var progress, steps int
-	seen := map[step]bool{}
-	for _, ev := range evs {
-		if strings.HasPrefix(ev.detail, "Receiving objects") {
-			progress++
-		}
-		if !seen[ev.step] {
-			seen[ev.step] = true
-			steps++
-		}
-	}
-	if progress != 1 {
-		t.Errorf("the same progress line came %d times, want once", progress)
-	}
-	if steps != int(stepCount) {
-		t.Errorf("went through %d steps, want %d", steps, stepCount)
-	}
-}
-
-func TestAKeptCloneIsNotClonedAgain(t *testing.T) {
-	f := &fakeOps{exists: true, cloned: true}
-	evs := run(f)
-	for _, c := range f.calls {
-		if strings.HasPrefix(c, "clone") || strings.HasPrefix(c, "create") {
-			t.Errorf("a kept volume got %q", c)
-		}
-	}
-	if !evs[len(evs)-1].done {
-		t.Error("the checkout did not finish")
-	}
-}
-
-func TestACloneThatFailsStopsTheCheckout(t *testing.T) {
-	f := &fakeOps{cloneErr: errors.New("repository not found")}
-	evs := run(f)
-	last := evs[len(evs)-1]
-	if last.err == nil || last.step != stepClone {
-		t.Fatalf("last event = %+v", last)
-	}
-	for _, c := range f.calls {
-		if strings.HasPrefix(c, "sandbox") {
-			t.Error("a sandbox started after the clone failed")
-		}
-	}
+// rocket is the pull request most tests check out.
+func rocket() Checkout {
+	return Checkout{Repo: "acme/rocket", Number: 7, Branch: "fix-auth"}
 }
 
 func running() model {
 	m := baseModel()
-	m.pools["pi-pool"] = cluster.Pool{Name: "pi-pool", Template: "pi-template"}
-	m, _ = m.CheckOut("pi-pool", rocket)
+	m.pools["pi-pool"] = fleet.Pool{Name: "pi-pool", Template: "pi-template"}
+	m, _ = m.CheckOut("pi-pool", rocket())
 	return m
 }
 
@@ -355,7 +65,7 @@ func TestCheckOutShowsACardOfItsSteps(t *testing.T) {
 }
 
 func TestOneCheckoutAtATime(t *testing.T) {
-	m, cmd := running().CheckOut("pi-pool", rocket)
+	m, cmd := running().CheckOut("pi-pool", rocket())
 	if cmd != nil || !strings.Contains(m.status, "one at a time") {
 		t.Errorf("status=%q cmd=%v", m.status, cmd != nil)
 	}
@@ -380,7 +90,7 @@ func TestADoneCheckoutFocusesItsShell(t *testing.T) {
 	if m.checkout != nil || m.pendingPod != "pi-pr-1" || m.pendingCheckout == nil {
 		t.Fatalf("checkout=%v pending=%q", m.checkout != nil, m.pendingPod)
 	}
-	m.boxes = append(m.boxes, cluster.Sandbox{Name: "pi-pr-1", Owner: "pr-acme-rocket-7", Volume: "pr-acme-rocket-7",
+	m.boxes = append(m.boxes, fleet.Sandbox{Name: "pi-pr-1", Owner: "pr-acme-rocket-7", Volume: "pr-acme-rocket-7",
 		Phase: "Running", CPULimitMC: 500, MemLimitMiB: 256})
 	m.sessions["pi-pr-1"] = true
 	m.hist = map[string]usageHistory{}
@@ -394,7 +104,7 @@ func TestADoneCheckoutFocusesItsShell(t *testing.T) {
 }
 
 func TestWarmPoolsAreByName(t *testing.T) {
-	m := baseModel().WithFleet(nil, map[string]cluster.Pool{"pi-pool": {Name: "pi-pool"}, "codex-pool": {Name: "codex-pool"}})
+	m := baseModel().WithFleet(nil, map[string]fleet.Pool{"pi-pool": {Name: "pi-pool"}, "codex-pool": {Name: "codex-pool"}})
 	pools := m.WarmPools()
 	if len(pools) != 2 || pools[0].Name != "codex-pool" || pools[1].Name != "pi-pool" {
 		t.Errorf("pools = %v", pools)
@@ -402,7 +112,7 @@ func TestWarmPoolsAreByName(t *testing.T) {
 }
 
 func TestCheckOutNeedsAPoolWithATemplate(t *testing.T) {
-	next, cmd := baseModel().CheckOut("gone-pool", rocket)
+	next, cmd := baseModel().CheckOut("gone-pool", rocket())
 	if cmd != nil || !next.statusBad || next.checkout != nil {
 		t.Errorf("a pool without a template went ahead: %q", next.status)
 	}
@@ -412,9 +122,10 @@ func TestCheckOutNeedsAPoolWithATemplate(t *testing.T) {
 func TestCheckOutReturnsToTheSandboxOnTheVolume(t *testing.T) {
 	m := baseModel()
 	m.section = sectionWarm
-	m.boxes = append(m.boxes, cluster.Sandbox{Name: "pi-pr-1", Owner: "pr-acme-rocket-7",
-		Volume: "pr-acme-rocket-7", Phase: "Running"})
-	next, cmd := m.CheckOut("agent-pool", rocket)
+	m.boxes = append(m.boxes, fleet.Sandbox{Name: "pi-pr-1", Owner: "pr-acme-rocket-7",
+		Volume: "pr-acme-rocket-7", Phase: "Running",
+		Target: &v1.Target{Kind: v1.TargetPullRequest, Repo: "acme/rocket", Number: 7}})
+	next, cmd := m.CheckOut("agent-pool", rocket())
 	if cmd == nil || next.selected != "pi-pr-1" || next.section != sectionAll || next.checkout != nil {
 		t.Fatalf("selected=%q section=%d cmd=%v", next.selected, next.section, cmd != nil)
 	}
@@ -425,7 +136,7 @@ func TestCheckOutReturnsToTheSandboxOnTheVolume(t *testing.T) {
 
 func onVolume() model {
 	m := baseModel()
-	m.boxes = append(m.boxes, cluster.Sandbox{Name: "pi-pr-1", Owner: "pr-acme-rocket-7", Volume: "pr-acme-rocket-7", Phase: "Running"})
+	m.boxes = append(m.boxes, fleet.Sandbox{Name: "pi-pr-1", Owner: "pr-acme-rocket-7", Volume: "pr-acme-rocket-7", Phase: "Running"})
 	m.selected = "pi-pr-1"
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
 	return m
@@ -456,7 +167,7 @@ func TestDestroyingASandboxOnAVolumeAsksAboutTheVolume(t *testing.T) {
 	if cmd == nil || kept.destroy != nil || !strings.Contains(kept.status, "keeping volume pr-acme-rocket-7") {
 		t.Errorf("enter: status=%q cmd=%v", kept.status, cmd != nil)
 	}
-	dropped, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	dropped, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	dropped, cmd = dropped.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil || !strings.Contains(dropped.status, "destroying pi-pr-1 and volume pr-acme-rocket-7") {
 		t.Errorf("down enter: status=%q cmd=%v", dropped.status, cmd != nil)
@@ -506,7 +217,7 @@ func TestBoxesReturnsShallowCopy(t *testing.T) {
 
 func TestFocusPodSwitchesSectionSelectsAndAttaches(t *testing.T) {
 	m := baseModel()
-	m.boxes = []cluster.Sandbox{
+	m.boxes = []fleet.Sandbox{
 		{Name: "pi-pool-a", OwnerKind: "SandboxWarmPool", Owner: "pi-pool", Phase: "Running"},
 		{Name: "pi-repo-1", Owner: "repo-acme-rocket-main", Volume: "repo-acme-rocket-main", Phase: "Running"},
 		{Name: "pi-repo-pending", Owner: "repo-acme-rocket-dev", Volume: "repo-acme-rocket-dev", Phase: "Pending"},
@@ -557,80 +268,92 @@ func TestFocusPodSwitchesSectionSelectsAndAttaches(t *testing.T) {
 	}
 }
 
-func TestHarnessForPoolResolvesAllHarnesses(t *testing.T) {
-	cases := []struct {
-		pool    cluster.Pool
-		wantCmd string
-		wantLbl string
-	}{
-		{cluster.Pool{Name: "claude-code-pool", Template: "claude-code-template"}, "claude", "Claude Code"},
-		{cluster.Pool{Name: "codex-pool", Template: "codex-template"}, "codex", "Codex"},
-		{cluster.Pool{Name: "opencode-pool", Template: "opencode-template"}, "opencode", "OpenCode"},
-		{cluster.Pool{Name: "agy-pool", Template: "agy-template"}, "agy", "Antigravity"},
-		{cluster.Pool{Name: "ompig-slim-pool", Template: "ompig-slim-template"}, "ompig-slim", "OMPi slim"},
-		{cluster.Pool{Name: "custom-pool", TemplateYAML: "image: ghcr.io/tmih06/nightshift-ompig-slim:latest"}, "ompig-slim", "OMPi slim"},
-		{cluster.Pool{Name: "pi-pool", Template: "pi-template"}, "pi", "Pi"},
-		{cluster.Pool{Name: "custom-pool", TemplateYAML: "image: ghcr.io/tmih06/nightshift-pi:latest"}, "pi", "Pi"},
-		{cluster.Pool{Name: "api-pool", Template: "api-template"}, "", "api-template"},
+func TestCheckoutAsksTheServicesForWhatTheTargetIs(t *testing.T) {
+	req := Checkout{Repo: "acme/rocket", Number: 7, Branch: "fix-auth", Harness: "codex", Model: "gpt-5.3-codex"}.Request("codex-pool")
+	want := v1.CheckoutRequest{
+		Target:  v1.Target{Kind: v1.TargetPullRequest, Repo: "acme/rocket", Number: 7, Branch: "fix-auth"},
+		Pool:    "codex-pool",
+		Harness: "codex",
+		Model:   "gpt-5.3-codex",
 	}
-	for _, tc := range cases {
-		h := HarnessForPool(tc.pool)
-		if h.Command != tc.wantCmd || h.Label != tc.wantLbl {
-			t.Errorf("HarnessForPool(%q) = (%q, %q), want (%q, %q)", tc.pool.Name, h.Command, h.Label, tc.wantCmd, tc.wantLbl)
-		}
-		if len(h.Models) == 0 {
-			t.Errorf("HarnessForPool(%q) returned no model options", tc.pool.Name)
+	if req != want {
+		t.Errorf("PR request = %+v, want %+v", req, want)
+	}
+	if got := (Checkout{Repo: "acme/rocket", Number: 42, Kind: CheckoutIssue}).Request("p").Target; got.Kind != v1.TargetIssue || got.Number != 42 {
+		t.Errorf("issue target = %+v", got)
+	}
+	if got := (Checkout{Repo: "acme/rocket", Number: 9, Branch: "dev", Kind: CheckoutRepo}).Request("p").Target; got.Kind != v1.TargetBranch || got.Number != 0 || got.Branch != "dev" {
+		t.Errorf("a branch has no number: %+v", got)
+	}
+}
+
+func TestACheckoutIsFoundOnTheSandboxThatKeepsIt(t *testing.T) {
+	pr := fleet.Sandbox{Target: &v1.Target{Kind: v1.TargetPullRequest, Repo: "acme/rocket", Number: 7}}
+	issue := fleet.Sandbox{Target: &v1.Target{Kind: v1.TargetIssue, Repo: "acme/rocket", Number: 7}}
+	branch := fleet.Sandbox{Target: &v1.Target{Kind: v1.TargetBranch, Repo: "acme/rocket", Branch: "main"}}
+	other := fleet.Sandbox{Target: &v1.Target{Kind: v1.TargetPullRequest, Repo: "acme/other", Number: 7}}
+	for name, tc := range map[string]struct {
+		co   Checkout
+		box  fleet.Sandbox
+		want bool
+	}{
+		"the pull request":             {Checkout{Repo: "acme/rocket", Number: 7}, pr, true},
+		"not the issue of that number": {Checkout{Repo: "acme/rocket", Number: 7}, issue, false},
+		"the issue":                    {Checkout{Repo: "acme/rocket", Number: 7, Kind: CheckoutIssue}, issue, true},
+		"the default branch":           {Checkout{Repo: "acme/rocket", Kind: CheckoutRepo}, branch, true},
+		"another branch":               {Checkout{Repo: "acme/rocket", Kind: CheckoutRepo, Branch: "dev"}, branch, false},
+		"another repository":           {Checkout{Repo: "acme/rocket", Number: 7}, other, false},
+		"a sandbox with no volume":     {Checkout{Repo: "acme/rocket", Number: 7}, fleet.Sandbox{}, false},
+	} {
+		if got := tc.co.onSandbox(&tc.box); got != tc.want {
+			t.Errorf("%s: onSandbox = %v, want %v", name, got, tc.want)
 		}
 	}
 }
 
-func TestCheckoutLaunchesHarnessWithSelectedModel(t *testing.T) {
-	co := Checkout{
-		Repo:    "acme/rocket",
-		Number:  7,
-		Branch:  "fix-auth",
-		Harness: "codex",
-		Model:   "gpt-5.3-codex",
-	}
-	if got := co.ShellLine(); got != "cd /home/node/workspace/rocket && git status -sb && codex --model gpt-5.3-codex" {
-		t.Errorf("ShellLine() = %q", got)
-	}
-
-	// Default model omits --model flag.
-	coDefault := Checkout{Repo: "acme/rocket", Number: 7, Harness: "claude"}
-	if got := coDefault.ShellLine(); got != "cd /home/node/workspace/rocket && git status -sb && claude" {
-		t.Errorf("default ShellLine() = %q", got)
-	}
-
-	// Model ID with special characters is shell-quoted.
-	coQuoted := Checkout{Repo: "acme/rocket", Number: 7, Harness: "pi", Model: "a b;rm"}
-	if got := coQuoted.ShellLine(); !strings.HasSuffix(got, " && pi --model 'a b;rm'") {
-		t.Errorf("quoted ShellLine() = %q", got)
-	}
-
-	// Pipeline types the launch line and reports harness+model on the shell step.
-	f := &fakeOps{}
-	var evs []checkoutEvent
-	runCheckout(f.ops(), co, "codex-template", func(ev checkoutEvent) { evs = append(evs, ev) })
-	wantLastCall := "type cd /home/node/workspace/rocket && git status -sb && codex --model gpt-5.3-codex"
-	if got := f.calls[len(f.calls)-1]; got != wantLastCall {
-		t.Errorf("last call = %q, want %q", got, wantLastCall)
-	}
-	foundStart := false
-	for _, ev := range evs {
-		if ev.step == stepShell && strings.Contains(ev.detail, "starting codex (gpt-5.3-codex)") {
-			foundStart = true
-		}
-	}
-	if !foundStart {
-		t.Errorf("stepShell detail did not name harness+model: %+v", evs)
-	}
-
-	// Checkout card displays the selected harness and model.
+func TestCheckoutCardNamesTheHarnessAndModel(t *testing.T) {
+	co := Checkout{Repo: "acme/rocket", Number: 7, Branch: "fix-auth", Harness: "codex", Model: "gpt-5.3-codex"}
 	m := baseModel()
-	m.pools["codex-pool"] = cluster.Pool{Name: "codex-pool", Template: "codex-template"}
+	m.pools["codex-pool"] = fleet.Pool{Name: "codex-pool", Template: "codex-template"}
 	m, _ = m.CheckOut("codex-pool", co)
 	if view := m.plainView(); !strings.Contains(view, "on codex-template · codex (gpt-5.3-codex)") {
 		t.Errorf("checkout card missing harness/model:\n%s", view)
+	}
+}
+
+// follow turns the services' events into the card's, and ends with the last.
+func TestFollowingACheckoutReportsEachStepAndTheEnd(t *testing.T) {
+	api := &fakeAPI{events: []v1.CheckoutEvent{
+		{Step: v1.StepVolume, Finished: true, Detail: "pr-acme-rocket-7 · new"},
+		{Step: v1.StepClone, Detail: "Receiving objects:  45% (1/2)"},
+		{Step: v1.StepShell, Sandbox: "pi-pr-1", Done: true},
+	}}
+	var got []checkoutEvent
+	follow(api, rocket(), "pi-pool", func(ev checkoutEvent) { got = append(got, ev) })
+	if len(got) != 3 || !got[0].finished || got[0].step != stepVolume || got[1].step != stepClone || !got[2].done || got[2].pod != "pi-pr-1" {
+		t.Fatalf("events = %+v", got)
+	}
+	if api.checkout.Pool != "pi-pool" || api.checkout.Target.Number != 7 {
+		t.Errorf("asked for %+v", api.checkout)
+	}
+}
+
+func TestACheckoutThatCannotStartOrDropsIsReportedAsFailed(t *testing.T) {
+	var got []checkoutEvent
+	follow(&fakeAPI{checkoutErr: errors.New("no such pool")}, rocket(), "x", func(ev checkoutEvent) { got = append(got, ev) })
+	if len(got) != 1 || got[0].err == nil {
+		t.Errorf("a refused checkout: %+v", got)
+	}
+	got = nil
+	follow(&fakeAPI{events: []v1.CheckoutEvent{{Step: v1.StepClone, Detail: "x"}}, followErr: errors.New("connection reset")}, rocket(), "x", func(ev checkoutEvent) { got = append(got, ev) })
+	if last := got[len(got)-1]; last.err == nil || last.step != stepClone {
+		t.Errorf("a stream that dropped must end the card with an error: %+v", got)
+	}
+}
+
+func TestAnErrorEventEndsTheCardWithItsText(t *testing.T) {
+	got := eventOf(v1.CheckoutEvent{Step: v1.StepSandbox, Error: "image pull failed"})
+	if got.err == nil || got.err.Error() != "image pull failed" || got.step != stepSandbox {
+		t.Errorf("eventOf = %+v", got)
 	}
 }

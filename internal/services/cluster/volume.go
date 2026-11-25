@@ -1,9 +1,9 @@
 package cluster
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	v1 "github.com/tmih06/nightshift/api/v1"
 	"strconv"
 	"strings"
 	"time"
@@ -33,66 +33,6 @@ const (
 	// own.
 	VolumeRepoDir = "repo"
 )
-
-// VolumeName is the volume that keeps repo's pull request number:
-// pr-<owner>-<name>-<number>, cut to a valid Kubernetes name.
-func VolumeName(repo string, number int) string {
-	return volumeName("pr", repo, number)
-}
-
-// IssueVolumeName is the volume that keeps repo's issue number:
-// issue-<owner>-<name>-<number>, cut to a valid Kubernetes name.
-func IssueVolumeName(repo string, number int) string {
-	return volumeName("issue", repo, number)
-}
-
-// RepoVolumeName is the volume that keeps repo's branch:
-// repo-<owner>-<name>-<branch>, cut to a valid <=63-char DNS-1123 label.
-// An empty branch is treated as "default".
-func RepoVolumeName(repo, branch string) string {
-	if branch == "" {
-		branch = "default"
-	}
-	branchPart := dnsLabel(branch)
-	if branchPart == "" {
-		branchPart = "default"
-	}
-	repoPart := dnsLabel(strings.ReplaceAll(repo, "/", "-"))
-	name := "repo-" + branchPart
-	if repoPart != "" {
-		name = "repo-" + repoPart + "-" + branchPart
-	}
-	if len(name) > 63 {
-		sum := sha256.Sum256([]byte(repo + "@" + branch))
-		hash := fmt.Sprintf("-%x", sum[:3])
-		name = strings.TrimRight(name[:63-len(hash)], "-") + hash
-	}
-	return name
-}
-
-func volumeName(prefix, repo string, number int) string {
-	suffix := fmt.Sprintf("-%d", number)
-	name := prefix + "-" + dnsLabel(strings.ReplaceAll(repo, "/", "-"))
-	if len(name)+len(suffix) > 63 {
-		sum := sha256.Sum256([]byte(repo))
-		hash := fmt.Sprintf("-%x", sum[:3])
-		name = strings.TrimRight(name[:63-len(suffix)-len(hash)], "-") + hash
-	}
-	return name + suffix
-}
-
-// dnsLabel lowercases s and turns anything a name cannot hold into dashes.
-func dnsLabel(s string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(s) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-		} else {
-			b.WriteByte('-')
-		}
-	}
-	return strings.Trim(b.String(), "-")
-}
 
 // VolumeState is whether the volume exists and whether a clone into it
 // finished. A volume without a finished clone is cloned again from scratch.
@@ -339,7 +279,7 @@ func volumeSandboxManifestWithEgress(template string, podTemplate map[string]any
 		c["volumeMounts"] = append(mounts, map[string]any{"name": "repo", "mountPath": mountPath, "subPath": VolumeRepoDir})
 	}
 	applyEgressToPodSpec(spec, proxyURL, true)
-	agent := dnsLabel(strings.TrimSuffix(template, "-template"))
+	agent := v1.DNSLabel(strings.TrimSuffix(template, "-template"))
 	if len(agent) > 30 {
 		agent = strings.TrimRight(agent[:30], "-")
 	}

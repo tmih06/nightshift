@@ -47,7 +47,7 @@ func (m model) updateKeyboard(msg tea.KeyPressMsg) (model, tea.Cmd) {
 		return m, cmd
 	case "r":
 		m.status, m.statusTTL = "", 0
-		cmds := []tea.Cmd{fetchCmd(m.agentVersions)}
+		cmds := []tea.Cmd{fetchCmd(m.api)}
 		if logCmd := m.maybeFetchLogs(); logCmd != nil {
 			cmds = append(cmds, logCmd)
 		}
@@ -55,7 +55,7 @@ func (m model) updateKeyboard(msg tea.KeyPressMsg) (model, tea.Cmd) {
 	case "c":
 		pool := m.claimPool()
 		m.flash("claiming from " + pool + "…")
-		return m, claimCmd(pool)
+		return m, claimCmd(m.api, pool)
 	case "enter":
 		if m.showingDocPane() {
 			m.focusDocPane()
@@ -82,7 +82,7 @@ func (m model) updateKeyboard(msg tea.KeyPressMsg) (model, tea.Cmd) {
 		}
 		m.sidebarMode = paneShell
 		m.flash("starting bash in " + b.Name)
-		return m, attachCmd(b.Name)
+		return m, attachCmd(m.api, b.Name)
 	case "F":
 		b := m.selectedBox()
 		if b == nil || b.Phase != "Running" {
@@ -96,8 +96,7 @@ func (m model) updateKeyboard(msg tea.KeyPressMsg) (model, tea.Cmd) {
 			m.flash("only a claimed sandbox can open fullscreen bash")
 			return m, nil
 		}
-		m.flash("opening fullscreen bash, detach with Ctrl-\\")
-		return m, fullCmd(b.Name, m.activeTerm(b.Name))
+		return m.zoomShell(b)
 	case "x":
 		b := m.selectedBox()
 		if b == nil || !b.Claimed() {
@@ -114,7 +113,7 @@ func (m model) updateKeyboard(msg tea.KeyPressMsg) (model, tea.Cmd) {
 			m.sticky("press x again to destroy claim " + b.Owner)
 			return m, nil
 		}
-		return m, deleteClaimCmd(b.Owner)
+		return m, deleteClaimCmd(m.api, b.Owner)
 	}
 	return m, nil
 }
@@ -155,10 +154,10 @@ func (m model) updateInspectKeys(msg tea.KeyPressMsg) (model, tea.Cmd) {
 		m.focus = focusNav
 		pool := m.claimPool()
 		m.flash("claiming from " + pool + "…")
-		return m, claimCmd(pool)
+		return m, claimCmd(m.api, pool)
 	case "r":
 		m.status, m.statusTTL = "", 0
-		cmds := []tea.Cmd{fetchCmd(m.agentVersions)}
+		cmds := []tea.Cmd{fetchCmd(m.api)}
 		if logCmd := m.maybeFetchLogs(); logCmd != nil {
 			cmds = append(cmds, logCmd)
 		}

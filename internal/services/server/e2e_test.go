@@ -90,7 +90,7 @@ func TestTheClientDrivesTerminalsAndAccounts(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if terms, err := c.Terminals(ctx, "pi-1"); err != nil || terms != nil && len(terms) != 0 {
+	if terms, err := c.Terminals(ctx, "pi-1"); err != nil || len(terms) != 0 {
 		t.Fatalf("Terminals = %v, %v", terms, err)
 	}
 	term, err := c.OpenTerminal(ctx, "pi-1", v1.TerminalRequest{})
@@ -100,7 +100,7 @@ func TestTheClientDrivesTerminalsAndAccounts(t *testing.T) {
 	if err := c.Input(ctx, "pi-1", "t1", []v1.Key{{Text: "ls"}, {Name: "Enter"}}); err != nil || len(f.keys) != 2 {
 		t.Fatalf("Input: %v, keys %+v", err, f.keys)
 	}
-	sc, err := c.Screen(ctx, "pi-1", "t1", 80, 24, true, time.Second)
+	sc, err := c.Screen(ctx, client.ScreenRequest{Sandbox: "pi-1", Address: "t1", Cols: 80, Rows: 24, Resize: true, Wait: time.Second})
 	if err != nil || !sc.Changed || f.screenQ.Viewer == "" || f.screenQ.Cols != 80 || !f.screenQ.Resize {
 		t.Fatalf("Screen = %+v, %v, query %+v", sc, err, f.screenQ)
 	}

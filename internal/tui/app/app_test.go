@@ -10,9 +10,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/tmih06/nightshift/api/client"
+	v1 "github.com/tmih06/nightshift/api/v1"
 	"github.com/tmih06/nightshift/internal/ghdash/config"
 	ghtheme "github.com/tmih06/nightshift/internal/ghdash/tui/theme"
-	"github.com/tmih06/nightshift/internal/services/accounts"
 )
 
 // fakePRs stands in for gh-dash: it records what reaches it and can claim
@@ -57,27 +58,54 @@ func (f *fakePRs) SwitchView(view config.ViewType) tea.Cmd {
 
 func sized(m Model, w, h int) Model {
 	next, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
-	return next.(Model)
+	return modelOf(next)
 }
 
-// fakeAccounts is the Accounts tab's backend; it counts reads of the cluster.
+// fakeAccounts stands in for the Nightshift services: it answers the Pods tab
+// with an empty fleet and the Accounts tab with one account, and counts reads.
 type fakeAccounts struct{ fetches int }
 
-func (f *fakeAccounts) Fetch(context.Context) (accounts.Snapshot, error) {
+func (f *fakeAccounts) Accounts(context.Context) (v1.Accounts, error) {
 	f.fetches++
-	return accounts.Snapshot{Accounts: []accounts.Account{{Name: "claude-a.json", Provider: "claude", Email: "a@example.com", Active: true}}}, nil
+	return v1.Accounts{
+		Providers: []v1.Provider{{ID: "claude", Name: "Claude Code"}},
+		Accounts:  []v1.Account{{Name: "claude-a.json", Provider: "claude", Email: "a@example.com", Active: true, State: v1.AccountOK}},
+	}, nil
 }
-func (*fakeAccounts) StartLogin(context.Context, string) (accounts.Login, error) {
-	return accounts.Login{}, nil
+func (*fakeAccounts) StartLogin(context.Context, string) (v1.Login, error)  { return v1.Login{}, nil }
+func (*fakeAccounts) CompleteLogin(context.Context, v1.Login, string) error { return nil }
+func (*fakeAccounts) CancelLogin(context.Context, v1.Login) error           { return nil }
+func (*fakeAccounts) SetDisabled(context.Context, string, bool) error       { return nil }
+func (*fakeAccounts) RemoveAccount(context.Context, string) error           { return nil }
+func (*fakeAccounts) RefreshAccount(context.Context, string) error          { return nil }
+func (*fakeAccounts) SetActive(context.Context, string, string) error       { return nil }
+func (*fakeAccounts) Publish(context.Context) (string, error)               { return "", nil }
+
+func (*fakeAccounts) Fleet(context.Context, ...string) (v1.Fleet, error) { return v1.Fleet{}, nil }
+func (*fakeAccounts) PodLogs(context.Context, string, string, int) ([]string, error) {
+	return nil, nil
 }
-func (*fakeAccounts) CompleteLogin(context.Context, accounts.Login, string) error { return nil }
-func (*fakeAccounts) CancelLogin(context.Context, accounts.Login) error           { return nil }
-func (*fakeAccounts) SetDisabled(context.Context, string, bool) error             { return nil }
-func (*fakeAccounts) Remove(context.Context, string) error                        { return nil }
-func (*fakeAccounts) Refresh(context.Context, string) error                       { return nil }
-func (*fakeAccounts) SetActive(context.Context, string, string) error             { return nil }
-func (*fakeAccounts) PublishNow(context.Context) (string, error)                  { return "", nil }
-func (*fakeAccounts) Close()                                                      {}
+func (*fakeAccounts) Claim(context.Context, string) (v1.Claim, error) { return v1.Claim{}, nil }
+func (*fakeAccounts) WaitClaim(context.Context, string, time.Duration) (v1.Claim, error) {
+	return v1.Claim{}, nil
+}
+func (*fakeAccounts) DeleteClaim(context.Context, string) error         { return nil }
+func (*fakeAccounts) DeleteSandbox(context.Context, string, bool) error { return nil }
+func (*fakeAccounts) Checkout(context.Context, v1.CheckoutRequest) (v1.Checkout, error) {
+	return v1.Checkout{}, nil
+}
+func (*fakeAccounts) FollowCheckout(context.Context, string, func(v1.CheckoutEvent) error) error {
+	return nil
+}
+func (*fakeAccounts) Terminals(context.Context, string) ([]v1.Terminal, error) { return nil, nil }
+func (*fakeAccounts) OpenTerminal(context.Context, string, v1.TerminalRequest) (v1.Terminal, error) {
+	return v1.Terminal{}, nil
+}
+func (*fakeAccounts) CloseTerminal(context.Context, string, string) error { return nil }
+func (*fakeAccounts) Screen(context.Context, client.ScreenRequest) (v1.Screen, error) {
+	return v1.Screen{}, nil
+}
+func (*fakeAccounts) Input(context.Context, string, string, []v1.Key) error { return nil }
 
 func newModel(t *testing.T) (Model, *fakePRs) {
 	t.Helper()
@@ -88,7 +116,7 @@ func newModel(t *testing.T) (Model, *fakePRs) {
 func newModelWithAccounts(t *testing.T) (Model, *fakePRs, *fakeAccounts) {
 	t.Helper()
 	f, acc := &fakePRs{}, &fakeAccounts{}
-	return sized(NewWithAccounts(*ghtheme.DefaultTheme, f, nil, acc), 120, 40), f, acc
+	return sized(New(*ghtheme.DefaultTheme, f, nil, acc), 120, 40), f, acc
 }
 
 func key(s string) tea.KeyPressMsg {
@@ -104,7 +132,7 @@ func key(s string) tea.KeyPressMsg {
 func press(m Model, keys ...string) Model {
 	for _, k := range keys {
 		next, _ := m.Update(key(k))
-		m = next.(Model)
+		m = modelOf(next)
 	}
 	return m
 }
@@ -168,7 +196,7 @@ func TestClickingATabSwitchesToIt(t *testing.T) {
 	m, _ := newModel(t)
 	s := tabSpans(m.counts())[TabGitHub]
 	next, _ := m.Update(tea.MouseClickMsg{X: s.from + 2, Y: 0, Button: tea.MouseLeft})
-	if got := next.(Model).active; got != TabGitHub {
+	if got := modelOf(next).active; got != TabGitHub {
 		t.Errorf("click on the GitHub tab landed on %d", got)
 	}
 }
@@ -185,14 +213,13 @@ func TestThePullRequestTabIsGhDash(t *testing.T) {
 
 	// Mouse events reach gh-dash shifted under the bar, so its zones line up.
 	next, _ := m.Update(tea.MouseClickMsg{X: 7, Y: 9, Button: tea.MouseLeft})
-	m = next.(Model)
+	m = modelOf(next)
 	if len(f.mice) != 1 || f.mice[0].Y != 9-barHeight || f.mice[0].X != 7 {
 		t.Errorf("gh-dash got mice %v, want one at (7, %d)", f.mice, 9-barHeight)
 	}
 
 	// Releasing a drag over the tab bar still notifies the active tab.
-	next, _ = m.Update(tea.MouseReleaseMsg{X: 7, Y: 0, Button: tea.MouseLeft})
-	m = next.(Model)
+	m.Update(tea.MouseReleaseMsg{X: 7, Y: 0, Button: tea.MouseLeft})
 	if len(f.mice) != 2 || f.mice[1].Y != -barHeight {
 		t.Errorf("gh-dash did not receive MouseReleaseMsg over tab bar: %v", f.mice)
 	}
@@ -222,7 +249,7 @@ func TestSandboxMessagesSkipGhDash(t *testing.T) {
 }
 
 func TestWithoutGhDashThePullRequestTabSaysWhy(t *testing.T) {
-	m := sized(New(*ghtheme.DefaultTheme, nil, errors.New("not logged in")), 100, 30)
+	m := sized(New(*ghtheme.DefaultTheme, nil, errors.New("not logged in"), &fakeAccounts{}), 100, 30)
 	m = press(m, "tab")
 	body := strings.Join(frame(m), "\n")
 	if !strings.Contains(body, "not logged in") || !strings.Contains(body, "gh auth login") {
@@ -234,6 +261,14 @@ func TestWithoutGhDashThePullRequestTabSaysWhy(t *testing.T) {
 }
 
 // asModel narrows what Update returns back to the root model.
+// modelOf is the Model inside what Update returns.
+func modelOf(next tea.Model) Model {
+	if m, ok := next.(Model); ok {
+		return m
+	}
+	return Model{}
+}
+
 func asModel(t *testing.T, m tea.Model) Model {
 	t.Helper()
 	root, ok := m.(Model)

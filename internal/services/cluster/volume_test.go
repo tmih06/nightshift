@@ -2,65 +2,9 @@ package cluster
 
 import (
 	"encoding/json"
-	"regexp"
 	"strings"
 	"testing"
 )
-
-var dns1123Label = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
-
-func TestVolumeNamesAreValidAndStable(t *testing.T) {
-	if got := VolumeName("acme/rocket", 7); got != "pr-acme-rocket-7" {
-		t.Errorf("short = %s", got)
-	}
-	if got := VolumeName("Acme_Co/rocket.js", 12); got != "pr-acme-co-rocket-js-12" {
-		t.Errorf("odd characters = %s", got)
-	}
-	long := VolumeName("some-very-long-organisation-name/an-even-longer-repository-name-here", 12345)
-	if len(long) > 63 || !strings.HasSuffix(long, "-12345") || long != VolumeName("some-very-long-organisation-name/an-even-longer-repository-name-here", 12345) {
-		t.Errorf("long = %s (%d)", long, len(long))
-	}
-	if VolumeName("a/b", 1) == VolumeName("a/b", 2) {
-		t.Error("two pull requests share a volume")
-	}
-	if got := IssueVolumeName("acme/rocket", 42); got != "issue-acme-rocket-42" {
-		t.Errorf("issue short = %s", got)
-	}
-	if IssueVolumeName("acme/rocket", 7) == VolumeName("acme/rocket", 7) {
-		t.Error("issue and pull request share a volume")
-	}
-	longIssue := IssueVolumeName("some-very-long-organisation-name/an-even-longer-repository-name-here", 12345)
-	if len(longIssue) > 63 || !strings.HasSuffix(longIssue, "-12345") || !strings.HasPrefix(longIssue, "issue-") {
-		t.Errorf("long issue = %s (%d)", longIssue, len(longIssue))
-	}
-
-	if got := RepoVolumeName("acme/rocket", "main"); got != "repo-acme-rocket-main" {
-		t.Errorf("repo short = %s", got)
-	}
-	if got := RepoVolumeName("acme/rocket", ""); got != "repo-acme-rocket-default" {
-		t.Errorf("repo empty branch = %s", got)
-	}
-	if got := RepoVolumeName("Acme_Co/rocket.js", "feat/dark_mode.v2"); got != "repo-acme-co-rocket-js-feat-dark-mode-v2" {
-		t.Errorf("repo odd chars = %s", got)
-	}
-	if RepoVolumeName("acme/rocket", "7") == VolumeName("acme/rocket", 7) ||
-		RepoVolumeName("acme/rocket", "7") == IssueVolumeName("acme/rocket", 7) {
-		t.Error("repo volume collides with PR or issue volume")
-	}
-	longRepo1 := RepoVolumeName("some-very-long-organisation-name/an-even-longer-repository-name", "feat/super-long-branch-name-alpha")
-	longRepo2 := RepoVolumeName("some-very-long-organisation-name/an-even-longer-repository-name", "feat/super-long-branch-name-beta")
-	for _, got := range []string{longRepo1, longRepo2} {
-		if len(got) > 63 || !strings.HasPrefix(got, "repo-") || !dns1123Label.MatchString(got) {
-			t.Errorf("invalid long repo volume = %q (%d)", got, len(got))
-		}
-	}
-	if longRepo1 != RepoVolumeName("some-very-long-organisation-name/an-even-longer-repository-name", "feat/super-long-branch-name-alpha") {
-		t.Error("long repo volume is not deterministic")
-	}
-	if longRepo1 == longRepo2 {
-		t.Errorf("two distinct long repo branches share a volume: %s", longRepo1)
-	}
-}
 
 func decode(t *testing.T, raw []byte) map[string]any {
 	t.Helper()
@@ -247,5 +191,46 @@ func TestEgressWiringAddsProxyCAAndPlaceholdersWithoutRealSecrets(t *testing.T) 
 	}
 	if _, hasKey := envMap["ANTHROPIC_API_KEY"]; hasKey {
 		t.Errorf("sandbox env must not set ANTHROPIC_API_KEY: it shadows oauth auth")
+	}
+}
+
+// egress-setup.sh puts the CA volume and mount into every template. A sandbox
+// made from such a template must not get them a second time: Kubernetes
+// refuses the duplicate, and no checkout could start.
+func TestEgressWiringDoesNotRepeatWhatTheTemplateAlreadyHas(t *testing.T) {
+	pod := map[string]any{"spec": map[string]any{
+		"volumes": []any{map[string]any{"name": "egress-ca", "configMap": map[string]any{"name": "egress-ca"}}},
+		"containers": []any{map[string]any{
+			"name": "agent", "image": "img",
+			"volumeMounts": []any{map[string]any{"name": "egress-ca", "mountPath": "/etc/nightshift/ca", "readOnly": true}},
+		}},
+	}}
+	raw, err := volumeSandboxManifestWithEgress("pi-template", pod, "pr-acme-rocket-7", "/home/node/workspace/rocket", "http://10.96.0.42:8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := decode(t, raw)
+	count := func(list any, key, want string) int {
+		n := 0
+		items, ok := list.([]any)
+		if !ok {
+			return 0
+		}
+		for _, item := range items {
+			if m, ok := item.(map[string]any); ok && m[key] == want {
+				n++
+			}
+		}
+		return n
+	}
+	spec := dig(m, "spec", "podTemplate", "spec")
+	if n := count(dig(spec, "volumes"), "name", "egress-ca"); n != 1 {
+		t.Errorf("the sandbox has %d egress-ca volumes, want 1", n)
+	}
+	if n := count(dig(spec, "containers", 0, "volumeMounts"), "name", "egress-ca"); n != 1 {
+		t.Errorf("the container mounts egress-ca %d times, want 1", n)
+	}
+	if count(dig(spec, "volumes"), "name", "repo") != 1 {
+		t.Error("the repo volume went missing")
 	}
 }

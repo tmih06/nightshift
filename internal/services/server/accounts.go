@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
 
 	v1 "github.com/tmih06/nightshift/api/v1"
@@ -8,15 +9,15 @@ import (
 
 func (s *Server) accountRoutes() []route {
 	return []route{
-		{method: "GET", pattern: "/v1/accounts", handle: s.listAccounts},
-		{method: "POST", pattern: "/v1/accounts/logins", handle: s.startLogin},
-		{method: "POST", pattern: "/v1/accounts/logins/{id}/complete", handle: s.completeLogin},
-		{method: "DELETE", pattern: "/v1/accounts/logins/{id}", handle: s.cancelLogin},
-		{method: "POST", pattern: "/v1/accounts/publish", handle: s.publishAccounts},
-		{method: "PUT", pattern: "/v1/accounts/active/{provider}", handle: s.setActiveAccount},
-		{method: "PATCH", pattern: "/v1/accounts/{name}", handle: s.patchAccount},
-		{method: "DELETE", pattern: "/v1/accounts/{name}", handle: s.deleteAccount},
-		{method: "POST", pattern: "/v1/accounts/{name}/refresh", handle: s.refreshAccount},
+		{method: http.MethodGet, pattern: "/v1/accounts", handle: s.listAccounts},
+		{method: http.MethodPost, pattern: "/v1/accounts/logins", handle: s.startLogin},
+		{method: http.MethodPost, pattern: "/v1/accounts/logins/{id}/complete", handle: s.completeLogin},
+		{method: http.MethodDelete, pattern: "/v1/accounts/logins/{id}", handle: s.cancelLogin},
+		{method: http.MethodPost, pattern: "/v1/accounts/publish", handle: s.publishAccounts},
+		{method: http.MethodPut, pattern: "/v1/accounts/active/{provider}", handle: s.setActiveAccount},
+		{method: http.MethodPatch, pattern: "/v1/accounts/{name}", handle: s.patchAccount},
+		{method: http.MethodDelete, pattern: "/v1/accounts/{name}", handle: s.deleteAccount},
+		{method: http.MethodPost, pattern: "/v1/accounts/{name}/refresh", handle: s.refreshAccount},
 	}
 }
 
@@ -40,7 +41,7 @@ func (s *Server) listAccounts(w http.ResponseWriter, r *http.Request) error {
 	}
 	snap, err := a.Accounts(r.Context())
 	if err != nil {
-		return err
+		return fmt.Errorf("list accounts: %w", err)
 	}
 	writeJSON(w, http.StatusOK, snap)
 	return nil
@@ -60,7 +61,7 @@ func (s *Server) startLogin(w http.ResponseWriter, r *http.Request) error {
 	}
 	login, err := a.StartLogin(r.Context(), req.Provider)
 	if err != nil {
-		return err
+		return fmt.Errorf("start login: %w", err)
 	}
 	writeJSON(w, http.StatusCreated, login)
 	return nil
@@ -92,7 +93,7 @@ func (s *Server) publishAccounts(w http.ResponseWriter, r *http.Request) error {
 	}
 	report, err := a.Publish(r.Context())
 	if err != nil {
-		return err
+		return fmt.Errorf("publish accounts: %w", err)
 	}
 	writeJSON(w, http.StatusOK, v1.PublishReport{Report: report})
 	return nil

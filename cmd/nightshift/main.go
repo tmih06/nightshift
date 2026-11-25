@@ -1,6 +1,10 @@
-// Command nightshift is the software factory's terminal: a sandbox tab to
-// watch and drive the agent-sandbox fleet, and a GitHub tab that is
-// gh-dash.
+// Command nightshift is the software factory's terminal: a Pods tab to watch
+// and drive the agent-sandbox fleet, a GitHub tab that is gh-dash, and an
+// Accounts tab. It is a frontend of the Nightshift services and talks to them
+// only through their API (docs/api.md): given -api, or NIGHTSHIFT_API and
+// NIGHTSHIFT_TOKEN, it uses that server; given neither, it runs the services
+// inside itself, on a private loopback port, against the cluster kubectl
+// points at.
 //
 // go run ./cmd/nightshift opens the TUI; -once prints one sandbox frame;
 // -pr owner/repo#123 (or a pull request URL) opens on that pull request;
@@ -10,68 +14,157 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/log/v2"
 	gitm "github.com/aymanbagabas/git-module"
 	"github.com/cli/go-gh/v2/pkg/repository"
 
+	"github.com/tmih06/nightshift/api/client"
 	"github.com/tmih06/nightshift/internal/ghdash/config"
 	"github.com/tmih06/nightshift/internal/ghdash/git"
 	ghtui "github.com/tmih06/nightshift/internal/ghdash/tui"
 	ghtheme "github.com/tmih06/nightshift/internal/ghdash/tui/theme"
+	"github.com/tmih06/nightshift/internal/services/daemon"
 	"github.com/tmih06/nightshift/internal/tui/app"
 	zgh "github.com/tmih06/nightshift/internal/zenocto/gh"
 )
 
+// options are what the command line asks for.
+type options struct {
+	once       bool
+	openPR     string
+	startRepos bool
+	api, token string
+}
+
+func parseOptions(args []string) (options, error) {
+	var o options
+	fs := flag.NewFlagSet("nightshift", flag.ContinueOnError)
+	fs.BoolVar(&o.once, "once", false, "print one frame of the Pods tab and exit")
+	fs.StringVar(&o.openPR, "pr", "", "open on a pull request: owner/repo#123 or its URL")
+	fs.BoolVar(&o.startRepos, "repos", false, "open on the GitHub Repo view")
+	fs.StringVar(&o.api, "api", os.Getenv("NIGHTSHIFT_API"), "address of a Nightshift services server; empty runs the services inside this program")
+	fs.StringVar(&o.token, "token", os.Getenv("NIGHTSHIFT_TOKEN"), "bearer token for -api")
+	if err := fs.Parse(args); err != nil {
+		return o, fmt.Errorf("arguments: %w", err)
+	}
+	return o, nil
+}
+
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "-once" {
-		fmt.Println(app.Once(120, 32))
-		return
+	o, err := parseOptions(os.Args[1:])
+	if err != nil {
+		os.Exit(2)
 	}
-	var (
-		openPR     string
-		startRepos bool
-	)
-	switch {
-	case len(os.Args) > 2 && os.Args[1] == "-pr":
-		openPR = os.Args[2]
-	case len(os.Args) > 1 && os.Args[1] == "-repos":
-		startRepos = true
-	}
-	if err := run(openPR, startRepos); err != nil {
+	if err := run(o); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(openPR string, startRepos bool) error {
-	var start *zgh.PRRef
-	if openPR != "" {
-		ref, err := zgh.ParsePRRef(openPR)
+// connect is the services client: the server o names, or the services started
+// in this process. stop ends what connect started.
+func connect(o options) (c *client.Client, stop func(), err error) {
+	if o.api != "" {
+		if o.token == "" {
+			return nil, nil, errors.New("-api needs a token: pass -token or set NIGHTSHIFT_TOKEN")
+		}
+		c, err = client.New(o.api, o.token)
 		if err != nil {
-			return err
+			return nil, nil, fmt.Errorf("connect: %w", err)
+		}
+		return c, func() {}, nil
+	}
+	d, err := daemon.Start(daemon.Config{Listen: "127.0.0.1:0", Version: "embedded"})
+	if err != nil {
+		return nil, nil, fmt.Errorf("connect: %w", err)
+	}
+	stop = func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := d.Close(ctx); err != nil {
+			log.Debug("stop the services", "err", err)
+		}
+	}
+	c, err = client.New(d.URL(), d.Token())
+	if err != nil {
+		stop()
+		return nil, nil, fmt.Errorf("connect: %w", err)
+	}
+	return c, stop, nil
+}
+
+// logTo points the program's log at the NIGHTSHIFT_DEBUG file, or nowhere:
+// gh-dash logs to stderr, which would draw over the TUI. close ends it.
+func logTo(path string) (closeLog func(), err error) {
+	log.SetOutput(io.Discard)
+	if path == "" {
+		return func() {}, nil
+	}
+	dir, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		return nil, fmt.Errorf("open the debug log's directory: %w", err)
+	}
+	f, err := dir.OpenFile(filepath.Base(path), os.O_RDWR|os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open the debug log: %w", err)
+	}
+	log.SetOutput(f)
+	log.SetLevel(log.DebugLevel)
+	return func() {
+		if err := f.Close(); err != nil {
+			log.Debug("close the debug log", "err", err)
+		}
+	}, nil
+}
+
+func run(o options) error {
+	var start *zgh.PRRef
+	if o.openPR != "" {
+		ref, err := zgh.ParsePRRef(o.openPR)
+		if err != nil {
+			return fmt.Errorf("-pr: %w", err)
 		}
 		start = &ref
 	}
-
-	// gh-dash logs to stderr, which would draw over the TUI. NIGHTSHIFT_DEBUG
-	// sends it to a file instead.
-	log.SetOutput(io.Discard)
-	if path := os.Getenv("NIGHTSHIFT_DEBUG"); path != "" {
-		f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0o600)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		log.SetOutput(f)
-		log.SetLevel(log.DebugLevel)
+	closeLog, err := logTo(os.Getenv("NIGHTSHIFT_DEBUG"))
+	if err != nil {
+		return err
 	}
+	defer closeLog()
 
+	svc, stop, err := connect(o)
+	if err != nil {
+		return err
+	}
+	defer stop()
+	if o.once {
+		if _, err := fmt.Fprintln(os.Stdout, app.Once(120, 32, svc)); err != nil {
+			return fmt.Errorf("print the frame: %w", err)
+		}
+		return nil
+	}
+	root, err := newRoot(svc, start, o.startRepos)
+	if err != nil {
+		return err
+	}
+	if _, err := tea.NewProgram(root).Run(); err != nil {
+		return fmt.Errorf("run: %w", err)
+	}
+	return nil
+}
+
+// newRoot builds the root model: gh-dash for the repository the program was
+// started in, over the services.
+func newRoot(svc app.Services, start *zgh.PRRef, startRepos bool) (app.Model, error) {
 	gitRepo, ghRepo := currentRepos()
 	var repoPath string
 	if gitRepo != nil {
@@ -83,13 +176,12 @@ func run(openPR string, startRepos bool) error {
 	// config is checked first, while the terminal is still ours.
 	cfg, err := config.ParseConfig(location)
 	if err != nil {
-		return fmt.Errorf("gh-dash config: %w", err)
+		return app.Model{}, fmt.Errorf("gh-dash config: %w", err)
 	}
 	theme := ghtheme.ParseTheme(&cfg)
-
 	dash := ghtui.NewModel(location, ghtui.Repositories{GitRepo: gitRepo, GHRepo: &ghRepo})
 
-	root := app.New(theme, app.NewGhDash(&dash), nil)
+	root := app.New(theme, app.NewGhDash(&dash), nil, svc)
 	if ghRepo.Owner != "" && ghRepo.Name != "" {
 		root = root.WithCurrentRepo(ghRepo.Owner + "/" + ghRepo.Name)
 	}
@@ -98,11 +190,7 @@ func run(openPR string, startRepos bool) error {
 	} else if startRepos {
 		root = root.StartOnRepos()
 	}
-	final, err := tea.NewProgram(root).Run()
-	if m, ok := final.(app.Model); ok {
-		m.Close()
-	}
-	return err
+	return root, nil
 }
 
 // currentRepos finds the git and GitHub repositories of the working

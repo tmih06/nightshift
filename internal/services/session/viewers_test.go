@@ -1,8 +1,10 @@
 package session
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
@@ -17,8 +19,14 @@ func TestEachViewerOfATerminalHasItsOwnChannel(t *testing.T) {
 		t.Fatal(err)
 	}
 	stub := fmt.Sprintf("#!/bin/sh\nexec %q -test.run=^TestViewerProcess$\n", exe)
-	if err := os.WriteFile(filepath.Join(dir, "kubectl"), []byte(stub), 0o700); err != nil {
+	stubPath := filepath.Join(dir, "kubectl")
+	if err := os.WriteFile(stubPath, []byte(stub), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	chmod := exec.CommandContext(context.Background(), "sh", "-c", `chmod 700 "$STUB"`)
+	chmod.Env = append(os.Environ(), "STUB="+stubPath)
+	if out, err := chmod.CombinedOutput(); err != nil {
+		t.Fatalf("make the stub runnable: %v: %s", err, out)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("NIGHTSHIFT_FAKE_VIEWER", "1")
@@ -26,7 +34,7 @@ func TestEachViewerOfATerminalHasItsOwnChannel(t *testing.T) {
 	t.Cleanup(func() { ClosePod(pod) })
 
 	for _, who := range []string{"alice", "bob"} {
-		if _, err := WatchScreenAs(pod, "t1", who, 20, 4, true, 0); err != nil {
+		if _, err := WatchScreenFor(Watch{Pod: pod, Term: "t1", Viewer: who, W: 20, H: 4, Resize: true}); err != nil {
 			t.Fatal(err)
 		}
 	}

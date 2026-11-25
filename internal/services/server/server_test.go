@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -154,30 +155,55 @@ func newTestServer(t *testing.T, f *fake, mutate ...func(*Config)) *httptest.Ser
 	return ts
 }
 
-func call(t *testing.T, ts *httptest.Server, method, path, body string, hdr ...string) (*http.Response, []byte) {
+// reply is what a request got back, with the body already read.
+type reply struct {
+	StatusCode int
+	Header     http.Header
+}
+
+// asked is one request a test makes.
+type asked struct {
+	host   string // the Host header to send; "" sends the server's own
+	method string
+	path   string
+	body   io.Reader
+}
+
+// send makes the request, with the token, and returns what came back and its
+// body.
+func send(t *testing.T, ts *httptest.Server, a asked) (got reply, body []byte) {
 	t.Helper()
-	req, err := http.NewRequestWithContext(context.Background(), method, ts.URL+path, strings.NewReader(body))
+	req, err := http.NewRequestWithContext(context.Background(), a.method, ts.URL+a.path, a.body)
 	if err != nil {
 		t.Fatal(err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	for i := 0; i+1 < len(hdr); i += 2 {
-		if hdr[i] == "Host" {
-			req.Host = hdr[i+1] // net/http sends this, not the header
-			continue
-		}
-		req.Header.Set(hdr[i], hdr[i+1])
+	if a.host != "" {
+		req.Host = a.host // net/http sends this, not the header
 	}
+	return do(t, req)
+}
+
+// do makes a request and reads the whole answer.
+func do(t *testing.T, req *http.Request) (got reply, body []byte) {
+	t.Helper()
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
+	if cerr := resp.Body.Close(); cerr != nil {
+		t.Errorf("close the answer: %v", cerr)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	return resp, raw
+	return reply{StatusCode: resp.StatusCode, Header: resp.Header}, raw
+}
+
+func call(t *testing.T, ts *httptest.Server, method, path, body string) (got reply, raw []byte) {
+	t.Helper()
+	return send(t, ts, asked{method: method, path: path, body: strings.NewReader(body)})
 }
 
 // strict decodes raw into v and fails on any field v does not have: a response
@@ -191,7 +217,7 @@ func strict(t *testing.T, raw []byte, v any) {
 	}
 }
 
-func problem(t *testing.T, resp *http.Response, raw []byte, status int, code string) {
+func problem(t *testing.T, resp reply, raw []byte, status int, code string) {
 	t.Helper()
 	var p v1.Problem
 	strict(t, raw, &p)
@@ -239,45 +265,40 @@ func TestAServerWithoutATokenDoesNotExist(t *testing.T) {
 func TestTheTokenIsRequiredEverywhereButHealth(t *testing.T) {
 	ts := newTestServer(t, &fake{})
 	for _, auth := range []string{"", "Bearer wrong", token, "Basic " + token, "Bearer "} {
-		req, _ := http.NewRequestWithContext(context.Background(), "GET", ts.URL+"/v1/fleet", nil)
-		if auth != "" {
-			req.Header.Set("Authorization", auth)
-		}
-		resp, err := http.DefaultClient.Do(req)
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/v1/fleet", http.NoBody)
 		if err != nil {
 			t.Fatal(err)
 		}
-		raw, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		resp, raw := do(t, req)
 		problem(t, resp, raw, 401, v1.CodeUnauthorized)
 		if resp.Header.Get("WWW-Authenticate") != "Bearer" {
 			t.Errorf("no WWW-Authenticate for %q", auth)
 		}
 	}
-	req, _ := http.NewRequestWithContext(context.Background(), "GET", ts.URL+"/v1/healthz", nil)
-	resp, err := http.DefaultClient.Do(req)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/v1/healthz", http.NoBody)
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
-	if resp.StatusCode != 200 {
+	if resp, _ := do(t, req); resp.StatusCode != 200 {
 		t.Errorf("healthz needs no token, got %d", resp.StatusCode)
 	}
 }
 
 func TestOnlyKnownHostsAreServed(t *testing.T) {
 	ts := newTestServer(t, &fake{})
-	resp, raw := call(t, ts, "GET", "/v1", "", "Host", "evil.example.com")
-	_ = raw
+	resp, _ := send(t, ts, asked{host: "evil.example.com", method: http.MethodGet, path: "/v1", body: http.NoBody})
 	if resp.StatusCode != 403 {
 		t.Errorf("a rebinding Host got %d", resp.StatusCode)
 	}
 	ts = newTestServer(t, &fake{}, func(c *Config) { c.Hosts = []string{"nightshift.example.com"} })
-	if resp, _ := call(t, ts, "GET", "/v1", "", "Host", "nightshift.example.com:7777"); resp.StatusCode != 200 {
+	if resp, _ := send(t, ts, asked{host: "nightshift.example.com:7777", method: http.MethodGet, path: "/v1", body: http.NoBody}); resp.StatusCode != 200 {
 		t.Errorf("a configured Host got %d", resp.StatusCode)
 	}
 	ts = newTestServer(t, &fake{}, func(c *Config) { c.AnyHost = true })
-	if resp, _ := call(t, ts, "GET", "/v1", "", "Host", "anything.test"); resp.StatusCode != 200 {
+	if resp, _ := send(t, ts, asked{host: "anything.test", method: http.MethodGet, path: "/v1", body: http.NoBody}); resp.StatusCode != 200 {
 		t.Errorf("AnyHost got %d", resp.StatusCode)
 	}
 }
@@ -304,7 +325,7 @@ func TestInfoListsWhatTheServerOffers(t *testing.T) {
 func TestTheContractIsServedAsRunning(t *testing.T) {
 	ts := newTestServer(t, &fake{})
 	resp, raw := call(t, ts, "GET", "/v1/openapi.yaml", "")
-	if resp.StatusCode != 200 || string(raw) != string(api.OpenAPI) {
+	if resp.StatusCode != 200 || !bytes.Equal(raw, api.OpenAPI) {
 		t.Errorf("status %d, %d bytes", resp.StatusCode, len(raw))
 	}
 }
@@ -345,13 +366,20 @@ func TestFleetWatchSendsTheFleetOnceAndAgainOnlyWhenItChanges(t *testing.T) {
 	ts := newTestServer(t, f)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, "GET", ts.URL+"/v1/fleet/watch", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/v1/fleet/watch", http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Errorf("close the stream: %v", err)
+		}
+	}()
 	if ct := resp.Header.Get("Content-Type"); ct != "text/event-stream" {
 		t.Fatalf("content type = %q", ct)
 	}
@@ -362,10 +390,18 @@ func TestFleetWatchSendsTheFleetOnceAndAgainOnlyWhenItChanges(t *testing.T) {
 			events = append(events, name)
 		}
 	}
-	time.Sleep(100 * time.Millisecond) // several ticks with nothing new
-	f.mu.Lock()
-	looks := f.fleetsAt
-	f.mu.Unlock()
+	// Several ticks pass with nothing new, and the server keeps looking.
+	var looks int
+	for deadline := time.After(2 * time.Second); looks < 3; {
+		select {
+		case <-deadline:
+			t.Fatalf("the server looked only %d times", looks)
+		case <-time.After(10 * time.Millisecond):
+		}
+		f.mu.Lock()
+		looks = f.fleetsAt
+		f.mu.Unlock()
+	}
 	cancel()
 	if len(events) != 1 || events[0] != "fleet" {
 		t.Errorf("events = %v", events)
@@ -419,8 +455,9 @@ func TestCheckoutsAreValidatedAndFollowedAsAStream(t *testing.T) {
 	if resp.Header.Get("Content-Type") != "text/event-stream" {
 		t.Fatalf("content type %q", resp.Header.Get("Content-Type"))
 	}
-	var got []v1.CheckoutEvent
-	for _, block := range strings.Split(strings.TrimSpace(string(raw)), "\n\n") {
+	blocks := strings.Split(strings.TrimSpace(string(raw)), "\n\n")
+	got := make([]v1.CheckoutEvent, 0, len(blocks))
+	for _, block := range blocks {
 		name, data, ok := strings.Cut(block, "\ndata: ")
 		if !ok || name != "event: checkout" {
 			t.Fatalf("block %q", block)

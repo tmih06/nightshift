@@ -1,11 +1,9 @@
 package dashboard
 
 import (
-	"fmt"
+	"context"
 
 	tea "charm.land/bubbletea/v2"
-
-	"github.com/tmih06/nightshift/internal/services/cluster"
 	"github.com/tmih06/nightshift/internal/tui/dialog"
 )
 
@@ -87,21 +85,17 @@ func (m model) destroyChoice(choice int) (model, tea.Cmd) {
 	} else {
 		m.sticky("destroying " + d.pod + ", keeping volume " + d.volume + "…")
 	}
-	return m, deleteSandboxCmd(d.pod, d.volume, drop)
+	return m, deleteSandboxCmd(m.api, d.pod, d.volume, drop)
 }
 
-func deleteSandboxCmd(name, volume string, dropVolume bool) tea.Cmd {
+func deleteSandboxCmd(api API, name, volume string, dropVolume bool) tea.Cmd {
 	return func() tea.Msg {
-		if err := cluster.DeleteSandbox(name); err != nil {
+		_, err := call(callTimeout, func(ctx context.Context) (struct{}, error) {
+			return struct{}{}, api.DeleteSandbox(ctx, name, dropVolume)
+		})
+		if err != nil {
 			return deletedMsg{sandbox: name, volume: volume, err: err}
 		}
-		if !dropVolume {
-			return deletedMsg{sandbox: name, volume: volume}
-		}
-		if err := cluster.DeleteVolume(volume); err != nil {
-			return deletedMsg{sandbox: name, volume: volume,
-				err: fmt.Errorf("sandbox %s destroyed, but not volume %s: %w", name, volume, err)}
-		}
-		return deletedMsg{sandbox: name, volume: volume, volumeGone: true}
+		return deletedMsg{sandbox: name, volume: volume, volumeGone: dropVolume}
 	}
 }

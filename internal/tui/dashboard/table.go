@@ -8,8 +8,7 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
-
-	"github.com/tmih06/nightshift/internal/services/cluster"
+	"github.com/tmih06/nightshift/internal/tui/fleet"
 )
 
 const (
@@ -52,25 +51,25 @@ type tableEntry struct {
 
 type roleGroup struct {
 	title string
-	roles []cluster.PodRole
+	roles []fleet.PodRole
 }
 
 func allRoleGroups() []roleGroup {
 	return append([]roleGroup{
-		{title: "CLAIMED", roles: []cluster.PodRole{cluster.RoleClaimed}},
-		{title: "WARM POOLS", roles: []cluster.PodRole{cluster.RoleWarm}},
+		{title: "CLAIMED", roles: []fleet.PodRole{fleet.RoleClaimed}},
+		{title: "WARM POOLS", roles: []fleet.PodRole{fleet.RoleWarm}},
 	}, infraRoleGroups()...)
 }
 
 func infraRoleGroups() []roleGroup {
 	return []roleGroup{
-		{title: "EGRESS PROXY", roles: []cluster.PodRole{cluster.RoleEgress}},
-		{title: "CLUSTER CORE", roles: []cluster.PodRole{cluster.RoleSystem}},
-		{title: "JOBS & OTHER", roles: []cluster.PodRole{cluster.RoleJob, cluster.RoleOther}},
+		{title: "EGRESS PROXY", roles: []fleet.PodRole{fleet.RoleEgress}},
+		{title: "CLUSTER CORE", roles: []fleet.PodRole{fleet.RoleSystem}},
+		{title: "JOBS & OTHER", roles: []fleet.PodRole{fleet.RoleJob, fleet.RoleOther}},
 	}
 }
 
-func matchesRoles(role cluster.PodRole, allowed []cluster.PodRole) bool {
+func matchesRoles(role fleet.PodRole, allowed []fleet.PodRole) bool {
 	for _, r := range allowed {
 		if role == r {
 			return true
@@ -79,7 +78,7 @@ func matchesRoles(role cluster.PodRole, allowed []cluster.PodRole) bool {
 	return false
 }
 
-func (m model) sortedIndicesForRoles(roles []cluster.PodRole) []int {
+func (m model) sortedIndicesForRoles(roles []fleet.PodRole) []int {
 	var indices []int
 	for i := range m.boxes {
 		if matchesRoles(m.boxes[i].PodRole(), roles) {
@@ -107,9 +106,9 @@ func (m model) sortedIndicesForRoles(roles []cluster.PodRole) []int {
 func (m model) tableEntries() []tableEntry {
 	switch m.section {
 	case sectionClaimed:
-		return flatEntries(m.sortedIndicesForRoles([]cluster.PodRole{cluster.RoleClaimed}))
+		return flatEntries(m.sortedIndicesForRoles([]fleet.PodRole{fleet.RoleClaimed}))
 	case sectionWarm:
-		return flatEntries(m.sortedIndicesForRoles([]cluster.PodRole{cluster.RoleWarm}))
+		return flatEntries(m.sortedIndicesForRoles([]fleet.PodRole{fleet.RoleWarm}))
 	case sectionInfra:
 		return m.groupedEntries(infraRoleGroups())
 	default:
@@ -173,11 +172,11 @@ func (m model) sectionCount(section int) int {
 		case sectionAll:
 			n++
 		case sectionClaimed:
-			if role == cluster.RoleClaimed {
+			if role == fleet.RoleClaimed {
 				n++
 			}
 		case sectionWarm:
-			if role == cluster.RoleWarm {
+			if role == fleet.RoleWarm {
 				n++
 			}
 		case sectionInfra:
@@ -211,17 +210,17 @@ func (m model) sectionLabel(i int) string {
 
 func (m model) clusterSummary() string {
 	if len(m.boxes) == 0 {
-		return lipgloss.NewStyle().Foreground(th.SecondaryText).Render("ns " + cluster.Namespace)
+		return lipgloss.NewStyle().Foreground(th.SecondaryText).Render("ns " + fleet.Namespace)
 	}
 	running, egressUp, egressSeen := 0, false, false
 	for i := range m.boxes {
 		b := &m.boxes[i]
-		if b.Phase == cluster.PodPhaseRunning {
+		if b.Phase == fleet.PodPhaseRunning {
 			running++
 		}
-		if b.PodRole() == cluster.RoleEgress {
+		if b.PodRole() == fleet.RoleEgress {
 			egressSeen = true
-			if b.Phase == cluster.PodPhaseRunning {
+			if b.Phase == fleet.PodPhaseRunning {
 				egressUp = true
 			}
 		}
@@ -303,32 +302,32 @@ func tableColumns(inner int) []column {
 	return cols
 }
 
-func roleGlyph(role cluster.PodRole) string {
+func roleGlyph(role fleet.PodRole) string {
 	switch role {
-	case cluster.RoleClaimed:
+	case fleet.RoleClaimed:
 		return glyphShell
-	case cluster.RoleEgress:
+	case fleet.RoleEgress:
 		return glyphEgress
-	case cluster.RoleSystem:
+	case fleet.RoleSystem:
 		return glyphCore
-	case cluster.RoleJob:
+	case fleet.RoleJob:
 		return glyphJob
 	default:
 		return glyphSandbox
 	}
 }
 
-func kindName(b *cluster.Sandbox) (string, color.Color) {
+func kindName(b *fleet.Sandbox) (string, color.Color) {
 	switch b.PodRole() {
-	case cluster.RoleWarm:
+	case fleet.RoleWarm:
 		return "Warm", warmColor
-	case cluster.RoleClaimed:
+	case fleet.RoleClaimed:
 		return "Claimed", claimColor
-	case cluster.RoleEgress:
+	case fleet.RoleEgress:
 		return "Egress", egressAccentColor()
-	case cluster.RoleSystem:
+	case fleet.RoleSystem:
 		return "Core", systemAccentColor()
-	case cluster.RoleJob:
+	case fleet.RoleJob:
 		return "Job", warnColor
 	default:
 		if b.OwnerKind != "" {
@@ -338,14 +337,14 @@ func kindName(b *cluster.Sandbox) (string, color.Color) {
 	}
 }
 
-func (m model) podSubtitle(b *cluster.Sandbox, compact bool, bg func(lipgloss.Style) lipgloss.Style) string {
+func (m model) podSubtitle(b *fleet.Sandbox, compact bool, bg func(lipgloss.Style) lipgloss.Style) string {
 	sec := bg(lipgloss.NewStyle().Foreground(th.SecondaryText))
 	faint := bg(lipgloss.NewStyle().Foreground(th.FaintText))
-	version := agentSemver(m.agentVersions[b.Name])
+	version := agentSemver(b.AgentVersion)
 	switch b.PodRole() {
-	case cluster.RoleClaimed:
+	case fleet.RoleClaimed:
 		return m.claimedSubtitle(b, version, bg, sec, faint)
-	case cluster.RoleWarm:
+	case fleet.RoleWarm:
 		tmpl := b.Template
 		if tmpl == "" {
 			tmpl = b.Owner
@@ -363,7 +362,7 @@ func (m model) podSubtitle(b *cluster.Sandbox, compact bool, bg func(lipgloss.St
 }
 
 func (m model) claimedSubtitle(
-	b *cluster.Sandbox,
+	b *fleet.Sandbox,
 	version string,
 	bg func(lipgloss.Style) lipgloss.Style,
 	sec, faint lipgloss.Style,
@@ -391,7 +390,7 @@ func (m model) claimedSubtitle(
 }
 
 func infraSubtitle(
-	b *cluster.Sandbox,
+	b *fleet.Sandbox,
 	compact bool,
 	bg func(lipgloss.Style) lipgloss.Style,
 	sec lipgloss.Style,
@@ -419,7 +418,7 @@ func infraSubtitle(
 	return sec.Render(strings.Join(parts, " · "))
 }
 
-func stateCell(b *cluster.Sandbox, bg func(lipgloss.Style) lipgloss.Style) [2]string {
+func stateCell(b *fleet.Sandbox, bg func(lipgloss.Style) lipgloss.Style) [2]string {
 	status := b.Phase
 	statusColor := phaseColor(b.Phase)
 	if b.Waiting != "" {
@@ -479,7 +478,7 @@ func (m model) renderRow(i, inner int, selected bool) []string {
 
 	compact := inner < tableMediumMin
 	h := m.hist[b.Name]
-	known := m.usageKnown(b.Name)
+	known := b.UsageKnown
 	subtitle := m.podSubtitle(&b, compact, bg)
 	if b.Startup != nil {
 		subtitle = startupSubtitle(b.Startup, time.Now(), compact, bg)

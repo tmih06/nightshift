@@ -114,13 +114,13 @@ func (c *Client) do(ctx context.Context, rq request) (*http.Response, error) {
 	if rq.body != nil {
 		raw, err := json.Marshal(rq.body)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("do: %w", err)
 		}
 		body = bytes.NewReader(raw)
 	}
 	req, err := http.NewRequestWithContext(ctx, rq.method, u.String(), body)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("do: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	if rq.body != nil {
@@ -131,11 +131,10 @@ func (c *Client) do(ctx context.Context, rq request) (*http.Response, error) {
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%s %s: %w", rq.method, rq.path, err)
 	}
 	if resp.StatusCode >= http.StatusBadRequest {
-		defer resp.Body.Close()
-		return nil, problemOf(resp)
+		return nil, errors.Join(problemOf(resp), closeErr(resp.Body))
 	}
 	return resp, nil
 }
@@ -143,9 +142,12 @@ func (c *Client) do(ctx context.Context, rq request) (*http.Response, error) {
 // problemOf reads the error the API answered with. A body that is not a
 // Problem, from a proxy in the way, still becomes an Error.
 func problemOf(resp *http.Response) error {
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		raw = nil // the status alone says it
+	}
 	var p v1.Problem
-	if err := json.Unmarshal(raw, &p); err != nil || p.Code == "" {
+	if json.Unmarshal(raw, &p) != nil || p.Code == "" {
 		p = v1.Problem{Title: http.StatusText(resp.StatusCode), Status: resp.StatusCode, Detail: strings.TrimSpace(string(raw)), Code: codeOf(resp.StatusCode)}
 	}
 	return &Error{Problem: p}
@@ -170,15 +172,25 @@ func codeOf(status int) string {
 	return v1.CodeInternal
 }
 
+// closeErr is what closing a body said, as an error that says so.
+func closeErr(body io.Closer) error {
+	if err := body.Close(); err != nil {
+		return fmt.Errorf("close the answer: %w", err)
+	}
+	return nil
+}
+
 // json calls the API and decodes the answer into out, when there is one.
-func (c *Client) json(ctx context.Context, rq request, out any) error {
+func (c *Client) json(ctx context.Context, rq request, out any) (err error) {
 	resp, err := c.do(ctx, rq)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { err = errors.Join(err, closeErr(resp.Body)) }()
 	if out == nil || resp.StatusCode == http.StatusNoContent {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxResponse))
+		if _, err := io.Copy(io.Discard, io.LimitReader(resp.Body, maxResponse)); err != nil {
+			return fmt.Errorf("read the answer to %s %s: %w", rq.method, rq.path, err)
+		}
 		return nil
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponse)).Decode(out); err != nil {
@@ -187,21 +199,23 @@ func (c *Client) json(ctx context.Context, rq request, out any) error {
 	return nil
 }
 
+// fetch calls the API and returns the answer decoded as T.
+func fetch[T any](ctx context.Context, c *Client, rq request) (T, error) {
+	var out T
+	err := c.json(ctx, rq, &out)
+	return out, err
+}
+
 func esc(s string) string { return url.PathEscape(s) }
 
 // Info says who is answering and what it can do.
 func (c *Client) Info(ctx context.Context) (v1.Info, error) {
-	var out v1.Info
-	return out, c.json(ctx, request{method: "GET", path: "/v1"}, &out)
+	return fetch[v1.Info](ctx, c, request{method: http.MethodGet, path: "/v1"})
 }
 
 // Healthy is whether the server answers its liveness check.
 func (c *Client) Healthy(ctx context.Context) error {
-	resp, err := c.do(ctx, request{method: "GET", path: "/v1/healthz"})
-	if err != nil {
-		return err
-	}
-	return resp.Body.Close()
+	return c.json(ctx, request{method: http.MethodGet, path: "/v1/healthz"}, nil)
 }
 
 func includeQuery(include []string) url.Values {
@@ -214,64 +228,58 @@ func includeQuery(include []string) url.Values {
 // Fleet reads the sandbox fleet. include is any of v1.IncludeConfigs,
 // v1.IncludeLive, and v1.IncludeVersions.
 func (c *Client) Fleet(ctx context.Context, include ...string) (v1.Fleet, error) {
-	var out v1.Fleet
-	return out, c.json(ctx, request{method: "GET", path: "/v1/fleet", query: includeQuery(include)}, &out)
+	return fetch[v1.Fleet](ctx, c, request{method: http.MethodGet, path: "/v1/fleet", query: includeQuery(include)})
 }
 
 // PodLogs reads the last tail lines of a pod's log.
 func (c *Client) PodLogs(ctx context.Context, namespace, pod string, tail int) ([]string, error) {
-	var out v1.Logs
 	q := url.Values{"tail": {strconv.Itoa(tail)}}
-	err := c.json(ctx, request{method: "GET", path: "/v1/pods/" + esc(namespace) + "/" + esc(pod) + "/logs", query: q}, &out)
+	out, err := fetch[v1.Logs](ctx, c, request{method: http.MethodGet, path: "/v1/pods/" + esc(namespace) + "/" + esc(pod) + "/logs", query: q})
 	return out.Lines, err
 }
 
 // Claim claims a sandbox from a warm pool. The claim may not have a sandbox
 // yet; WaitClaim waits for one.
 func (c *Client) Claim(ctx context.Context, pool string) (v1.Claim, error) {
-	var out v1.Claim
-	return out, c.json(ctx, request{method: "POST", path: "/v1/claims", body: v1.ClaimRequest{Pool: pool}}, &out)
+	return fetch[v1.Claim](ctx, c, request{method: http.MethodPost, path: "/v1/claims", body: v1.ClaimRequest{Pool: pool}})
 }
 
 // WaitClaim reads a claim, waiting up to wait for it to have a sandbox. The
 // claim comes back without one when the wait runs out.
 func (c *Client) WaitClaim(ctx context.Context, name string, wait time.Duration) (v1.Claim, error) {
-	var out v1.Claim
 	q := url.Values{"wait": {strconv.Itoa(int(wait.Seconds()))}}
-	return out, c.json(ctx, request{method: "GET", path: "/v1/claims/" + esc(name), query: q}, &out)
+	return fetch[v1.Claim](ctx, c, request{method: http.MethodGet, path: "/v1/claims/" + esc(name), query: q})
 }
 
 // DeleteClaim releases a claim; its sandbox goes with it.
 func (c *Client) DeleteClaim(ctx context.Context, name string) error {
-	return c.json(ctx, request{method: "DELETE", path: "/v1/claims/" + esc(name)}, nil)
+	return c.json(ctx, request{method: http.MethodDelete, path: "/v1/claims/" + esc(name)}, nil)
 }
 
 // Checkout starts putting a target on a volume of its own and a sandbox on it.
 func (c *Client) Checkout(ctx context.Context, req v1.CheckoutRequest) (v1.Checkout, error) {
-	var out v1.Checkout
-	return out, c.json(ctx, request{method: "POST", path: "/v1/checkouts", body: req}, &out)
+	return fetch[v1.Checkout](ctx, c, request{method: http.MethodPost, path: "/v1/checkouts", body: req})
 }
 
 // GetCheckout is where a checkout stands.
 func (c *Client) GetCheckout(ctx context.Context, id string) (v1.Checkout, error) {
-	var out v1.Checkout
-	return out, c.json(ctx, request{method: "GET", path: "/v1/checkouts/" + esc(id)}, &out)
+	return fetch[v1.Checkout](ctx, c, request{method: http.MethodGet, path: "/v1/checkouts/" + esc(id)})
 }
 
 // Volumes lists the volumes that keep checked-out work.
 func (c *Client) Volumes(ctx context.Context) ([]v1.Volume, error) {
-	var out v1.Volumes
-	return out.Volumes, c.json(ctx, request{method: "GET", path: "/v1/volumes"}, &out)
+	out, err := fetch[v1.Volumes](ctx, c, request{method: http.MethodGet, path: "/v1/volumes"})
+	return out.Volumes, err
 }
 
 // DeleteVolume deletes a volume and the clone on it.
 func (c *Client) DeleteVolume(ctx context.Context, name string) error {
-	return c.json(ctx, request{method: "DELETE", path: "/v1/volumes/" + esc(name)}, nil)
+	return c.json(ctx, request{method: http.MethodDelete, path: "/v1/volumes/" + esc(name)}, nil)
 }
 
 // DeleteSandbox ends a sandbox a checkout started, and its volume too when
 // deleteVolume is set.
 func (c *Client) DeleteSandbox(ctx context.Context, name string, deleteVolume bool) error {
 	q := url.Values{"deleteVolume": {strconv.FormatBool(deleteVolume)}}
-	return c.json(ctx, request{method: "DELETE", path: "/v1/sandboxes/" + esc(name), query: q}, nil)
+	return c.json(ctx, request{method: http.MethodDelete, path: "/v1/sandboxes/" + esc(name), query: q}, nil)
 }

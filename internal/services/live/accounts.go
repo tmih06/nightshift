@@ -3,6 +3,7 @@ package live
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	v1 "github.com/tmih06/nightshift/api/v1"
@@ -14,6 +15,14 @@ type Accounts struct {
 	svc accounts.Service
 }
 
+// wrapErr says what was being done when err happened; nil stays nil.
+func wrapErr(what string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", what, err)
+}
+
 func firstErr(err error, fallback string) error {
 	if err != nil {
 		return err
@@ -21,12 +30,20 @@ func firstErr(err error, fallback string) error {
 	return errors.New(fallback)
 }
 
-var accountStates = map[accounts.State]string{
-	accounts.StateOK:       v1.AccountOK,
-	accounts.StateExpiring: v1.AccountExpiring,
-	accounts.StateFailing:  v1.AccountFailing,
-	accounts.StateSignIn:   v1.AccountSignIn,
-	accounts.StateDisabled: v1.AccountDisabled,
+// accountState is the contract's name for an account's state.
+func accountState(s accounts.State) string {
+	switch s {
+	case accounts.StateExpiring:
+		return v1.AccountExpiring
+	case accounts.StateFailing:
+		return v1.AccountFailing
+	case accounts.StateSignIn:
+		return v1.AccountSignIn
+	case accounts.StateDisabled:
+		return v1.AccountDisabled
+	case accounts.StateOK:
+	}
+	return v1.AccountOK
 }
 
 // Accounts reads every signed-in account, which one each agent uses, and what
@@ -34,7 +51,7 @@ var accountStates = map[accounts.State]string{
 func (a *Accounts) Accounts(ctx context.Context) (v1.Accounts, error) {
 	snap, err := a.svc.Fetch(ctx)
 	if err != nil {
-		return v1.Accounts{}, err
+		return v1.Accounts{}, fmt.Errorf("accounts: %w", err)
 	}
 	out := v1.Accounts{
 		ObservedAt:  snap.At.UTC(),
@@ -64,7 +81,7 @@ func (a *Accounts) Accounts(ctx context.Context) (v1.Accounts, error) {
 func accountOf(a *accounts.Account, now time.Time) v1.Account {
 	out := v1.Account{
 		Name: a.Name, Provider: a.Provider, Email: a.Email,
-		State: accountStates[a.State(now)], Disabled: a.Disabled, Active: a.Active,
+		State: accountState(a.State(now)), Disabled: a.Disabled, Active: a.Active,
 		ExpiresAt: a.Expires.UTC(), LastRefreshAt: a.LastRefresh.UTC(), NextRefreshAt: a.NextRefresh.UTC(),
 		RefreshOK: a.Success, RefreshFailed: a.Failed, RefreshError: a.RefreshError,
 		StatusNote: a.StatusNote, QuotaBlocked: a.QuotaBlocked, Cooldowns: a.Cooldowns,
@@ -83,36 +100,43 @@ func accountOf(a *accounts.Account, now time.Time) v1.Account {
 func (a *Accounts) StartLogin(ctx context.Context, provider string) (v1.Login, error) {
 	l, err := a.svc.StartLogin(ctx, provider)
 	if err != nil {
-		return v1.Login{}, err
+		return v1.Login{}, fmt.Errorf("start login: %w", err)
 	}
 	return v1.Login{ID: l.State, Provider: l.Provider, URL: l.URL}, nil
 }
 
 // CompleteLogin finishes a sign-in with the address the browser ended on.
 func (a *Accounts) CompleteLogin(ctx context.Context, id string, c v1.LoginCompletion) error {
-	return a.svc.CompleteLogin(ctx, accounts.Login{Provider: c.Provider, State: id}, c.RedirectURL)
+	return wrapErr("complete the sign-in", a.svc.CompleteLogin(ctx, accounts.Login{Provider: c.Provider, State: id}, c.RedirectURL))
 }
 
 // CancelLogin abandons a sign-in.
 func (a *Accounts) CancelLogin(ctx context.Context, id, provider string) error {
-	return a.svc.CancelLogin(ctx, accounts.Login{Provider: provider, State: id})
+	return wrapErr("cancel the sign-in", a.svc.CancelLogin(ctx, accounts.Login{Provider: provider, State: id}))
 }
 
 // SetDisabled turns an account off or on.
 func (a *Accounts) SetDisabled(ctx context.Context, name string, disabled bool) error {
-	return a.svc.SetDisabled(ctx, name, disabled)
+	return wrapErr("set the account on or off", a.svc.SetDisabled(ctx, name, disabled))
 }
 
 // Remove deletes an account.
-func (a *Accounts) Remove(ctx context.Context, name string) error { return a.svc.Remove(ctx, name) }
+func (a *Accounts) Remove(ctx context.Context, name string) error {
+	return wrapErr("remove the account", a.svc.Remove(ctx, name))
+}
 
 // Refresh renews an account's token now.
-func (a *Accounts) Refresh(ctx context.Context, name string) error { return a.svc.Refresh(ctx, name) }
+func (a *Accounts) Refresh(ctx context.Context, name string) error {
+	return wrapErr("refresh the account", a.svc.Refresh(ctx, name))
+}
 
 // SetActive picks the account a provider's new sandboxes get.
 func (a *Accounts) SetActive(ctx context.Context, provider, name string) error {
-	return a.svc.SetActive(ctx, provider, name)
+	return wrapErr("choose the account", a.svc.SetActive(ctx, provider, name))
 }
 
 // Publish puts the chosen accounts into the cluster now.
-func (a *Accounts) Publish(ctx context.Context) (string, error) { return a.svc.PublishNow(ctx) }
+func (a *Accounts) Publish(ctx context.Context) (string, error) {
+	report, err := a.svc.PublishNow(ctx)
+	return report, wrapErr("publish", err)
+}

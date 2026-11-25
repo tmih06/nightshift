@@ -12,10 +12,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	v1 "github.com/tmih06/nightshift/api/v1"
 	"github.com/tmih06/nightshift/internal/ghdash/config"
 	ghctx "github.com/tmih06/nightshift/internal/ghdash/tui/context"
 	ghtheme "github.com/tmih06/nightshift/internal/ghdash/tui/theme"
-	"github.com/tmih06/nightshift/internal/services/cluster"
 )
 
 type fakeClient struct {
@@ -1005,8 +1005,8 @@ func TestActiveSandboxBadgesAndFocusMsg(t *testing.T) {
 	fc := newFakeClient()
 	m := newTestModel(t, fc)
 
-	prVol := cluster.VolumeName("alice/nightshift", 42)
-	issVol := cluster.IssueVolumeName("alice/nightshift", 10)
+	prVol := v1.PRVolumeName("alice/nightshift", 42)
+	issVol := v1.IssueVolumeName("alice/nightshift", 10)
 	m.SetSandboxes([]ActiveSandbox{
 		{Pod: "pi-pr-42-xyz", Volume: prVol, Phase: "Running"},
 		{Pod: "claude-iss-10-abc", Volume: issVol, Phase: "Running"},
@@ -1215,7 +1215,7 @@ func TestClipboardAndBrowserHelpers(t *testing.T) {
 func TestSandboxForBranchMatchesHashedRepoVolumeName(t *testing.T) {
 	longRepo := "very-long-organization-name/extremely-long-repository-name"
 	longBranch := "feature/implement-repository-workspace-branch-matching"
-	longVol := cluster.RepoVolumeName(longRepo, longBranch)
+	longVol := v1.BranchVolumeName(longRepo, longBranch)
 	got, ok := sandboxForBranch([]ActiveSandbox{
 		{Pod: "pi-long-1", Volume: longVol, Phase: "Running"},
 	}, longRepo, longBranch)

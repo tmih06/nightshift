@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -13,9 +14,9 @@ import (
 
 func (s *Server) fleetRoutes() []route {
 	return []route{
-		{method: "GET", pattern: "/v1/fleet", handle: s.getFleet},
-		{method: "GET", pattern: "/v1/fleet/watch", handle: s.watchFleet},
-		{method: "GET", pattern: "/v1/pods/{namespace}/{name}/logs", handle: s.podLogs},
+		{method: http.MethodGet, pattern: "/v1/fleet", handle: s.getFleet},
+		{method: http.MethodGet, pattern: "/v1/fleet/watch", handle: s.watchFleet},
+		{method: http.MethodGet, pattern: "/v1/pods/{namespace}/{name}/logs", handle: s.podLogs},
 	}
 }
 
@@ -33,6 +34,8 @@ func parseInclude(r *http.Request) (Include, error) {
 			inc.Live = true
 		case "versions":
 			inc.Versions = true
+		case "terminals":
+			inc.Terminals = true
 		default:
 			return inc, invalid("include: unknown value " + strconv.Quote(part))
 		}
@@ -51,7 +54,7 @@ func (s *Server) getFleet(w http.ResponseWriter, r *http.Request) error {
 	}
 	fleet, err := f.Fleet(r.Context(), inc)
 	if err != nil {
-		return err
+		return fmt.Errorf("get fleet: %w", err)
 	}
 	writeJSON(w, http.StatusOK, fleet)
 	return nil
@@ -79,8 +82,7 @@ func (s *Server) watchFleet(w http.ResponseWriter, r *http.Request) error {
 	for {
 		fleet, err := f.Fleet(r.Context(), inc)
 		if err != nil {
-			ae := classify(err)
-			_ = out.event("error", v1.Problem{Type: "about:blank", Title: titles[ae.code], Status: ae.status, Detail: ae.detail, Code: ae.code})
+			out.fail(err)
 			return nil
 		}
 		fingerprint := fleetFingerprint(fleet)
@@ -128,7 +130,7 @@ func (s *Server) podLogs(w http.ResponseWriter, r *http.Request) error {
 	ns, pod := r.PathValue("namespace"), r.PathValue("name")
 	lines, err := f.PodLogs(r.Context(), ns, pod, tail)
 	if err != nil {
-		return err
+		return fmt.Errorf("pod logs: %w", err)
 	}
 	writeJSON(w, http.StatusOK, v1.Logs{Pod: pod, Lines: lines})
 	return nil

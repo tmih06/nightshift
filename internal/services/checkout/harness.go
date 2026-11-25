@@ -6,6 +6,18 @@ import (
 	v1 "github.com/tmih06/nightshift/api/v1"
 )
 
+// Names and notes the catalogue repeats.
+const (
+	labelDefault        = "default"
+	noteDefault         = "harness default"
+	noteAnthropic       = "anthropic"
+	noteOpenAI          = "openai"
+	nameOpencode        = "opencode"
+	modelClaudeSonnetPi = "anthropic/claude-sonnet"
+	modelCodexOpenAI    = "openai/gpt-5.3-codex"
+	modelGemini         = "google/gemini-2.5-pro"
+)
+
 // LaunchCommand builds the shell command to run command with an optional model.
 // An empty command returns "" (leave the sandbox in bash).
 func LaunchCommand(command, model string) string {
@@ -41,7 +53,7 @@ func ForPool(name, template, templateYAML string) v1.Harness {
 		Label:   label,
 		Command: "",
 		Models: []v1.HarnessModel{
-			{ID: "", Label: "default", Note: "bash shell"},
+			{ID: "", Label: labelDefault, Note: "bash shell"},
 		},
 	}
 }
@@ -50,86 +62,110 @@ func matchHarness(s string) (v1.Harness, bool) {
 	low := strings.ToLower(s)
 	switch {
 	case strings.Contains(low, "claude"):
-		return v1.Harness{
-			Name:    "claude-code",
-			Label:   "Claude Code",
-			Command: "claude",
-			Models: []v1.HarnessModel{
-				{ID: "sonnet", Label: "sonnet", Note: "latest Sonnet"},
-				{ID: "opus", Label: "opus", Note: "latest Opus"},
-				{ID: "haiku", Label: "haiku", Note: "latest Haiku"},
-				{ID: "", Label: "default", Note: "harness default"},
-			},
-		}, true
+		return harnessClaudeCode(), true
 	case strings.Contains(low, "codex"):
-		return v1.Harness{
-			Name:    "codex",
-			Label:   "Codex",
-			Command: "codex",
-			Models: []v1.HarnessModel{
-				{ID: "gpt-5.3-codex", Label: "gpt-5.3-codex", Note: "coding"},
-				{ID: "gpt-5.2-codex", Label: "gpt-5.2-codex", Note: "coding"},
-				{ID: "gpt-5.5", Label: "gpt-5.5", Note: "general"},
-				{ID: "gpt-5.2", Label: "gpt-5.2", Note: "general"},
-				{ID: "", Label: "default", Note: "harness default"},
-			},
-		}, true
-	case strings.Contains(low, "opencode"):
-		return v1.Harness{
-			Name:    "opencode",
-			Label:   "OpenCode",
-			Command: "opencode",
-			Models: []v1.HarnessModel{
-				{ID: "opencode/big-pickle", Label: "opencode/big-pickle", Note: "opencode"},
-				{ID: "opencode/deepseek-v4.1-flash-free", Label: "opencode/deepseek-v4.1-flash-free", Note: "free"},
-				{ID: "opencode/nemotron-3.5-super-vl-free", Label: "opencode/nemotron-3.5-super-vl-free", Note: "free"},
-				{ID: "anthropic/claude-sonnet", Label: "anthropic/claude-sonnet", Note: "anthropic"},
-				{ID: "openai/gpt-5.3-codex", Label: "openai/gpt-5.3-codex", Note: "openai"},
-				{ID: "", Label: "default", Note: "harness default"},
-			},
-		}, true
+		return harnessCodex(), true
+	case strings.Contains(low, nameOpencode):
+		return harnessOpencode(), true
 	case hasToken(low, "agy"):
-		return v1.Harness{
-			Name:    "agy",
-			Label:   "Antigravity",
-			Command: "agy",
-			Models: []v1.HarnessModel{
-				{ID: "gemini-3.8-flash-high", Label: "gemini-3.8-flash-high", Note: "gemini"},
-				{ID: "gemini-3.8-flash-medium", Label: "gemini-3.8-flash-medium", Note: "gemini"},
-				{ID: "claude-sonnet-4-6", Label: "claude-sonnet-4-6", Note: "anthropic"},
-				{ID: "claude-opus-4-6-thinking", Label: "claude-opus-4-6-thinking", Note: "anthropic"},
-				{ID: "gpt-oss-120b-medium", Label: "gpt-oss-120b-medium", Note: "openai"},
-				{ID: "", Label: "default", Note: "harness default"},
-			},
-		}, true
+		return harnessAgy(), true
 	case strings.Contains(low, "ompig"):
-		return v1.Harness{
-			Name:    "ompig-slim",
-			Label:   "OMPi slim",
-			Command: "ompig-slim",
-			Models: []v1.HarnessModel{
-				{ID: "anthropic/claude-sonnet-5-5", Label: "anthropic/claude-sonnet-5-5", Note: "anthropic"},
-				{ID: "anthropic/claude-opus-5-5", Label: "anthropic/claude-opus-5-5", Note: "anthropic"},
-				{ID: "openai/gpt-5.3-codex", Label: "openai/gpt-5.3-codex", Note: "openai"},
-				{ID: "google/gemini-2.5-pro", Label: "google/gemini-2.5-pro", Note: "google"},
-				{ID: "", Label: "default", Note: "harness default"},
-			},
-		}, true
+		return harnessOmpigSlim(), true
 	case hasToken(low, "pi"):
-		return v1.Harness{
-			Name:    "pi",
-			Label:   "Pi",
-			Command: "pi",
-			Models: []v1.HarnessModel{
-				{ID: "anthropic/claude-sonnet", Label: "anthropic/claude-sonnet", Note: "anthropic"},
-				{ID: "anthropic/claude-opus", Label: "anthropic/claude-opus", Note: "anthropic"},
-				{ID: "openai/gpt-5.3-codex", Label: "openai/gpt-5.3-codex", Note: "openai"},
-				{ID: "google/gemini-2.5-pro", Label: "google/gemini-2.5-pro", Note: "google"},
-				{ID: "", Label: "default", Note: "harness default"},
-			},
-		}, true
+		return harnessPi(), true
 	}
 	return v1.Harness{}, false
+}
+
+func harnessClaudeCode() v1.Harness {
+	return v1.Harness{
+		Name:    "claude-code",
+		Label:   "Claude Code",
+		Command: "claude",
+		Models: []v1.HarnessModel{
+			{ID: "sonnet", Label: "sonnet", Note: "latest Sonnet"},
+			{ID: "opus", Label: "opus", Note: "latest Opus"},
+			{ID: "haiku", Label: "haiku", Note: "latest Haiku"},
+			{ID: "", Label: labelDefault, Note: noteDefault},
+		},
+	}
+}
+
+func harnessCodex() v1.Harness {
+	return v1.Harness{
+		Name:    "codex",
+		Label:   "Codex",
+		Command: "codex",
+		Models: []v1.HarnessModel{
+			{ID: "gpt-5.3-codex", Label: "gpt-5.3-codex", Note: "coding"},
+			{ID: "gpt-5.2-codex", Label: "gpt-5.2-codex", Note: "coding"},
+			{ID: "gpt-5.5", Label: "gpt-5.5", Note: "general"},
+			{ID: "gpt-5.2", Label: "gpt-5.2", Note: "general"},
+			{ID: "", Label: labelDefault, Note: noteDefault},
+		},
+	}
+}
+
+func harnessOpencode() v1.Harness {
+	return v1.Harness{
+		Name:    nameOpencode,
+		Label:   "OpenCode",
+		Command: nameOpencode,
+		Models: []v1.HarnessModel{
+			{ID: "opencode/big-pickle", Label: "opencode/big-pickle", Note: nameOpencode},
+			{ID: "opencode/deepseek-v4.1-flash-free", Label: "opencode/deepseek-v4.1-flash-free", Note: "free"},
+			{ID: "opencode/nemotron-3.5-super-vl-free", Label: "opencode/nemotron-3.5-super-vl-free", Note: "free"},
+			{ID: modelClaudeSonnetPi, Label: modelClaudeSonnetPi, Note: noteAnthropic},
+			{ID: modelCodexOpenAI, Label: modelCodexOpenAI, Note: noteOpenAI},
+			{ID: "", Label: labelDefault, Note: noteDefault},
+		},
+	}
+}
+
+func harnessAgy() v1.Harness {
+	return v1.Harness{
+		Name:    "agy",
+		Label:   "Antigravity",
+		Command: "agy",
+		Models: []v1.HarnessModel{
+			{ID: "gemini-3.8-flash-high", Label: "gemini-3.8-flash-high", Note: "gemini"},
+			{ID: "gemini-3.8-flash-medium", Label: "gemini-3.8-flash-medium", Note: "gemini"},
+			{ID: "claude-sonnet-4-6", Label: "claude-sonnet-4-6", Note: noteAnthropic},
+			{ID: "claude-opus-4-6-thinking", Label: "claude-opus-4-6-thinking", Note: noteAnthropic},
+			{ID: "gpt-oss-120b-medium", Label: "gpt-oss-120b-medium", Note: noteOpenAI},
+			{ID: "", Label: labelDefault, Note: noteDefault},
+		},
+	}
+}
+
+func harnessOmpigSlim() v1.Harness {
+	return v1.Harness{
+		Name:    "ompig-slim",
+		Label:   "OMPi slim",
+		Command: "ompig-slim",
+		Models: []v1.HarnessModel{
+			{ID: "anthropic/claude-sonnet-5-5", Label: "anthropic/claude-sonnet-5-5", Note: noteAnthropic},
+			{ID: "anthropic/claude-opus-5-5", Label: "anthropic/claude-opus-5-5", Note: noteAnthropic},
+			{ID: modelCodexOpenAI, Label: modelCodexOpenAI, Note: noteOpenAI},
+			{ID: modelGemini, Label: modelGemini, Note: "google"},
+			{ID: "", Label: labelDefault, Note: noteDefault},
+		},
+	}
+}
+
+func harnessPi() v1.Harness {
+	return v1.Harness{
+		Name:    "pi",
+		Label:   "Pi",
+		Command: "pi",
+		Models: []v1.HarnessModel{
+			{ID: modelClaudeSonnetPi, Label: modelClaudeSonnetPi, Note: noteAnthropic},
+			{ID: "anthropic/claude-opus", Label: "anthropic/claude-opus", Note: noteAnthropic},
+			{ID: modelCodexOpenAI, Label: modelCodexOpenAI, Note: noteOpenAI},
+			{ID: modelGemini, Label: modelGemini, Note: "google"},
+			{ID: "", Label: labelDefault, Note: noteDefault},
+		},
+	}
 }
 
 // hasToken checks whether tok appears as a standalone identifier segment

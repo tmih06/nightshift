@@ -6,12 +6,11 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
-
-	"github.com/tmih06/nightshift/internal/services/cluster"
+	"github.com/tmih06/nightshift/internal/tui/fleet"
 )
 
-func startupFixture(stage cluster.StartupStage) *cluster.Startup {
-	return &cluster.Startup{
+func startupFixture(stage fleet.StartupStage) *fleet.Startup {
+	return &fleet.Startup{
 		Stage: stage,
 		Since: time.Now().Add(-83 * time.Second),
 	}
@@ -19,7 +18,7 @@ func startupFixture(stage cluster.StartupStage) *cluster.Startup {
 
 func TestStartupRowShowsStageAndElapsed(t *testing.T) {
 	m := baseModel()
-	m.boxes[0].Startup = startupFixture(cluster.StagePulling)
+	m.boxes[0].Startup = startupFixture(fleet.StagePulling)
 	row := m.renderRow(0, 100, false)
 	plain := ansi.Strip(row[1])
 	for _, want := range []string{"pulling", "1m23s"} {
@@ -34,7 +33,7 @@ func TestStartupRowShowsStageAndElapsed(t *testing.T) {
 
 func TestStartupRowCompactDropsTheBar(t *testing.T) {
 	m := baseModel()
-	m.boxes[0].Startup = startupFixture(cluster.StagePulling)
+	m.boxes[0].Startup = startupFixture(fleet.StagePulling)
 	wide := ansi.Strip(m.renderRow(0, 100, false)[1])
 	if !strings.Contains(wide, "█") {
 		t.Errorf("wide row missing the stage bar: %q", wide)
@@ -47,7 +46,7 @@ func TestStartupRowCompactDropsTheBar(t *testing.T) {
 
 func TestStartupRowFailingShowsCrossAndCount(t *testing.T) {
 	m := baseModel()
-	st := startupFixture(cluster.StagePulling)
+	st := startupFixture(fleet.StagePulling)
 	st.Err, st.PullFails = "ImagePullBackOff", 3
 	m.boxes[0].Startup = st
 	plain := ansi.Strip(m.renderRow(0, 100, false)[1])
@@ -59,7 +58,7 @@ func TestStartupRowFailingShowsCrossAndCount(t *testing.T) {
 }
 
 func TestStartupSidebarLines(t *testing.T) {
-	st := startupFixture(cluster.StagePulling)
+	st := startupFixture(fleet.StagePulling)
 	lines := startupInfoLines(st, time.Now(), 60)
 	if len(lines) != 1 {
 		t.Fatalf("non-failing startup gave %d lines, want 1", len(lines))
@@ -73,7 +72,7 @@ func TestStartupSidebarLines(t *testing.T) {
 }
 
 func TestStartupSidebarFailureLine(t *testing.T) {
-	st := startupFixture(cluster.StagePulling)
+	st := startupFixture(fleet.StagePulling)
 	st.Err, st.PullFails = "ImagePullBackOff", 2
 	st.Detail = `Failed to pull image "img:latest": failed to resolve reference: x509: certificate is not valid for any names`
 	lines := startupInfoLines(st, time.Now(), 100)
@@ -93,7 +92,7 @@ func TestStartupSidebarFailureLine(t *testing.T) {
 }
 
 func TestStartupLineCountMatchesInfoLines(t *testing.T) {
-	st := startupFixture(cluster.StageScheduling)
+	st := startupFixture(fleet.StageScheduling)
 	if n := startupLineCount(st); n != 1 {
 		t.Errorf("plain startup count = %d, want 1", n)
 	}
@@ -101,7 +100,7 @@ func TestStartupLineCountMatchesInfoLines(t *testing.T) {
 	if n := startupLineCount(st); n != 2 {
 		t.Errorf("failing startup count = %d, want 2", n)
 	}
-	var nilStartup *cluster.Startup
+	var nilStartup *fleet.Startup
 	if n := startupLineCount(nilStartup); n != 0 {
 		t.Errorf("nil startup count = %d, want 0", n)
 	}
@@ -113,7 +112,7 @@ func TestInfoRowCountIncludesStartupLines(t *testing.T) {
 	if got := m.infoRowCount(); got != before {
 		t.Fatalf("infoRowCount = %d but infoLines emitted %d", got, before)
 	}
-	m.boxes[0].Startup = startupFixture(cluster.StagePulling)
+	m.boxes[0].Startup = startupFixture(fleet.StagePulling)
 	m.boxes[0].Startup.Err = "ImagePullBackOff"
 	m.selectPod(m.boxes[0].Name)
 	count, emitted := m.infoRowCount(), len(m.infoLines(60))

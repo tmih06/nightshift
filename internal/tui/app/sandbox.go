@@ -9,10 +9,11 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	v1 "github.com/tmih06/nightshift/api/v1"
 	ghtui "github.com/tmih06/nightshift/internal/ghdash/tui"
-	"github.com/tmih06/nightshift/internal/services/cluster"
 	"github.com/tmih06/nightshift/internal/tui/dashboard"
 	"github.com/tmih06/nightshift/internal/tui/dialog"
+	"github.com/tmih06/nightshift/internal/tui/fleet"
 )
 
 // picker asks which pool's template a pull request's, issue's, or repository's
@@ -27,13 +28,13 @@ type picker struct {
 	url    string
 	branch string // PR head branch; issues and repos edit branchInput instead
 	kind   dashboard.CheckoutKind
-	pools  []cluster.Pool
+	pools  []fleet.Pool
 	cursor int
 
 	// modelOpen is true while the cascading right-side model submenu is open
 	// for pools[cursor].
 	modelOpen   bool
-	harness     dashboard.Harness
+	harness     v1.Harness
 	modelCursor int
 
 	branchInput textinput.Model
@@ -47,7 +48,7 @@ func (p picker) hasBranchInput() bool {
 
 // prepareRepoPools validates owner/name and returns available warm pools, or
 // an error notice string.
-func (m Model) prepareRepoPools(repo, url string) ([]cluster.Pool, string) {
+func (m Model) prepareRepoPools(repo, url string) (pools []fleet.Pool, notice string) {
 	owner, name, ok := strings.Cut(repo, "/")
 	if !ok || owner == "" || name == "" {
 		target := url
@@ -56,7 +57,7 @@ func (m Model) prepareRepoPools(repo, url string) ([]cluster.Pool, string) {
 		}
 		return nil, fmt.Sprintf("cannot check out %q", target)
 	}
-	pools := m.sandboxes.WarmPools()
+	pools = m.sandboxes.WarmPools()
 	if len(pools) == 0 {
 		return nil, "no warm pools to claim from: is the cluster up?"
 	}
@@ -65,7 +66,7 @@ func (m Model) prepareRepoPools(repo, url string) ([]cluster.Pool, string) {
 
 // preparePicker validates the target repository/number and returns available
 // warm pools, or an error notice string.
-func (m Model) preparePicker(repo string, number int, url string) ([]cluster.Pool, string) {
+func (m Model) preparePicker(repo string, number int, url string) (pools []fleet.Pool, notice string) {
 	if number <= 0 {
 		return nil, fmt.Sprintf("cannot check out %q", url)
 	}
@@ -260,7 +261,7 @@ func (m Model) openModelSubmenu(i int) (Model, tea.Cmd) {
 	}
 	if p.hasBranchInput() {
 		branch := strings.TrimSpace(p.branchInput.Value())
-		if reason := validateBranchName(branch); reason != "" {
+		if reason := v1.BranchProblem(branch); reason != "" {
 			p.cursor = i
 			p.branchErr = reason
 			p.focusBranch = true
@@ -273,7 +274,7 @@ func (m Model) openModelSubmenu(i int) (Model, tea.Cmd) {
 	p.cursor = i
 	p.focusBranch = false
 	p.branchInput.Blur()
-	p.harness = dashboard.HarnessForPool(p.pools[i])
+	p.harness = p.pools[i].Harness
 	p.modelOpen = true
 	p.modelCursor = 0
 	m.picker = &p
@@ -290,7 +291,7 @@ func (m Model) startCheckout(poolIdx, modelIdx int) (Model, tea.Cmd) {
 	branch := p.branch
 	if p.hasBranchInput() {
 		branch = strings.TrimSpace(p.branchInput.Value())
-		if reason := validateBranchName(branch); reason != "" {
+		if reason := v1.BranchProblem(branch); reason != "" {
 			p.cursor = poolIdx
 			p.branchErr = reason
 			p.focusBranch = true
@@ -302,7 +303,7 @@ func (m Model) startCheckout(poolIdx, modelIdx int) (Model, tea.Cmd) {
 	}
 	h := p.harness
 	if len(h.Models) == 0 {
-		h = dashboard.HarnessForPool(p.pools[poolIdx])
+		h = p.pools[poolIdx].Harness
 	}
 	var modelID string
 	if modelIdx >= 0 && modelIdx < len(h.Models) {
@@ -321,28 +322,6 @@ func (m Model) startCheckout(poolIdx, modelIdx int) (Model, tea.Cmd) {
 		Model:   modelID,
 	})
 	return m, tea.Batch(switchCmd, cmd)
-}
-
-// validateBranchName checks git check-ref-format rules for a branch name and
-// returns "" when valid, or a short reason otherwise.
-func validateBranchName(name string) string {
-	if name == "" {
-		return "enter a branch name"
-	}
-	if name == "@" || strings.HasPrefix(name, "-") || strings.HasPrefix(name, "/") ||
-		strings.HasPrefix(name, ".") || strings.HasSuffix(name, "/") ||
-		strings.HasSuffix(name, ".") || strings.HasSuffix(name, ".lock") ||
-		strings.Contains(name, "..") || strings.Contains(name, "//") ||
-		strings.Contains(name, "@{") || strings.Contains(name, "/.") ||
-		strings.Contains(name, ".lock/") {
-		return "invalid git branch name"
-	}
-	for _, r := range name {
-		if r <= 0x20 || r == 0x7f || strings.ContainsRune("~^:?*[\\", r) {
-			return "invalid git branch name"
-		}
-	}
-	return ""
 }
 
 // pickerMouse handles clicks and wheel events across the pool dialog and its
@@ -368,7 +347,7 @@ func (m Model) pickerMouse(msg tea.MouseMsg) (Model, tea.Cmd) {
 		} else {
 			p.cursor = clampIndex(p.cursor+delta, len(p.pools))
 			if p.modelOpen {
-				p.harness = dashboard.HarnessForPool(p.pools[p.cursor])
+				p.harness = p.pools[p.cursor].Harness
 				p.modelCursor = 0
 			}
 		}
@@ -420,7 +399,7 @@ const (
 	modelPickerHint = "↑/↓/jk model · ←/h back · ⏎ start"
 )
 
-func poolColumnWidths(pools []cluster.Pool) (nameW, tmplW int) {
+func poolColumnWidths(pools []fleet.Pool) (nameW, tmplW int) {
 	for _, pool := range pools {
 		nameW = max(nameW, lipgloss.Width(pool.Name))
 		tmplW = max(tmplW, lipgloss.Width(pool.Template))
@@ -428,7 +407,7 @@ func poolColumnWidths(pools []cluster.Pool) (nameW, tmplW int) {
 	return nameW, tmplW
 }
 
-func modelColumnWidths(models []dashboard.ModelOption) (labelW, noteW int) {
+func modelColumnWidths(models []v1.HarnessModel) (labelW, noteW int) {
 	for _, opt := range models {
 		labelW = max(labelW, lipgloss.Width(opt.Label))
 		noteW = max(noteW, lipgloss.Width(opt.Note))
@@ -447,15 +426,15 @@ func (p *picker) volumeLine() string {
 	switch p.kind {
 	case dashboard.CheckoutRepo:
 		curBranch := strings.TrimSpace(p.branchInput.Value())
-		return "volume " + cluster.RepoVolumeName(p.repo, curBranch)
+		return "volume " + v1.BranchVolumeName(p.repo, curBranch)
 	case dashboard.CheckoutIssue:
-		return "volume " + cluster.IssueVolumeName(p.repo, p.number)
+		return "volume " + v1.IssueVolumeName(p.repo, p.number)
 	default:
 		branch := p.branch
 		if branch == "" {
 			branch = fmt.Sprintf("pr-%d", p.number)
 		}
-		return "branch " + branch + " · volume " + cluster.VolumeName(p.repo, p.number)
+		return "branch " + branch + " · volume " + v1.PRVolumeName(p.repo, p.number)
 	}
 }
 

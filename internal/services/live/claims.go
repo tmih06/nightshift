@@ -2,6 +2,7 @@ package live
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	v1 "github.com/tmih06/nightshift/api/v1"
@@ -31,7 +32,7 @@ func (*Claims) Claimed(ctx context.Context, name string, wait time.Duration) (v1
 		type info struct{ pool, sandbox string }
 		got, err := call(ctx, func() (info, error) {
 			pool, sandbox, err := cluster.ClaimInfo(name)
-			return info{pool, sandbox}, err
+			return info{pool, sandbox}, wrapErr("read the claim", err)
 		})
 		if err != nil {
 			return v1.Claim{}, err
@@ -41,7 +42,7 @@ func (*Claims) Claimed(ctx context.Context, name string, wait time.Duration) (v1
 			return c, nil
 		}
 		if !pause(ctx, claimPoll) {
-			return c, ctx.Err()
+			return c, fmt.Errorf("waiting for claim %s: %w", name, ctx.Err())
 		}
 	}
 }

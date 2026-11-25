@@ -34,11 +34,11 @@ func SpecOf(r v1.CheckoutRequest) Spec {
 func (s Spec) Volume() string {
 	switch s.Target.Kind {
 	case v1.TargetIssue:
-		return cluster.IssueVolumeName(s.Target.Repo, s.Target.Number)
+		return v1.IssueVolumeName(s.Target.Repo, s.Target.Number)
 	case v1.TargetBranch:
-		return cluster.RepoVolumeName(s.Target.Repo, s.branch())
+		return v1.BranchVolumeName(s.Target.Repo, s.branch())
 	default:
-		return cluster.VolumeName(s.Target.Repo, s.Target.Number)
+		return v1.PRVolumeName(s.Target.Repo, s.Target.Number)
 	}
 }
 

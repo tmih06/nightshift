@@ -20,6 +20,7 @@ const (
 // swap it.
 type Ops struct {
 	PoolTemplate  func(pool string) (string, error)
+	SandboxOn     func(volume string) (string, error)
 	VolumeState   func(volume string) (exists, cloned bool, err error)
 	CreateVolume  func(volume string, target cluster.VolumeFor) error
 	TemplatePod   func(template string) (pod map[string]any, image string, err error)
@@ -34,6 +35,7 @@ type Ops struct {
 func Live() Ops {
 	return Ops{
 		PoolTemplate:  cluster.PoolTemplate,
+		SandboxOn:     cluster.SandboxOnVolume,
 		VolumeState:   cluster.VolumeState,
 		CreateVolume:  cluster.CreateVolume,
 		TemplatePod:   cluster.TemplatePod,
@@ -49,86 +51,130 @@ func Live() Ops {
 // template on it, and brings its bash into the clone, telling emit each step as
 // it goes. Its last event is Done or has Error set.
 func Run(ops Ops, s Spec, template string, emit func(v1.CheckoutEvent)) {
-	var last v1.CheckoutEvent
-	say := func(ev v1.CheckoutEvent) {
-		ev.At = time.Time{}
-		if ev != last {
-			last = ev
-			ev.At = time.Now().UTC()
-			emit(ev)
-		}
+	p := &pipeline{ops: ops, spec: s, template: template, emit: emit}
+	cloned, ok := p.volume()
+	if !ok {
+		return
 	}
-	fail := func(step string, err error) {
-		emit(v1.CheckoutEvent{Step: step, Error: err.Error(), At: time.Now().UTC()})
+	pod, ok := p.clone(cloned)
+	if !ok {
+		return
 	}
+	name, ok := p.sandbox(pod)
+	if !ok {
+		return
+	}
+	p.shell(name, cloned)
+}
 
-	vol := s.Volume()
-	say(v1.CheckoutEvent{Step: v1.StepVolume, Detail: "looking for " + vol})
-	exists, cloned, err := ops.VolumeState(vol)
+// pipeline is one run of the checkout: what it works on, and how it reports.
+type pipeline struct {
+	ops      Ops
+	spec     Spec
+	template string
+	emit     func(v1.CheckoutEvent)
+	last     v1.CheckoutEvent
+}
+
+// say reports progress, once for each distinct thing said.
+func (p *pipeline) say(ev v1.CheckoutEvent) {
+	ev.At = time.Time{}
+	if ev == p.last {
+		return
+	}
+	p.last = ev
+	ev.At = time.Now().UTC()
+	p.emit(ev)
+}
+
+// fail ends the run at step, with why.
+func (p *pipeline) fail(step string, err error) {
+	p.emit(v1.CheckoutEvent{Step: step, Error: err.Error(), At: time.Now().UTC()})
+}
+
+// volume finds or makes the volume, and says whether a clone is already on it.
+func (p *pipeline) volume() (cloned, ok bool) {
+	vol := p.spec.Volume()
+	p.say(v1.CheckoutEvent{Step: v1.StepVolume, Detail: "looking for " + vol})
+	exists, cloned, err := p.ops.VolumeState(vol)
 	if err == nil && !exists {
-		say(v1.CheckoutEvent{Step: v1.StepVolume, Detail: "creating " + vol})
-		err = ops.CreateVolume(vol, cluster.VolumeFor{Repo: s.Target.Repo, Number: s.Target.Number, Branch: s.branch(), Kind: s.volumeKind()})
+		p.say(v1.CheckoutEvent{Step: v1.StepVolume, Detail: "creating " + vol})
+		s := p.spec
+		err = p.ops.CreateVolume(vol, cluster.VolumeFor{Repo: s.Target.Repo, Number: s.Target.Number, Branch: s.branch(), Kind: s.volumeKind()})
 	}
 	if err != nil {
-		fail(v1.StepVolume, err)
-		return
+		p.fail(v1.StepVolume, err)
+		return false, false
 	}
 	note := vol + " · new"
 	if exists {
 		note = vol + " · kept"
 	}
-	say(v1.CheckoutEvent{Step: v1.StepVolume, Finished: true, Detail: note})
+	p.say(v1.CheckoutEvent{Step: v1.StepVolume, Finished: true, Detail: note})
+	return cloned, true
+}
 
-	say(v1.CheckoutEvent{Step: v1.StepClone, Detail: "reading " + template})
-	pod, image, err := ops.TemplatePod(template)
+// clone reads the template and, unless a clone is already on the volume, clones
+// into it. It returns the template's pod.
+func (p *pipeline) clone(cloned bool) (pod map[string]any, ok bool) {
+	p.say(v1.CheckoutEvent{Step: v1.StepClone, Detail: "reading " + p.template})
+	pod, image, err := p.ops.TemplatePod(p.template)
 	if err != nil {
-		fail(v1.StepClone, err)
-		return
+		p.fail(v1.StepClone, err)
+		return nil, false
 	}
 	if cloned {
-		say(v1.CheckoutEvent{Step: v1.StepClone, Finished: true, Detail: "already on the volume, kept as it was"})
-	} else {
-		say(v1.CheckoutEvent{Step: v1.StepClone, Detail: "starting the clone pod"})
-		err := ops.Clone(vol, image, s.CloneScript(), cloneTimeout, func(line string) {
-			say(v1.CheckoutEvent{Step: v1.StepClone, Detail: cloneDetail(line)})
-		})
-		if err != nil {
-			fail(v1.StepClone, err)
-			return
-		}
-		say(v1.CheckoutEvent{Step: v1.StepClone, Finished: true, Detail: s.branch() + " checked out"})
+		p.say(v1.CheckoutEvent{Step: v1.StepClone, Finished: true, Detail: "already on the volume, kept as it was"})
+		return pod, true
 	}
-
-	say(v1.CheckoutEvent{Step: v1.StepSandbox, Detail: "creating from " + template})
-	name, err := ops.CreateSandbox(template, pod, vol, s.MountPath())
-	if err != nil {
-		fail(v1.StepSandbox, err)
-		return
-	}
-	say(v1.CheckoutEvent{Step: v1.StepSandbox, Sandbox: name, Detail: "waiting for " + name})
-	err = ops.WaitPod(name, podTimeout, func(state string) {
-		say(v1.CheckoutEvent{Step: v1.StepSandbox, Sandbox: name, Detail: podDetail(state)})
+	p.say(v1.CheckoutEvent{Step: v1.StepClone, Detail: "starting the clone pod"})
+	err = p.ops.Clone(p.spec.Volume(), image, p.spec.CloneScript(), cloneTimeout, func(line string) {
+		p.say(v1.CheckoutEvent{Step: v1.StepClone, Detail: cloneDetail(line)})
 	})
 	if err != nil {
-		fail(v1.StepSandbox, err)
-		return
+		p.fail(v1.StepClone, err)
+		return nil, false
 	}
-	say(v1.CheckoutEvent{Step: v1.StepSandbox, Sandbox: name, Finished: true, Detail: name})
+	p.say(v1.CheckoutEvent{Step: v1.StepClone, Finished: true, Detail: p.spec.branch() + " checked out"})
+	return pod, true
+}
 
-	shellDetail := "starting bash"
-	if summary := s.harnessSummary(); summary != "" {
-		shellDetail = "starting " + summary
+// sandbox starts the sandbox on the volume and waits for its pod to run.
+func (p *pipeline) sandbox(pod map[string]any) (name string, ok bool) {
+	p.say(v1.CheckoutEvent{Step: v1.StepSandbox, Detail: "creating from " + p.template})
+	name, err := p.ops.CreateSandbox(p.template, pod, p.spec.Volume(), p.spec.MountPath())
+	if err != nil {
+		p.fail(v1.StepSandbox, err)
+		return "", false
 	}
-	say(v1.CheckoutEvent{Step: v1.StepShell, Sandbox: name, Detail: shellDetail})
-	if err := ops.Ensure(name); err != nil {
-		fail(v1.StepShell, err)
+	p.say(v1.CheckoutEvent{Step: v1.StepSandbox, Sandbox: name, Detail: "waiting for " + name})
+	err = p.ops.WaitPod(name, podTimeout, func(state string) {
+		p.say(v1.CheckoutEvent{Step: v1.StepSandbox, Sandbox: name, Detail: podDetail(state)})
+	})
+	if err != nil {
+		p.fail(v1.StepSandbox, err)
+		return "", false
+	}
+	p.say(v1.CheckoutEvent{Step: v1.StepSandbox, Sandbox: name, Finished: true, Detail: name})
+	return name, true
+}
+
+// shell brings the sandbox's bash into the clone and starts the harness.
+func (p *pipeline) shell(name string, cloned bool) {
+	detail := "starting bash"
+	if summary := p.spec.harnessSummary(); summary != "" {
+		detail = "starting " + summary
+	}
+	p.say(v1.CheckoutEvent{Step: v1.StepShell, Sandbox: name, Detail: detail})
+	if err := p.ops.Ensure(name); err != nil {
+		p.fail(v1.StepShell, err)
 		return
 	}
-	if err := ops.Send(name, []session.Key{{Text: s.shellLine(cloned)}, {Name: "Enter"}}); err != nil {
-		fail(v1.StepShell, fmt.Errorf("could not type into bash: %w", err))
+	if err := p.ops.Send(name, []session.Key{{Text: p.spec.shellLine(cloned)}, {Name: "Enter"}}); err != nil {
+		p.fail(v1.StepShell, fmt.Errorf("could not type into bash: %w", err))
 		return
 	}
-	emit(v1.CheckoutEvent{Step: v1.StepShell, Sandbox: name, Done: true, At: time.Now().UTC()})
+	p.emit(v1.CheckoutEvent{Step: v1.StepShell, Sandbox: name, Done: true, At: time.Now().UTC()})
 }
 
 // cloneDetail is the clone Job's latest log line as a status says it.

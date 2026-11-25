@@ -66,6 +66,11 @@ func (m *Manager) Start(req v1.CheckoutRequest) (v1.Checkout, error) {
 	}
 	spec := SpecOf(req)
 	vol := spec.Volume()
+	if open, err := m.sandboxOn(vol); err != nil {
+		return v1.Checkout{}, err
+	} else if open != "" {
+		return m.reopened(req, vol, open), nil
+	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -90,6 +95,33 @@ func (m *Manager) Start(req v1.CheckoutRequest) (v1.Checkout, error) {
 		Run(m.ops, spec, template, func(ev v1.CheckoutEvent) { m.record(r, ev) })
 	})
 	return r.info, nil
+}
+
+// sandboxOn is the sandbox already working on the volume, if any. A volume
+// holds one sandbox at a time, so a checkout of its target goes back to that one.
+func (m *Manager) sandboxOn(volume string) (string, error) {
+	if m.ops.SandboxOn == nil {
+		return "", nil
+	}
+	return m.ops.SandboxOn(volume)
+}
+
+// reopened is a checkout that is done before it begins: the target is already
+// open in a sandbox. It is remembered like any other, so it can be followed.
+func (m *Manager) reopened(req v1.CheckoutRequest, volume, sandbox string) v1.Checkout {
+	now := time.Now().UTC()
+	last := v1.CheckoutEvent{Step: v1.StepShell, Sandbox: sandbox, Done: true, Detail: "already open in " + sandbox, At: now}
+	r := &run{
+		info: v1.Checkout{
+			ID: newID(), Target: req.Target, Pool: req.Pool, Volume: volume, State: v1.CheckoutDone,
+			Sandbox: sandbox, StartedAt: now, Last: &last,
+		},
+		milestones: []v1.CheckoutEvent{last}, latest: last, seq: 1, changed: make(chan struct{}), ended: time.Now(),
+	}
+	m.mu.Lock()
+	m.runs[r.info.ID] = r
+	m.mu.Unlock()
+	return r.info
 }
 
 // InvalidError is a request the pipeline cannot take.
@@ -169,7 +201,7 @@ func (m *Manager) Follow(ctx context.Context, id string, fn func(v1.CheckoutEven
 		select {
 		case <-changed:
 		case <-ctx.Done():
-			return ctx.Err()
+			return fmt.Errorf("stopped following %s: %w", id, ctx.Err())
 		case <-m.ctx.Done():
 			return errors.New("the server is shutting down")
 		}

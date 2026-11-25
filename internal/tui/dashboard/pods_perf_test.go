@@ -3,11 +3,10 @@ package dashboard
 import (
 	"errors"
 	"fmt"
+	"github.com/tmih06/nightshift/internal/tui/fleet"
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/tmih06/nightshift/internal/services/cluster"
 )
 
 func podFleetModel(count int) model {
@@ -15,7 +14,7 @@ func podFleetModel(count int) model {
 	m.rowCache = &rowCacheEntry{}
 	m.inspectDocs = map[inspectKey]inspectCache{}
 	pods := m.boxes
-	m.boxes = make([]cluster.Sandbox, count)
+	m.boxes = make([]fleet.Sandbox, count)
 	for i := range m.boxes {
 		m.boxes[i] = pods[i%len(pods)]
 		m.boxes[i].Name = fmt.Sprintf("%s-%03d", m.boxes[i].Name, i)

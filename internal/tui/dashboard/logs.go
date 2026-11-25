@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -8,8 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-
-	"github.com/tmih06/nightshift/internal/services/cluster"
+	"github.com/tmih06/nightshift/internal/tui/fleet"
 )
 
 const podLogTailLines = 200
@@ -20,10 +20,12 @@ type logsMsg struct {
 	err error
 }
 
-func fetchLogsCmd(namespace, pod string) tea.Cmd {
+func fetchLogsCmd(api API, namespace, pod string) tea.Cmd {
 	return func() tea.Msg {
-		out, err := cluster.PodLogs(namespace, pod, podLogTailLines)
-		return logsMsg{pod: pod, out: out, err: err}
+		lines, err := call(callTimeout, func(ctx context.Context) ([]string, error) {
+			return api.PodLogs(ctx, namespace, pod, podLogTailLines)
+		})
+		return logsMsg{pod: pod, out: strings.Join(lines, "\n"), err: err}
 	}
 }
 
@@ -144,7 +146,7 @@ func (m model) podLogLines(width int) []string {
 	}
 	rawLines := strings.Split(raw, "\n")
 	out := make([]string, 0, len(rawLines))
-	isEgress := b.PodRole() == cluster.RoleEgress
+	isEgress := b.PodRole() == fleet.RoleEgress
 	for _, ln := range rawLines {
 		if isEgress {
 			if formatted, ok := formatEgressAuditLine(ln, width); ok {

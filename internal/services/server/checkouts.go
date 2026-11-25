@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -9,12 +10,12 @@ import (
 
 func (s *Server) checkoutRoutes() []route {
 	return []route{
-		{method: "POST", pattern: "/v1/checkouts", handle: s.createCheckout},
-		{method: "GET", pattern: "/v1/checkouts/{id}", handle: s.getCheckout},
-		{method: "GET", pattern: "/v1/checkouts/{id}/events", handle: s.watchCheckout},
-		{method: "GET", pattern: "/v1/volumes", handle: s.listVolumes},
-		{method: "DELETE", pattern: "/v1/volumes/{name}", handle: s.deleteVolume},
-		{method: "DELETE", pattern: "/v1/sandboxes/{name}", handle: s.deleteSandbox},
+		{method: http.MethodPost, pattern: "/v1/checkouts", handle: s.createCheckout},
+		{method: http.MethodGet, pattern: "/v1/checkouts/{id}", handle: s.getCheckout},
+		{method: http.MethodGet, pattern: "/v1/checkouts/{id}/events", handle: s.watchCheckout},
+		{method: http.MethodGet, pattern: "/v1/volumes", handle: s.listVolumes},
+		{method: http.MethodDelete, pattern: "/v1/volumes/{name}", handle: s.deleteVolume},
+		{method: http.MethodDelete, pattern: "/v1/sandboxes/{name}", handle: s.deleteSandbox},
 	}
 }
 
@@ -32,7 +33,7 @@ func (s *Server) createCheckout(w http.ResponseWriter, r *http.Request) error {
 	}
 	co, err := c.Start(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("create checkout: %w", err)
 	}
 	writeJSON(w, http.StatusAccepted, co)
 	return nil
@@ -45,7 +46,7 @@ func (s *Server) getCheckout(w http.ResponseWriter, r *http.Request) error {
 	}
 	co, err := c.Get(r.PathValue("id"))
 	if err != nil {
-		return err
+		return fmt.Errorf("get checkout: %w", err)
 	}
 	writeJSON(w, http.StatusOK, co)
 	return nil
@@ -60,7 +61,7 @@ func (s *Server) watchCheckout(w http.ResponseWriter, r *http.Request) error {
 	}
 	id := r.PathValue("id")
 	if _, err := c.Get(id); err != nil {
-		return err
+		return fmt.Errorf("watch checkout: %w", err)
 	}
 	out, err := newStream(w)
 	if err != nil {
@@ -68,8 +69,7 @@ func (s *Server) watchCheckout(w http.ResponseWriter, r *http.Request) error {
 	}
 	err = c.Follow(r.Context(), id, func(ev v1.CheckoutEvent) error { return out.event("checkout", ev) })
 	if err != nil && r.Context().Err() == nil {
-		ae := classify(err)
-		_ = out.event("error", v1.Problem{Type: "about:blank", Title: titles[ae.code], Status: ae.status, Detail: ae.detail, Code: ae.code})
+		out.fail(err)
 	}
 	return nil
 }
@@ -81,7 +81,7 @@ func (s *Server) listVolumes(w http.ResponseWriter, r *http.Request) error {
 	}
 	vols, err := v.Volumes(r.Context())
 	if err != nil {
-		return err
+		return fmt.Errorf("list volumes: %w", err)
 	}
 	if vols == nil {
 		vols = []v1.Volume{}
@@ -96,7 +96,7 @@ func (s *Server) deleteVolume(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	if err := v.DeleteVolume(r.Context(), r.PathValue("name")); err != nil {
-		return err
+		return fmt.Errorf("delete volume: %w", err)
 	}
 	w.WriteHeader(http.StatusNoContent)
 	return nil
@@ -114,7 +114,7 @@ func (s *Server) deleteSandbox(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 	if err := v.DeleteSandbox(r.Context(), r.PathValue("name"), drop); err != nil {
-		return err
+		return fmt.Errorf("delete sandbox: %w", err)
 	}
 	w.WriteHeader(http.StatusNoContent)
 	return nil

@@ -12,7 +12,10 @@ type Terminal struct {
 	// Command is the foreground command.
 	Command string `json:"command,omitempty"`
 	Title   string `json:"title,omitempty"`
-	Status  string `json:"status,omitempty"`
+	// Label is the short name to show on a tab: the terminal's own name when
+	// someone gave it one, else the command it runs.
+	Label  string `json:"label"`
+	Status string `json:"status,omitempty"`
 	// CWD is the working directory.
 	CWD       string    `json:"cwd,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`

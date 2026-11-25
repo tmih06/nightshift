@@ -23,9 +23,10 @@ const (
 
 // Include values for GET /v1/fleet's include parameter.
 const (
-	IncludeConfigs  = "configs"  // manifests on pods and pools
-	IncludeLive     = "live"     // CPU and memory read from each pod's cgroup
-	IncludeVersions = "versions" // the coding agent's version in each pod
+	IncludeConfigs   = "configs"   // manifests on pods and pools
+	IncludeLive      = "live"      // CPU and memory read from each pod's cgroup
+	IncludeVersions  = "versions"  // the coding agent's version in each pod
+	IncludeTerminals = "terminals" // the live terminals of each claimed sandbox
 )
 
 // Fleet is the state of the sandbox fleet at one moment: GET /v1/fleet.
@@ -82,6 +83,9 @@ type Pod struct {
 	Startup *Startup `json:"startup,omitempty"`
 	// Configs are the pod's manifests, only with include=configs.
 	Configs *Configs `json:"configs,omitempty"`
+	// Terminals are the live terminals of a claimed sandbox, only with
+	// include=terminals. A claimed sandbox with no session yet has none.
+	Terminals []Terminal `json:"terminals,omitempty"`
 }
 
 // OwnerRef names what owns a pod.

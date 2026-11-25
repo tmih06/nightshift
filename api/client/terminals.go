@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"net/http"
 	"net/url"
 	"strconv"
 	"time"
@@ -13,38 +14,49 @@ func terminalsPath(sandbox string) string { return "/v1/sandboxes/" + esc(sandbo
 
 // Terminals lists the live terminals of a claimed sandbox.
 func (c *Client) Terminals(ctx context.Context, sandbox string) ([]v1.Terminal, error) {
-	var out v1.Terminals
-	return out.Terminals, c.json(ctx, request{method: "GET", path: terminalsPath(sandbox)}, &out)
+	out, err := fetch[v1.Terminals](ctx, c, request{method: http.MethodGet, path: terminalsPath(sandbox)})
+	return out.Terminals, err
 }
 
 // OpenTerminal opens a terminal. With an empty request on a sandbox that has
 // none yet, it starts the sandbox's session and returns its first terminal.
 func (c *Client) OpenTerminal(ctx context.Context, sandbox string, req v1.TerminalRequest) (v1.Terminal, error) {
-	var out v1.Terminal
-	return out, c.json(ctx, request{method: "POST", path: terminalsPath(sandbox), body: req}, &out)
+	return fetch[v1.Terminal](ctx, c, request{method: http.MethodPost, path: terminalsPath(sandbox), body: req})
 }
 
 // CloseTerminal stops a terminal.
 func (c *Client) CloseTerminal(ctx context.Context, sandbox, address string) error {
-	return c.json(ctx, request{method: "DELETE", path: terminalsPath(sandbox) + "/" + esc(address)}, nil)
+	return c.json(ctx, request{method: http.MethodDelete, path: terminalsPath(sandbox) + "/" + esc(address)}, nil)
 }
 
-// Screen waits up to wait for a terminal to change, and returns what it shows.
-// Changed is false when nothing changed in time. resize says the size is new,
-// which repaints everything. ctx should outlast wait.
-func (c *Client) Screen(ctx context.Context, sandbox, address string, cols, rows int, resize bool, wait time.Duration) (v1.Screen, error) {
+// ScreenRequest says which terminal's screen to read, at what size, and how
+// long to wait for it to change.
+type ScreenRequest struct {
+	Sandbox string
+	Address string
+	Cols    int
+	Rows    int
+	// Resize says the size is new, which repaints everything.
+	Resize bool
+	// Wait is how long to wait for a change before answering with none.
+	Wait time.Duration
+}
+
+// Screen waits up to r.Wait for a terminal to change, and returns what it
+// shows. Changed is false when nothing changed in time. ctx should outlast
+// the wait.
+func (c *Client) Screen(ctx context.Context, r ScreenRequest) (v1.Screen, error) {
 	q := url.Values{
-		"cols": {strconv.Itoa(cols)}, "rows": {strconv.Itoa(rows)},
-		"resize": {strconv.FormatBool(resize)},
-		"wait":   {strconv.FormatInt(wait.Milliseconds(), 10)},
+		"cols": {strconv.Itoa(r.Cols)}, "rows": {strconv.Itoa(r.Rows)},
+		"resize": {strconv.FormatBool(r.Resize)},
+		"wait":   {strconv.FormatInt(r.Wait.Milliseconds(), 10)},
 		"viewer": {c.viewer},
 	}
-	var out v1.Screen
-	return out, c.json(ctx, request{method: "GET", path: terminalsPath(sandbox) + "/" + esc(address) + "/screen", query: q}, &out)
+	return fetch[v1.Screen](ctx, c, request{method: http.MethodGet, path: terminalsPath(r.Sandbox) + "/" + esc(r.Address) + "/screen", query: q})
 }
 
 // Input presses keys in a terminal, in order.
 func (c *Client) Input(ctx context.Context, sandbox, address string, keys []v1.Key) error {
 	body := v1.Input{Keys: keys}
-	return c.json(ctx, request{method: "POST", path: terminalsPath(sandbox) + "/" + esc(address) + "/input", body: body}, nil)
+	return c.json(ctx, request{method: http.MethodPost, path: terminalsPath(sandbox) + "/" + esc(address) + "/input", body: body}, nil)
 }

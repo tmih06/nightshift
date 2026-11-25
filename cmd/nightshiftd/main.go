@@ -59,7 +59,9 @@ func run() error {
 	flag.BoolVar(&cfg.NoAccounts, "no-accounts", false, "leave the accounts endpoints out")
 	flag.Parse()
 	if *showVer {
-		fmt.Println(version)
+		if _, err := fmt.Fprintln(os.Stdout, version); err != nil {
+			return fmt.Errorf("print the version: %w", err)
+		}
 		return nil
 	}
 	if *debug {
@@ -73,19 +75,22 @@ func run() error {
 	}
 	d, err := daemon.Start(cfg)
 	if err != nil {
-		return err
+		return fmt.Errorf("run: %w", err)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go func() {
 		<-ctx.Done()
-		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		shutdown, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
 		if err := d.Close(shutdown); err != nil {
 			log.Error("shutdown", "err", err)
 		}
 	}()
-	return d.Wait()
+	if err := d.Wait(); err != nil {
+		return fmt.Errorf("serve: %w", err)
+	}
+	return nil
 }
 
 func defaultTokenFile() string {
@@ -112,17 +117,17 @@ func loadToken(path string) (string, error) {
 		}
 	}
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return "", err
+		return "", fmt.Errorf("load token: %w", err)
 	}
 	t, err := daemon.NewToken()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("load token: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return "", err
+		return "", fmt.Errorf("load token: %w", err)
 	}
 	if err := os.WriteFile(path, []byte(t+"\n"), 0o600); err != nil {
-		return "", err
+		return "", fmt.Errorf("load token: %w", err)
 	}
 	log.Info("made a token", "file", path)
 	return t, nil

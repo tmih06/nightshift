@@ -27,20 +27,36 @@ func splitLines(text string) []string {
 	return strings.Split(text, "\n")
 }
 
-var roles = map[cluster.PodRole]string{
-	cluster.RoleWarm:    v1.RoleWarm,
-	cluster.RoleClaimed: v1.RoleClaimed,
-	cluster.RoleEgress:  v1.RoleEgress,
-	cluster.RoleSystem:  v1.RoleSystem,
-	cluster.RoleJob:     v1.RoleJob,
-	cluster.RoleOther:   v1.RoleOther,
+// role is the contract's name for a pod's role.
+func role(r cluster.PodRole) string {
+	switch r {
+	case cluster.RoleWarm:
+		return v1.RoleWarm
+	case cluster.RoleClaimed:
+		return v1.RoleClaimed
+	case cluster.RoleEgress:
+		return v1.RoleEgress
+	case cluster.RoleSystem:
+		return v1.RoleSystem
+	case cluster.RoleJob:
+		return v1.RoleJob
+	case cluster.RoleOther:
+	}
+	return v1.RoleOther
 }
 
-var stages = map[cluster.StartupStage]string{
-	cluster.StageScheduling: v1.StageScheduling,
-	cluster.StagePulling:    v1.StagePulling,
-	cluster.StageStarting:   v1.StageStarting,
-	cluster.StageReadying:   v1.StageReadying,
+// stage is the contract's name for a startup stage.
+func stage(s cluster.StartupStage) string {
+	switch s {
+	case cluster.StagePulling:
+		return v1.StagePulling
+	case cluster.StageStarting:
+		return v1.StageStarting
+	case cluster.StageReadying:
+		return v1.StageReadying
+	case cluster.StageScheduling:
+	}
+	return v1.StageScheduling
 }
 
 // podOf is the contract's pod for one of the cluster's.
@@ -50,7 +66,7 @@ func podOf(b *cluster.Sandbox, configs bool) v1.Pod {
 		phase = "" // the pod does not exist yet
 	}
 	p := v1.Pod{
-		Name: b.Name, Namespace: b.EffectiveNamespace(), Role: roles[b.PodRole()],
+		Name: b.Name, Namespace: b.EffectiveNamespace(), Role: role(b.PodRole()),
 		Owner:    v1.OwnerRef{Kind: b.OwnerKind, Name: b.Owner},
 		Volume:   b.Volume,
 		Template: b.Template, Node: b.NodeName, Phase: phase, IP: b.PodIP,
@@ -64,7 +80,7 @@ func podOf(b *cluster.Sandbox, configs bool) v1.Pod {
 	}
 	if st := b.Startup; st != nil {
 		p.Startup = &v1.Startup{
-			Stage: stages[st.Stage], Since: st.Since.UTC(),
+			Stage: stage(st.Stage), Since: st.Since.UTC(),
 			Error: st.Err, Detail: st.Detail, PullFailures: st.PullFails,
 		}
 	}

@@ -12,8 +12,8 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	v1 "github.com/tmih06/nightshift/api/v1"
 	ghtheme "github.com/tmih06/nightshift/internal/ghdash/tui/theme"
-	"github.com/tmih06/nightshift/internal/services/accounts"
 )
 
 // testNow is the fixed time every test runs at.
@@ -22,7 +22,7 @@ func testNow() time.Time { return time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC) }
 type fakeService struct {
 	mu       sync.Mutex
 	calls    []string
-	snap     accounts.Snapshot
+	snap     v1.Accounts
 	fetchErr error
 	loginErr error
 }
@@ -39,21 +39,21 @@ func (f *fakeService) log() string {
 	return strings.Join(f.calls, "|")
 }
 
-func (f *fakeService) Fetch(context.Context) (accounts.Snapshot, error) {
+func (f *fakeService) Accounts(context.Context) (v1.Accounts, error) {
 	f.note("fetch")
 	return f.snap, f.fetchErr
 }
 
-func (f *fakeService) StartLogin(_ context.Context, p string) (accounts.Login, error) {
+func (f *fakeService) StartLogin(_ context.Context, p string) (v1.Login, error) {
 	f.note("start " + p)
-	return accounts.Login{Provider: p, URL: "https://claude.ai/oauth/authorize?state=abc", State: "abc"}, f.loginErr
+	return v1.Login{Provider: p, URL: "https://claude.ai/oauth/authorize?state=abc", ID: "abc"}, f.loginErr
 }
 
-func (f *fakeService) CompleteLogin(_ context.Context, _ accounts.Login, redirect string) error {
+func (f *fakeService) CompleteLogin(_ context.Context, _ v1.Login, redirect string) error {
 	f.note("complete " + redirect)
 	return f.loginErr
 }
-func (f *fakeService) CancelLogin(context.Context, accounts.Login) error {
+func (f *fakeService) CancelLogin(context.Context, v1.Login) error {
 	f.note("cancel")
 	return nil
 }
@@ -61,32 +61,40 @@ func (f *fakeService) SetDisabled(_ context.Context, n string, d bool) error {
 	f.note("disabled " + n + " " + map[bool]string{true: "on", false: "off"}[d])
 	return nil
 }
-func (f *fakeService) Remove(_ context.Context, n string) error  { f.note("remove " + n); return nil }
-func (f *fakeService) Refresh(_ context.Context, n string) error { f.note("refresh " + n); return nil }
+func (f *fakeService) RemoveAccount(_ context.Context, n string) error {
+	f.note("remove " + n)
+	return nil
+}
+func (f *fakeService) RefreshAccount(_ context.Context, n string) error {
+	f.note("refresh " + n)
+	return nil
+}
 func (f *fakeService) SetActive(_ context.Context, p, n string) error {
 	f.note("active " + p + " " + n)
 	return nil
 }
-func (f *fakeService) PublishNow(context.Context) (string, error) { f.note("publish"); return "", nil }
-func (f *fakeService) Close()                                     {}
+func (f *fakeService) Publish(context.Context) (string, error) { f.note("publish"); return "", nil }
 
-func sampleSnapshot() accounts.Snapshot {
-	return accounts.Snapshot{
-		At:          testNow(),
+func sampleSnapshot() v1.Accounts {
+	return v1.Accounts{
+		ObservedAt:  testNow(),
 		PublishedAt: testNow().Add(-2 * time.Minute),
-		Published:   map[string]accounts.Published{"claude": {Name: "claude-a.json", Label: "a@example.com"}},
-		Accounts: []accounts.Account{
-			{Name: "claude-a.json", Provider: "claude", Email: "a@example.com", Active: true,
-				Expires: testNow().Add(54 * time.Minute), LastRefresh: testNow().Add(-6 * time.Minute),
-				Usage: &accounts.Usage{Requests: 120, OK: 115, RateLimited: 5, Last: testNow().Add(-3 * time.Minute), Recent: append(make([]int, 143), 9)}},
-			{Name: "claude-b.json", Provider: "claude", Email: "b@example.com", Expires: testNow().Add(3 * time.Hour)},
-			{Name: "codex-a.json", Provider: "codex", Email: "c@example.com", Active: true, Expires: testNow().Add(5 * 24 * time.Hour)},
-			{Name: "agy-a.json", Provider: "antigravity", Email: "d@example.com", Disabled: true},
+		Providers: []v1.Provider{
+			{ID: "claude", Name: "Claude Code"}, {ID: "codex", Name: "Codex"}, {ID: "antigravity", Name: "Antigravity"},
+		},
+		Published: map[string]v1.Published{"claude": {Account: "claude-a.json", Label: "a@example.com"}},
+		Accounts: []v1.Account{
+			{Name: "claude-a.json", Provider: "claude", Email: "a@example.com", Active: true, State: v1.AccountOK,
+				ExpiresAt: testNow().Add(54 * time.Minute), LastRefreshAt: testNow().Add(-6 * time.Minute),
+				Usage: &v1.AccountUsage{Requests: 120, OK: 115, RateLimited: 5, LastAt: testNow().Add(-3 * time.Minute), Recent: append(make([]int, 143), 9)}},
+			{Name: "claude-b.json", Provider: "claude", Email: "b@example.com", State: v1.AccountOK, ExpiresAt: testNow().Add(3 * time.Hour)},
+			{Name: "codex-a.json", Provider: "codex", Email: "c@example.com", Active: true, State: v1.AccountOK, ExpiresAt: testNow().Add(5 * 24 * time.Hour)},
+			{Name: "agy-a.json", Provider: "antigravity", Email: "d@example.com", Disabled: true, State: v1.AccountDisabled},
 		},
 	}
 }
 
-func newTestModel(svc accounts.Service) Model {
+func newTestModel(svc API) Model {
 	m := New(*ghtheme.DefaultTheme, svc)
 	m.now = testNow
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})

@@ -477,10 +477,11 @@ components:
       description: |
         Extra data to gather, comma separated. `configs` adds manifests,
         `live` reads CPU and memory from each pod's own cgroup, and
-        `versions` reads the coding agent's version in each pod.
+        `versions` reads the coding agent's version in each pod, and
+        `terminals` lists the live terminals of each claimed sandbox.
       schema:
         type: array
-        items: {type: string, enum: [configs, live, versions]}
+        items: {type: string, enum: [configs, live, versions, terminals]}
       style: form
       explode: false
   responses:
@@ -589,6 +590,9 @@ components:
             sandbox: {type: string}
             pod: {type: string}
             extra: {type: string}
+        terminals:
+          type: array
+          items: {$ref: "#/components/schemas/Terminal"}
     Pool:
       type: object
       required: [name, template, ready, desired, harness]
@@ -699,12 +703,13 @@ components:
           items: {$ref: "#/components/schemas/Volume"}
     Terminal:
       type: object
-      required: [address, createdAt]
+      required: [address, label, createdAt]
       properties:
         address: {type: string, examples: [t1]}
         name: {type: string}
         command: {type: string}
         title: {type: string}
+        label: {type: string, description: The short name to show on a tab.}
         status: {type: string}
         cwd: {type: string}
         createdAt: {type: string, format: date-time}

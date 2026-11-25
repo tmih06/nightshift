@@ -14,7 +14,6 @@ import (
 	ghtui "github.com/tmih06/nightshift/internal/ghdash/tui"
 	"github.com/tmih06/nightshift/internal/ghdash/tui/context"
 	ghtheme "github.com/tmih06/nightshift/internal/ghdash/tui/theme"
-	"github.com/tmih06/nightshift/internal/services/accounts"
 	"github.com/tmih06/nightshift/internal/tui/accountsview"
 	"github.com/tmih06/nightshift/internal/tui/dashboard"
 	"github.com/tmih06/nightshift/internal/tui/repoview"
@@ -63,10 +62,8 @@ type Model struct {
 
 	sandboxes dashboard.Model
 
-	// accounts is the Accounts tab; accountsSvc reaches the cluster for it and
-	// is closed on exit.
-	accounts    accountsview.Model
-	accountsSvc accounts.Service
+	// accounts is the Accounts tab.
+	accounts accountsview.Model
 
 	// gh is nil when gh-dash could not start; ghErr then says why.
 	gh    GitHub
@@ -105,22 +102,24 @@ type Model struct {
 	height int
 }
 
-// New builds the root model over gh-dash's theme. gh is nil when ghErr says
-// why the GitHub tab cannot run.
-func New(theme ghtheme.Theme, gh GitHub, ghErr error) Model {
-	return NewWithAccounts(theme, gh, ghErr, accounts.NewLive())
+// Services is what the tabs ask of the Nightshift services. *client.Client
+// satisfies it: the terminal UI holds no cluster handle of its own.
+type Services interface {
+	dashboard.API
+	accountsview.API
 }
 
-// NewWithAccounts is New with the Accounts tab backed by svc.
-func NewWithAccounts(theme ghtheme.Theme, gh GitHub, ghErr error, svc accounts.Service) Model {
+// New builds the root model over gh-dash's theme. gh is nil when ghErr says
+// why the GitHub tab cannot run. svc is the Nightshift services the Pods and
+// Accounts tabs talk to.
+func New(theme ghtheme.Theme, gh GitHub, ghErr error, svc Services) Model {
 	return Model{
-		theme:       theme,
-		styles:      context.InitStyles(theme),
-		sandboxes:   dashboard.New(theme),
-		accounts:    accountsview.New(theme, svc),
-		accountsSvc: svc,
-		gh:          gh,
-		ghErr:       ghErr,
+		theme:     theme,
+		styles:    context.InitStyles(theme),
+		sandboxes: dashboard.New(theme, svc),
+		accounts:  accountsview.New(theme, svc),
+		gh:        gh,
+		ghErr:     ghErr,
 		newPRClient: func() (PullRequests, error) {
 			c, err := zgh.New()
 			if err != nil {
@@ -128,14 +127,6 @@ func NewWithAccounts(theme ghtheme.Theme, gh GitHub, ghErr error, svc accounts.S
 			}
 			return c, nil
 		},
-	}
-}
-
-// Close releases what the tabs hold open, such as the Accounts tab's
-// port-forwards. Call it after the program ends.
-func (m Model) Close() {
-	if m.accountsSvc != nil {
-		m.accountsSvc.Close()
 	}
 }
 
@@ -435,9 +426,9 @@ func unavailable(th ghtheme.Theme, err error, width, height int) string {
 }
 
 // Once renders one frame of the sandbox tab under the tab bar, for -once.
-func Once(width, height int) string {
+func Once(width, height int, svc Services) string {
 	th := *ghtheme.DefaultTheme
-	m := Model{theme: th, styles: context.InitStyles(th), sandboxes: dashboard.Fetched(th)}
+	m := Model{theme: th, styles: context.InitStyles(th), sandboxes: dashboard.Fetched(th, svc)}
 	next, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: height})
 	return next.(Model).render()
 }

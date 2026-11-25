@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"sort"
@@ -11,23 +12,20 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/tmih06/nightshift/internal/services/cluster"
-	"github.com/tmih06/nightshift/internal/services/session"
+	v1 "github.com/tmih06/nightshift/api/v1"
 	"github.com/tmih06/nightshift/internal/tui/dialog"
+	"github.com/tmih06/nightshift/internal/tui/fleet"
 )
 
-// workspaceDir is the sandbox images' working directory (images/base), where
-// a pull request's volume is mounted under the repository's name.
+// workspaceDir is the sandbox images' working directory, where a volume is
+// mounted under the repository's name. It is only shown: the services decide
+// where it goes.
 const workspaceDir = "/home/node/workspace"
-
-const (
-	cloneTimeout = 10 * time.Minute
-	podTimeout   = 3 * time.Minute
-)
 
 // CheckoutKind distinguishes what kind of GitHub target a Checkout builds.
 type CheckoutKind int
 
+// The kinds of target.
 const (
 	CheckoutPR CheckoutKind = iota
 	CheckoutIssue
@@ -52,27 +50,33 @@ func (c Checkout) String() string {
 	return fmt.Sprintf("%s#%d", c.Repo, c.Number)
 }
 
-// Volume is the volume that keeps the pull request, issue, or repository branch.
-func (c Checkout) Volume() string {
+// Request is what the services are asked to do for c, from pool.
+func (c Checkout) Request(pool string) v1.CheckoutRequest {
+	t := v1.Target{Kind: v1.TargetPullRequest, Repo: c.Repo, Number: c.Number, Branch: c.Branch}
 	switch c.Kind {
 	case CheckoutIssue:
-		return cluster.IssueVolumeName(c.Repo, c.Number)
+		t.Kind = v1.TargetIssue
 	case CheckoutRepo:
-		return cluster.RepoVolumeName(c.Repo, c.branch())
-	default:
-		return cluster.VolumeName(c.Repo, c.Number)
+		t.Kind, t.Number = v1.TargetBranch, 0
+	case CheckoutPR:
 	}
+	return v1.CheckoutRequest{Target: t, Pool: pool, Harness: c.Harness, Model: c.Model}
 }
 
-func (c Checkout) volumeKind() cluster.VolumeKind {
-	switch c.Kind {
-	case CheckoutIssue:
-		return cluster.VolumeIssue
-	case CheckoutRepo:
-		return cluster.VolumeRepo
-	default:
-		return cluster.VolumePR
+// onSandbox is whether b is a sandbox that keeps c.
+func (c Checkout) onSandbox(b *fleet.Sandbox) bool {
+	t := b.Target
+	if t == nil || t.Repo != c.Repo {
+		return false
 	}
+	req := c.Request("").Target
+	if t.Kind != req.Kind {
+		return false
+	}
+	if t.Kind == v1.TargetBranch {
+		return t.Branch == c.branch()
+	}
+	return t.Number == c.Number
 }
 
 // MountPath is where the volume sits in the sandbox.
@@ -89,92 +93,9 @@ func (c Checkout) branch() string {
 		return fmt.Sprintf("issue-%d", c.Number)
 	case CheckoutRepo:
 		return "main"
-	default:
-		return fmt.Sprintf("pr-%d", c.Number)
+	case CheckoutPR:
 	}
-}
-
-// CloneScript runs at the volume's root in the clone Job. It drops what an
-// unfinished clone left, clones over https into cluster.VolumeRepoDir, and
-// checks out either the pull request's head ref (which works for forks too and
-// needs no gh in the image) or the chosen branch for an issue or repository
-// (tracking origin/<branch> if it already exists, or creating it from HEAD).
-// It pins HTTP/1.1 with a low-speed timeout and retries transient stalls so a
-// hung GitHub stream does not sit decaying for minutes. git's progress is
-// carriage returns on one line, which the container log would hold back until
-// the line ends, so it is turned into lines, unbuffered, for the dashboard to
-// follow.
-func (c Checkout) CloneScript() string {
-	dir := cluster.VolumeRepoDir
-	lines := []string{
-		"set -euo pipefail",
-		`lines() { if command -v stdbuf >/dev/null; then stdbuf -o0 tr '\r' '\n'; else tr '\r' '\n'; fi; }`,
-		"export GIT_CONFIG_COUNT=3",
-		"export GIT_CONFIG_KEY_0=http.version GIT_CONFIG_VALUE_0=HTTP/1.1",
-		"export GIT_CONFIG_KEY_1=http.lowSpeedLimit GIT_CONFIG_VALUE_1=1024",
-		"export GIT_CONFIG_KEY_2=http.lowSpeedTime GIT_CONFIG_VALUE_2=20",
-		`if [ -n "${GITHUB_TOKEN:-}" ]; then export GIT_ASKPASS=/tmp/git-askpass.sh GIT_TERMINAL_PROMPT=0; printf '#!/bin/sh\ncase "$1" in *Username*) echo x-access-token;; *) echo "$GITHUB_TOKEN";; esac\n' > "$GIT_ASKPASS"; chmod 700 "$GIT_ASKPASS"; fi`,
-	}
-	lines = append(lines, retryScriptLines(
-		"clone",
-		"rm -rf "+dir,
-		"git clone --progress "+shellQuote("https://github.com/"+c.Repo+".git")+" "+dir+" 2>&1 | lines",
-	)...)
-	lines = append(lines, "cd "+dir)
-	if c.Kind == CheckoutIssue || c.Kind == CheckoutRepo {
-		b := shellQuote(c.branch())
-		ref := shellQuote("refs/remotes/origin/" + c.branch())
-		lines = append(lines,
-			"if git show-ref --verify --quiet "+ref+"; then git checkout -B "+b+" --track "+ref+"; else git checkout -B "+b+"; fi",
-		)
-	} else {
-		lines = append(lines, retryScriptLines(
-			"fetch",
-			"",
-			fmt.Sprintf("git fetch --progress origin pull/%d/head 2>&1 | lines", c.Number),
-		)...)
-		lines = append(lines, "git checkout -B "+shellQuote(c.branch())+" FETCH_HEAD")
-	}
-	return strings.Join(lines, "\n")
-}
-
-func retryScriptLines(label, setup, cmd string) []string {
-	out := []string{"for i in 1 2 3; do"}
-	if setup != "" {
-		out = append(out, "  "+setup)
-	}
-	return append(out,
-		"  if "+cmd+"; then break; fi",
-		`  [ "$i" -lt 3 ] || exit 1`,
-		fmt.Sprintf(`  echo "%s stalled, retrying ($((i+1))/3)..."`, label),
-		"  sleep 2",
-		"done",
-	)
-}
-
-// ShellLine is what the sandbox's bash is given after a fresh clone: into the
-// clone, and where it stands.
-func (c Checkout) ShellLine() string {
-	return c.shellLine(false)
-}
-
-// shellLine is what the sandbox's bash is given. When an issue or repository
-// checkout reuses a kept volume, it also checks out (or creates) the requested
-// branch without resetting any existing local branch. When a coding agent
-// harness was selected, it launches the harness (with the chosen model, if any)
-// directly inside the repository directory.
-func (c Checkout) shellLine(cloned bool) string {
-	var line string
-	if (c.Kind == CheckoutIssue || c.Kind == CheckoutRepo) && cloned {
-		b := shellQuote(c.branch())
-		line = "cd " + shellQuote(c.MountPath()) + " && (git checkout " + b + " 2>/dev/null || git checkout -b " + b + ") && git status -sb"
-	} else {
-		line = "cd " + shellQuote(c.MountPath()) + " && git status -sb"
-	}
-	if cmd := LaunchCommand(c.Harness, c.Model); cmd != "" {
-		line += " && " + cmd
-	}
-	return line
+	return fmt.Sprintf("pr-%d", c.Number)
 }
 
 func (c Checkout) harnessSummary() string {
@@ -188,30 +109,19 @@ func (c Checkout) harnessSummary() string {
 	return h
 }
 
-var shellSafe = regexp.MustCompile(`^[A-Za-z0-9_./:@%+=,-]+$`)
-
-// shellQuote leaves plain words bare, so the typed line stays readable, and
-// single-quotes the rest: branch names may hold $, ;, or quotes.
-func shellQuote(s string) string {
-	if shellSafe.MatchString(s) && !strings.HasPrefix(s, "-") {
-		return s
-	}
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
 // WarmPools is the fleet's pools by name. A pull request's sandbox starts
 // from the chosen pool's template.
-func (m model) WarmPools() []cluster.Pool {
-	pools := make([]cluster.Pool, 0, len(m.pools))
-	for _, p := range m.pools {
-		pools = append(pools, p)
+func (m model) WarmPools() []fleet.Pool {
+	pools := make([]fleet.Pool, 0, len(m.pools))
+	for name := range m.pools {
+		pools = append(pools, m.pools[name])
 	}
 	sort.Slice(pools, func(i, j int) bool { return pools[i].Name < pools[j].Name })
 	return pools
 }
 
 // WithFleet is m showing boxes and pools, as a fetch would leave it.
-func (m model) WithFleet(boxes []cluster.Sandbox, pools map[string]cluster.Pool) Model {
+func (m model) WithFleet(boxes []fleet.Sandbox, pools map[string]fleet.Pool) Model {
 	m.boxes, m.pools, m.loaded = boxes, pools, true
 	m.dataRev++
 	return m
@@ -229,7 +139,32 @@ const (
 	stepCount
 )
 
-var stepTitles = [stepCount]string{"Volume", "Clone", "Sandbox", "Shell"}
+// title is the step's name on the card.
+func (s step) title() string {
+	switch s {
+	case stepClone:
+		return "Clone"
+	case stepSandbox:
+		return "Sandbox"
+	case stepShell:
+		return "Shell"
+	case stepVolume, stepCount:
+	}
+	return "Volume"
+}
+
+// stepOf is the card's step for the contract's step name.
+func stepOf(name string) step {
+	switch name {
+	case v1.StepClone:
+		return stepClone
+	case v1.StepSandbox:
+		return stepSandbox
+	case v1.StepShell:
+		return stepShell
+	}
+	return stepVolume
+}
 
 // checkoutEvent is the pipeline telling the dashboard where it is: the step
 // it works on and what it does there, a step's summary once it is finished,
@@ -242,6 +177,19 @@ type checkoutEvent struct {
 	done     bool
 	err      error
 }
+
+// eventOf is an event of the services' pipeline as the dashboard shows it.
+func eventOf(ev v1.CheckoutEvent) checkoutEvent {
+	out := checkoutEvent{step: stepOf(ev.Step), detail: ev.Detail, finished: ev.Finished, pod: ev.Sandbox, done: ev.Done}
+	if ev.Error != "" {
+		out.err = errText(ev.Error)
+	}
+	return out
+}
+
+type errText string
+
+func (e errText) Error() string { return string(e) }
 
 type checkoutMsg struct {
 	ev     checkoutEvent
@@ -259,133 +207,6 @@ type checkoutRun struct {
 	since    time.Time // the current step's start
 }
 
-// checkoutOps is what the pipeline does to the cluster; tests swap it.
-type checkoutOps struct {
-	volumeState   func(string) (bool, bool, error)
-	createVolume  func(string, cluster.VolumeFor) error
-	templatePod   func(string) (map[string]any, string, error)
-	clone         func(volume, image, script string, timeout time.Duration, progress func(string)) error
-	createSandbox func(template string, pod map[string]any, volume, mount string) (string, error)
-	waitPod       func(pod string, timeout time.Duration, progress func(string)) error
-	ensure        func(pod string) error
-	send          func(pod string, keys []session.Key) error
-}
-
-var liveOps = checkoutOps{
-	volumeState:   cluster.VolumeState,
-	createVolume:  cluster.CreateVolume,
-	templatePod:   cluster.TemplatePod,
-	clone:         cluster.CloneIntoVolume,
-	createSandbox: cluster.CreateVolumeSandbox,
-	waitPod:       cluster.WaitForPod,
-	ensure:        session.Ensure,
-	send:          func(pod string, keys []session.Key) error { return session.SendBatch(pod, "", keys) },
-}
-
-// runCheckout puts c on its volume, cloning it the first time, starts a
-// sandbox from template on it, and brings its bash into the clone, telling
-// emit each step as it goes. Its last event is done or an error.
-func runCheckout(ops checkoutOps, c Checkout, template string, emit func(checkoutEvent)) {
-	var last checkoutEvent
-	say := func(ev checkoutEvent) {
-		if ev != last {
-			last = ev
-			emit(ev)
-		}
-	}
-	fail := func(s step, err error) { emit(checkoutEvent{step: s, err: err}) }
-
-	vol := c.Volume()
-	say(checkoutEvent{step: stepVolume, detail: "looking for " + vol})
-	exists, cloned, err := ops.volumeState(vol)
-	if err == nil && !exists {
-		say(checkoutEvent{step: stepVolume, detail: "creating " + vol})
-		err = ops.createVolume(vol, cluster.VolumeFor{Repo: c.Repo, Number: c.Number, Branch: c.branch(), Kind: c.volumeKind()})
-	}
-	if err != nil {
-		fail(stepVolume, err)
-		return
-	}
-	note := vol + " · new"
-	if exists {
-		note = vol + " · kept"
-	}
-	say(checkoutEvent{step: stepVolume, finished: true, detail: note})
-
-	say(checkoutEvent{step: stepClone, detail: "reading " + template})
-	pod, image, err := ops.templatePod(template)
-	if err != nil {
-		fail(stepClone, err)
-		return
-	}
-	if cloned {
-		say(checkoutEvent{step: stepClone, finished: true, detail: "already on the volume, kept as it was"})
-	} else {
-		say(checkoutEvent{step: stepClone, detail: "starting the clone pod"})
-		err := ops.clone(vol, image, c.CloneScript(), cloneTimeout, func(line string) {
-			say(checkoutEvent{step: stepClone, detail: cloneDetail(line)})
-		})
-		if err != nil {
-			fail(stepClone, err)
-			return
-		}
-		say(checkoutEvent{step: stepClone, finished: true, detail: c.branch() + " checked out"})
-	}
-
-	say(checkoutEvent{step: stepSandbox, detail: "creating from " + template})
-	name, err := ops.createSandbox(template, pod, vol, c.MountPath())
-	if err != nil {
-		fail(stepSandbox, err)
-		return
-	}
-	say(checkoutEvent{step: stepSandbox, pod: name, detail: "waiting for " + name})
-	err = ops.waitPod(name, podTimeout, func(state string) {
-		say(checkoutEvent{step: stepSandbox, pod: name, detail: podDetail(state)})
-	})
-	if err != nil {
-		fail(stepSandbox, err)
-		return
-	}
-	say(checkoutEvent{step: stepSandbox, pod: name, finished: true, detail: name})
-
-	shellDetail := "starting bash"
-	if summary := c.harnessSummary(); summary != "" {
-		shellDetail = "starting " + summary
-	}
-	say(checkoutEvent{step: stepShell, pod: name, detail: shellDetail})
-	if err := ops.ensure(name); err != nil {
-		fail(stepShell, err)
-		return
-	}
-	if err := ops.send(name, []session.Key{{Text: c.shellLine(cloned)}, {Name: "Enter"}}); err != nil {
-		fail(stepShell, fmt.Errorf("could not type into bash: %w", err))
-		return
-	}
-	emit(checkoutEvent{step: stepShell, pod: name, done: true})
-}
-
-// cloneDetail is the clone Job's latest log line as the card says it.
-func cloneDetail(line string) string {
-	line = strings.TrimSpace(strings.TrimPrefix(line, "remote: "))
-	if line == "" {
-		return "starting the clone pod"
-	}
-	return line
-}
-
-func podDetail(state string) string {
-	phase, reason, _ := strings.Cut(state, " ")
-	switch {
-	case phase == "":
-		return "waiting for the pod"
-	case reason == "ContainerCreating":
-		return "pod " + phase + " · pulling the image"
-	case reason != "":
-		return "pod " + phase + " · " + reason
-	}
-	return "pod " + phase
-}
-
 var gitProgress = regexp.MustCompile(`^(.+?):\s+(\d+)% \(\d+/\d+\)(?:,\s*(.*?))?(?:,\s*done\.)?$`)
 
 // parseProgress reads a git progress line: its phase, percent, and the rest
@@ -395,7 +216,10 @@ func parseProgress(line string) (phase string, percent int, rest string, ok bool
 	if g == nil {
 		return "", 0, "", false
 	}
-	pct, _ := strconv.Atoi(g[2])
+	pct, err := strconv.Atoi(g[2])
+	if err != nil {
+		return "", 0, "", false
+	}
 	rest = strings.TrimSuffix(strings.TrimSpace(g[3]), ", done.")
 	if rest == "done." {
 		rest = ""
@@ -403,16 +227,36 @@ func parseProgress(line string) (phase string, percent int, rest string, ok bool
 	return g[1], min(pct, 100), rest, true
 }
 
-// startCheckoutCmd runs the checkout once the command runs, and answers
-// with its first event; each event's message asks for the next.
-func startCheckoutCmd(ops checkoutOps, c Checkout, template string) tea.Cmd {
+// startCheckoutCmd asks the services for the checkout and follows it. It
+// answers with the first event; each event's message asks for the next.
+func startCheckoutCmd(api API, c Checkout, pool string) tea.Cmd {
 	return func() tea.Msg {
 		events := make(chan checkoutEvent, 16)
 		go func() {
 			defer close(events)
-			runCheckout(ops, c, template, func(ev checkoutEvent) { events <- ev })
+			follow(api, c, pool, func(ev checkoutEvent) { events <- ev })
 		}()
 		return nextCheckoutEvent(events)()
+	}
+}
+
+// follow starts the checkout and tells emit about it until it ends. Its last
+// event is done or has err set.
+func follow(api API, c Checkout, pool string, emit func(checkoutEvent)) {
+	ctx := context.Background()
+	co, err := call(callTimeout, func(ctx context.Context) (v1.Checkout, error) { return api.Checkout(ctx, c.Request(pool)) })
+	if err != nil {
+		emit(checkoutEvent{step: stepVolume, err: err})
+		return
+	}
+	last := checkoutEvent{step: stepVolume}
+	err = api.FollowCheckout(ctx, co.ID, func(ev v1.CheckoutEvent) error {
+		last = eventOf(ev)
+		emit(last)
+		return nil
+	})
+	if err != nil && !last.done && last.err == nil {
+		emit(checkoutEvent{step: last.step, err: err})
 	}
 }
 
@@ -426,29 +270,29 @@ func nextCheckoutEvent(events <-chan checkoutEvent) tea.Cmd {
 	}
 }
 
-// CheckOut puts c's pull request on its volume, cloning it there the first
-// time, and starts a sandbox from pool's template on it, showing each step
-// in a card. A sandbox already on that volume is where the work goes on
-// instead. One checkout runs at a time.
+// CheckOut puts c on its volume, cloning it there the first time, and starts a
+// sandbox from pool's template on it, showing each step in a card. A sandbox
+// already on that volume is where the work goes on instead. One checkout runs
+// at a time.
 func (m model) CheckOut(pool string, c Checkout) (Model, tea.Cmd) {
 	m.confirmDestroy = false
 	if r := m.checkout; r != nil {
 		m.flash("still checking out " + r.co.String() + ", one at a time")
 		return m, nil
 	}
-	vol := c.Volume()
-	for _, b := range m.boxes {
-		if b.Volume != vol {
+	for i := range m.boxes {
+		b := &m.boxes[i]
+		if !c.onSandbox(b) {
 			continue
 		}
 		m.section = sectionAll
 		m.selectPod(b.Name)
-		if b.Phase != "Running" {
+		if b.Phase != fleet.PodPhaseRunning {
 			m.flash(c.String() + " is already starting in " + b.Name)
 			return m, nil
 		}
 		m.flash(c.String() + " is already open in " + b.Name)
-		return m, attachCmd(b.Name)
+		return m, attachCmd(m.api, b.Name)
 	}
 	p, ok := m.pools[pool]
 	if !ok || p.Template == "" {
@@ -458,7 +302,7 @@ func (m model) CheckOut(pool string, c Checkout) (Model, tea.Cmd) {
 	now := time.Now()
 	m.checkout = &checkoutRun{co: c, template: p.Template, began: now, since: now, detail: startingLabel}
 	m.status, m.statusTTL = "", 0
-	return m, startCheckoutCmd(liveOps, c, p.Template)
+	return m, startCheckoutCmd(m.api, c, pool)
 }
 
 func (m model) checkoutEvent(msg checkoutMsg) (model, tea.Cmd) {
@@ -470,14 +314,14 @@ func (m model) checkoutEvent(msg checkoutMsg) (model, tea.Cmd) {
 	switch {
 	case ev.err != nil:
 		m.checkout = nil
-		m.fail(strings.ToLower(stepTitles[ev.step]) + " failed for " + run.co.String() + ": " + ev.err.Error())
-		return m, fetchCmd(m.agentVersions)
+		m.fail(strings.ToLower(ev.step.title()) + " failed for " + run.co.String() + ": " + ev.err.Error())
+		return m, fetchCmd(m.api)
 	case ev.done:
 		m.checkout = nil
 		co := run.co
 		m.pendingPod, m.pendingCheckout = ev.pod, &co
 		m.flash(co.String() + " is ready in " + ev.pod)
-		return m, fetchCmd(m.agentVersions)
+		return m, fetchCmd(m.api)
 	case ev.finished:
 		run.notes[ev.step] = ev.detail
 	default:
@@ -497,11 +341,15 @@ func (m model) CheckoutLine() string {
 	if r == nil {
 		return ""
 	}
-	return fmt.Sprintf("%s · %s %d/%d · %s", r.co.String(), strings.ToLower(stepTitles[r.step]),
+	return fmt.Sprintf("%s · %s %d/%d · %s", r.co.String(), strings.ToLower(r.step.title()),
 		int(r.step)+1, stepCount, r.detail)
 }
 
-var spinner = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+// spinnerFrame is the spinner's frame at now.
+func spinnerFrame(now time.Time) string {
+	frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+	return frames[int(now.UnixMilli()/100)%len(frames)]
+}
 
 const cardInner = 64
 
@@ -524,12 +372,12 @@ func (m model) checkoutCard(now time.Time) string {
 	}
 	const label = 9
 	for s := stepVolume; s < stepCount; s++ {
-		name := fmt.Sprintf("%-*s", label, stepTitles[s])
+		name := fmt.Sprintf("%-*s", label, s.title())
 		switch {
 		case s < r.step:
 			lines = append(lines, dialog.Line(plain.Foreground(th.SuccessText), "✓ "+name+r.notes[s], inner))
 		case s == r.step:
-			frame := spinner[int(now.UnixMilli()/100)%len(spinner)]
+			frame := spinnerFrame(now)
 			text := r.detail
 			phase, pct, rest, isProgress := parseProgress(text)
 			if isProgress {
@@ -572,9 +420,9 @@ func elapsed(d time.Duration) string {
 	return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
 }
 
-// focusCheckout shows pod's shell, in the clone, in the All section if pod's
-// section would hide it.
-func (m model) focusCheckout(pod string, c Checkout) (Model, tea.Cmd) {
+// focusCheckout shows the selected sandbox's shell, in the clone, in the All
+// section if its section would hide it.
+func (m model) focusCheckout(c Checkout) (Model, tea.Cmd) {
 	if m.section == sectionWarm || m.section == sectionInfra {
 		m.section = sectionAll
 	}
@@ -587,5 +435,5 @@ func (m model) focusCheckout(pod string, c Checkout) (Model, tea.Cmd) {
 		m.flash(c.String() + " is in " + c.MountPath() + " — C-b q leaves bash")
 	}
 	cmd := m.watchShell()
-	return m, tea.Batch(fetchCmd(m.agentVersions), cmd)
+	return m, tea.Batch(fetchCmd(m.api), cmd)
 }

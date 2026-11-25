@@ -5,6 +5,7 @@ package live
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/tmih06/nightshift/internal/services/accounts"
@@ -73,7 +74,7 @@ func call[T any](ctx context.Context, fn func() (T, error)) (T, error) {
 		return r.v, r.err
 	case <-ctx.Done():
 		var zero T
-		return zero, ctx.Err()
+		return zero, fmt.Errorf("gave up waiting: %w", ctx.Err())
 	}
 }
 

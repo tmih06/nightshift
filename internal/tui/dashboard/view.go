@@ -12,8 +12,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/tmih06/nightshift/internal/ghdash/tui/common"
-	"github.com/tmih06/nightshift/internal/services/cluster"
 	"github.com/tmih06/nightshift/internal/tui/dialog"
+	"github.com/tmih06/nightshift/internal/tui/fleet"
 )
 
 const (
@@ -69,6 +69,9 @@ func (m model) layout() layout {
 	l := layout{bodyTop: tabsH}
 	l.bodyH = max(m.height-tabsH-m.footerHeight(), 4)
 	rows := m.infoRowCount()
+	if m.zoom {
+		return m.zoomLayout(l, rows)
+	}
 	if m.width < stackedBelow {
 		l.stacked = true
 		l.tableW, l.sideW = m.width, m.width
@@ -152,7 +155,7 @@ type rowCacheEntry struct {
 
 func phaseColor(phase string) color.Color {
 	switch phase {
-	case cluster.PodPhaseRunning, "Succeeded":
+	case fleet.PodPhaseRunning, "Succeeded":
 		return th.SuccessText
 	case "Pending", "":
 		return th.WarningText
@@ -225,7 +228,7 @@ func (m model) subTabBar(width, startX int) (string, []subTabSpan) {
 	return spread(left.String(), dim(hint), width), spans
 }
 
-func (m model) sidebarFocusHint(b *cluster.Sandbox, active sidebarMode, focused bool) string {
+func (m model) sidebarFocusHint(b *fleet.Sandbox, active sidebarMode, focused bool) string {
 	if focused {
 		if active == paneShell {
 			return "C-b q leaves"
@@ -238,13 +241,13 @@ func (m model) sidebarFocusHint(b *cluster.Sandbox, active sidebarMode, focused 
 	return "⏎ or click to focus"
 }
 
-func (m model) podContextLine(b *cluster.Sandbox, width int) string {
+func (m model) podContextLine(b *fleet.Sandbox, width int) string {
 	if b.Claimed() && b.Volume != "" {
 		return truncateANSI(dim("volume ")+b.Volume+dim(" · kept when destroyed"), max(width, 1))
 	}
 	parts := make([]string, 0, 3)
 	if b.Image != "" {
-		parts = append(parts, dim("image ")+imageLabel(b.Image, m.agentVersions[b.Name]))
+		parts = append(parts, dim("image ")+imageLabel(b.Image, b.AgentVersion))
 	}
 	if len(b.Ports) > 0 {
 		parts = append(parts, dim("ports ")+strings.Join(b.Ports, ", "))
@@ -255,7 +258,7 @@ func (m model) podContextLine(b *cluster.Sandbox, width int) string {
 	return truncateANSI(strings.Join(parts, dim(" · ")), max(width, 1))
 }
 
-func (m model) podMetaLine(b *cluster.Sandbox, width int) string {
+func (m model) podMetaLine(b *fleet.Sandbox, width int) string {
 	var parts []string
 	if b.Warm() && len(m.podWindows(b.Name)) > 0 {
 		parts = append(parts, warmStyle.Render("● herdr live"))
@@ -278,7 +281,7 @@ func (m model) podMetaLine(b *cluster.Sandbox, width int) string {
 	return fitParts(parts, width)
 }
 
-func (m model) podStateLine(b *cluster.Sandbox, width int) string {
+func (m model) podStateLine(b *fleet.Sandbox, width int) string {
 	kind, kindColor := kindName(b)
 	pill := styles.PrView.PillStyle.Background(kindColor).Render(" " + roleGlyph(b.PodRole()) + " " + kind + " ")
 	phaseText := b.Phase
@@ -308,7 +311,7 @@ func (m model) podStateLine(b *cluster.Sandbox, width int) string {
 	return truncateANSI(pill+" "+status+dim(" · ")+strings.Join(extra, dim(" · ")), max(width, 1))
 }
 
-func podHeaderLocation(b *cluster.Sandbox) string {
+func podHeaderLocation(b *fleet.Sandbox) string {
 	ns := b.EffectiveNamespace()
 	if b.Owner != "" {
 		return ns + " · " + b.Owner
@@ -316,7 +319,7 @@ func podHeaderLocation(b *cluster.Sandbox) string {
 	return ns
 }
 
-func (m model) claimedSessionLines(b *cluster.Sandbox, width int) []string {
+func (m model) claimedSessionLines(b *fleet.Sandbox, width int) []string {
 	wins := m.podWindows(b.Name)
 	session := dim("○ herdr off")
 	if len(wins) > 0 {
@@ -338,7 +341,7 @@ func (m model) claimedSessionLines(b *cluster.Sandbox, width int) []string {
 func (m model) infoLines(width int) []string {
 	b := m.selectedBox()
 	if b == nil {
-		return []string{common.RenderPreviewHeader(th, width, truncateANSI(cluster.Namespace, max(width-2, 1)))}
+		return []string{common.RenderPreviewHeader(th, width, truncateANSI(fleet.Namespace, max(width-2, 1)))}
 	}
 	header := common.RenderPreviewHeader(th, width, truncateANSI(podHeaderLocation(b), max(width-2, 1)))
 	title := strings.Split(common.RenderPreviewTitle(th, styles.Common, width, truncateANSI(b.Name, max(width-2, 1))), "\n")
@@ -347,7 +350,7 @@ func (m model) infoLines(width int) []string {
 	usage := usageTable([]usageRow{
 		{colCPU, b.CPUUsageMC, b.CPULimitMC, "m", h.cpu},
 		{colMEM, b.MemUsageMiB, b.MemLimitMiB, "Mi", h.mem},
-	}, m.usageKnown(b.Name), width-1)
+	}, b.UsageKnown, width-1)
 
 	lines := []string{
 		header,
@@ -459,7 +462,7 @@ func (m model) windowTabBar(width, startX int) (string, []windowTabSpan) {
 	}
 	items := make([]tabItem, len(wins))
 	for i, w := range wins {
-		label := truncateANSI(w.Label(), 14)
+		label := truncateANSI(w.Label, 14)
 		text := fmt.Sprintf(" %d:%s ", i+1, label)
 		var rendered string
 		switch {
@@ -860,8 +863,15 @@ func (m model) View() string {
 	l := m.layout()
 	var b strings.Builder
 	b.WriteString(m.tabsView() + "\n")
-	table := m.tableView(l)
 	side := m.sidebarView(l)
+	if m.zoom {
+		for _, row := range side {
+			b.WriteString(row + "\n")
+		}
+		b.WriteString(m.statusLine())
+		return m.overlays(b.String())
+	}
+	table := m.tableView(l)
 	if l.stacked {
 		for _, row := range append(table, side...) {
 			b.WriteString(row + "\n")

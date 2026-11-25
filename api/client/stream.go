@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -23,38 +24,48 @@ type event struct {
 
 // stream reads the server-sent events of a call, handing each to fn, until the
 // stream ends, fn fails, or ctx ends.
-func (c *Client) stream(ctx context.Context, rq request, fn func(event) error) error {
+func (c *Client) stream(ctx context.Context, rq request, fn func(event) error) (err error) {
 	rq.accept = "text/event-stream"
 	resp, err := c.do(ctx, rq)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { err = errors.Join(err, closeErr(resp.Body)) }()
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 0, 64<<10), maxEvent)
 	var ev event
 	for sc.Scan() {
-		line := sc.Text()
-		switch {
-		case line == "":
-			if ev.name != "" || len(ev.data) > 0 {
-				if err := fn(ev); err != nil {
-					return err
-				}
-			}
-			ev = event{}
-		case strings.HasPrefix(line, ":"):
-			// a comment: the server keeping the connection alive
-		case strings.HasPrefix(line, "event:"):
-			ev.name = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
-		case strings.HasPrefix(line, "data:"):
-			ev.data = append(ev.data, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " ")...)
+		if err := ev.feed(sc.Text(), fn); err != nil {
+			return err
 		}
 	}
 	if err := sc.Err(); err != nil && ctx.Err() == nil {
-		return err
+		return fmt.Errorf("read the stream: %w", err)
 	}
-	return ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("stream stopped: %w", err)
+	}
+	return nil
+}
+
+// feed takes one line of a stream: a field of the event being built, or the
+// blank line that ends it, which hands the event to fn.
+func (ev *event) feed(line string, fn func(event) error) error {
+	switch {
+	case line == "":
+		done := *ev
+		*ev = event{}
+		if done.name != "" || len(done.data) > 0 {
+			return fn(done)
+		}
+	case strings.HasPrefix(line, ":"):
+		// a comment: the server keeping the connection alive
+	case strings.HasPrefix(line, "event:"):
+		ev.name = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+	case strings.HasPrefix(line, "data:"):
+		ev.data = append(ev.data, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " ")...)
+	}
+	return nil
 }
 
 // errEnd ends a stream from inside its handler without being an error.
@@ -82,7 +93,7 @@ func decodeEvent(ev event, want string, v any) (bool, error) {
 // ends, fn fails, or the connection drops. It returns nil when the server ends
 // the stream, so a caller that wants to keep watching connects again.
 func (c *Client) WatchFleet(ctx context.Context, fn func(v1.Fleet) error, include ...string) error {
-	err := c.stream(ctx, request{method: "GET", path: "/v1/fleet/watch", query: includeQuery(include)}, func(ev event) error {
+	err := c.stream(ctx, request{method: http.MethodGet, path: "/v1/fleet/watch", query: includeQuery(include)}, func(ev event) error {
 		var f v1.Fleet
 		ok, err := decodeEvent(ev, "fleet", &f)
 		if err != nil || !ok {
@@ -100,7 +111,7 @@ func (c *Client) WatchFleet(ctx context.Context, fn func(v1.Fleet) error, includ
 // one, which has Done or Error set, has been delivered. A client that joins a
 // checkout late is caught up first.
 func (c *Client) FollowCheckout(ctx context.Context, id string, fn func(v1.CheckoutEvent) error) error {
-	err := c.stream(ctx, request{method: "GET", path: "/v1/checkouts/" + url.PathEscape(id) + "/events"}, func(ev event) error {
+	err := c.stream(ctx, request{method: http.MethodGet, path: "/v1/checkouts/" + url.PathEscape(id) + "/events"}, func(ev event) error {
 		var e v1.CheckoutEvent
 		ok, err := decodeEvent(ev, "checkout", &e)
 		if err != nil || !ok {
