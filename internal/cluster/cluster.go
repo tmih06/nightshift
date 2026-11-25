@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"sort"
 	"strconv"
@@ -16,10 +17,23 @@ import (
 )
 
 const (
-	KubeContext = "kind-agent-sandbox"
-	Namespace   = "nightshift"
-	WarmPool    = "pi-pool"
+	// DefaultKubeContext is the kind cluster Nightshift was built against.
+	DefaultKubeContext = "kind-agent-sandbox"
+	// ContextEnv names the kubeconfig context to use on any other cluster.
+	ContextEnv = "NIGHTSHIFT_CONTEXT"
+	Namespace  = "nightshift"
+	WarmPool   = "pi-pool"
 )
+
+// KubeContext is the kubeconfig context every kubectl call targets:
+// NIGHTSHIFT_CONTEXT when set, so Nightshift runs on any Kubernetes
+// provider, and the kind default otherwise.
+func KubeContext() string {
+	if c := strings.TrimSpace(os.Getenv(ContextEnv)); c != "" {
+		return c
+	}
+	return DefaultKubeContext
+}
 
 type Sandbox struct {
 	Name        string
@@ -523,7 +537,7 @@ func Fetch() ([]Sandbox, map[string]Pool, bool, error) {
 }
 
 func runKubectl(stdin []byte, args ...string) ([]byte, error) {
-	full := append([]string{"--context", KubeContext, "-n", Namespace}, args...)
+	full := append([]string{"--context", KubeContext(), "-n", Namespace}, args...)
 	cmd := exec.Command("kubectl", full...)
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)

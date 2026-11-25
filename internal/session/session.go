@@ -73,7 +73,7 @@ func Name(pod string) string {
 }
 
 func kubectl(pod string, tty, stdin bool, args ...string) *exec.Cmd {
-	command := []string{"--context", cluster.KubeContext, "-n", cluster.Namespace, "exec"}
+	command := []string{"--context", cluster.KubeContext(), "-n", cluster.Namespace, "exec"}
 	if stdin {
 		command = append(command, "-i")
 	}
