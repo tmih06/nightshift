@@ -136,22 +136,38 @@ pool sizing all read it, and `TestShippedPolicySwapsEveryRegisteredLogin`
 fails when an entry has no matching proxy rule. Adding an agent is one entry
 plus its proxy rule.
 
-The master is whatever `$HOME` runs `creds-publish.sh`: a laptop, or the
-`creds-refresher` pod (`k8s/creds.yaml`, image `images/creds`), which runs
-it in a loop inside the cluster. The pod's persistent home is the only place
-refresh tokens live: Claude and OpenAI rotate them on every use, so copies
-would log each other out. One replica, Recreate rollouts, and a
-ReadWriteOnce volume make it a single writer by construction; its service
-account may only edit the `agent-creds` and `egress-secrets` secrets and the
-warm pool sizes (`TestCredsRefresherHasLeastPrivilege`). It exercises each
-agent so an expiring token refreshes, packs the placeholder copies into the
-`agent-creds` secret that templates untar into `$HOME` at boot, writes the
-real access tokens into `egress-secrets`, and keeps a warm sandbox only for
+Where the master logins come from is the one choice to make. Signing in needs a
+person with a browser, and the tokens then expire and rotate, so exactly one
+process must hold the refresh tokens:
+
+- **CLIProxyAPI (`k8s/cpa.yaml`)** is the login surface. You open its page
+  once per account (`docs/login-surface.md` explains the choice), and it keeps
+  the tokens fresh. The `creds-refresher` pod (`k8s/creds.yaml`, image
+  `images/creds`) runs `creds-publish.sh --cpa` every five minutes: it lists
+  the accounts over CLIProxyAPI's management API, rebuilds each agent's login
+  file from them (the `cpa` entries of `creds-providers.json`), and publishes
+  as below. Install both with `k8s/creds-setup.sh`. Nothing depends on a
+  laptop staying online.
+- **A laptop** also works: log in with `claude`, `codex`, and `agy`, then run
+  `creds-publish.sh --watch 1200`, which exercises each CLI to refresh it.
+  Do not run both for the same agent: each would overwrite the other's secrets.
+
+Publishing is the same either way. The placeholder copies go into the
+`agent-creds` secret that templates untar into `$HOME` at boot, the real
+access tokens into `egress-secrets`, and a warm sandbox is kept only for
 agents that have a login. The proxy binds those secrets to files on a mounted
 volume and re-reads them every 15 seconds (`internal/egress/reload.go`), so a
 refreshed token needs no restart; the kubelet takes up to about two minutes to
-update the volume. Do not run a laptop publisher and the refresher for the
-same agent: each would overwrite the other's secrets.
+update the volume. The refresher's service account may only edit the two
+credential secrets and the warm pool sizes
+(`TestCredsRefresherHasLeastPrivilege`), and CLIProxyAPI's network policy
+admits only the refresher.
+
+One login can serve several clusters: `PUBLISH_CONTEXTS` lists the contexts to
+publish into (`-` is the cluster the refresher runs in), and
+`REMOTE_KUBECONFIG` points at a mounted kubeconfig for the others. Every
+cluster receives the same placeholders and tokens, so no cluster refreshes
+anything and no refresh token is ever held twice.
 
 Nothing here is specific to kind. `NIGHTSHIFT_CONTEXT` selects the kubeconfig
 context for the scripts and the TUI, the manifests pin no service address, and

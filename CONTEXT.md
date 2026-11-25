@@ -36,8 +36,10 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
   access token for a placeholder, and the real tokens go into the egress
   proxy's secrets while the placeholder copies go into the `agent-creds`
   secret every sandbox untars into `$HOME` at boot. Warm pools are sized to
-  the logins that exist. `creds.yaml` runs the same script in-cluster as the
-  `creds-refresher` (image `images/creds`); `--watch` does it from a laptop.
+  the logins that exist. `cpa.yaml` runs CLIProxyAPI, the page where accounts
+  are signed in, and `creds.yaml` runs the `creds-refresher` that reads it
+  (`creds-setup.sh` installs both); `--watch` does it from a laptop instead.
+  `docs/login-surface.md` records why.
   `NIGHTSHIFT_CONTEXT` points every script and the TUI at any cluster.
   Sandboxes reach the proxy by its ClusterIP, which `egress-setup.sh` writes
   into the ConfigMap (their DNS is external, so service names never resolve), and the `sandbox-egress-env` ConfigMap wires the

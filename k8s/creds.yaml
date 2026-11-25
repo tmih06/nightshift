@@ -1,20 +1,15 @@
-# In-cluster credential refresher. One pod holds the master logins on a
-# persistent home, so refresh tokens exist in exactly one place, and runs
-# creds-publish.sh in a loop: it exercises each agent so expiring access tokens
-# refresh, then publishes sandbox-safe copies (agent-creds) and the real access
-# tokens (egress-secrets) and sizes the warm pools to the logins it holds.
+# In-cluster credential refresher. It reads the accounts you signed in to
+# CLIProxyAPI (k8s/cpa.yaml), swaps each access token for a placeholder,
+# publishes the sandbox copies (agent-creds) and the real access tokens
+# (egress-secrets), and sizes the warm pools to the logins it finds. CLIProxyAPI
+# holds the refresh tokens and keeps them fresh, so this pod holds none.
 #
-# Log in once from your machine:
-#   kubectl -n nightshift exec -it deploy/creds-refresher -- claude login
-#   kubectl -n nightshift exec -it deploy/creds-refresher -- \
-#     codex login --device-auth
-#   kubectl -n nightshift exec -it deploy/creds-refresher -- agy
-# or carry logins you already have:
-#   k8s/creds-publish.sh --import ~/.codex/auth.json
+# Install both with k8s/creds-setup.sh, then sign accounts in on the
+# CLIProxyAPI page (see the top of cpa.yaml).
 #
-# Single writer by construction: one replica, Recreate rollouts, and a
-# ReadWriteOnce volume, so a second refresher can never rotate a refresh token
-# behind the first. Edit image: to use your own registry's copy.
+# Several clusters, one login: mount a kubeconfig as the creds-remote
+# secret (key: config) and list contexts in PUBLISH_CONTEXTS, "-" being this
+# cluster. Each context's credentials need the two Roles below in that cluster.
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -128,10 +123,23 @@ spec:
       - name: refresher
         image: ghcr.io/tmih06/nightshift-creds:latest
         imagePullPolicy: IfNotPresent
-        args: ["--watch", "1200"]
+        args:
+        - --cpa
+        - http://cpa.nightshift.svc:8317
+        - --watch
+        - "300"
         env:
         - name: HOME
           value: /home/node
+        - name: CPA_MANAGEMENT_KEY
+          valueFrom:
+            secretKeyRef:
+              name: cpa-keys
+              key: management
+        - name: PUBLISH_CONTEXTS
+          value: "-"
+        - name: REMOTE_KUBECONFIG
+          value: /etc/nightshift/remote/config
         resources:
           requests:
             cpu: 50m
@@ -142,7 +150,14 @@ spec:
         volumeMounts:
         - name: home
           mountPath: /home/node
+        - name: remote
+          mountPath: /etc/nightshift/remote
+          readOnly: true
       volumes:
       - name: home
         persistentVolumeClaim:
           claimName: agent-creds-home
+      - name: remote
+        secret:
+          secretName: creds-remote
+          optional: true

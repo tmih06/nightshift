@@ -1,7 +1,6 @@
-# Credential refresher: every login-capable agent CLI plus kubectl and the
-# publish scripts. It holds the master logins on a persistent home, keeps their
-# short-lived access tokens fresh, and publishes sandbox-safe copies. Build
-# from the repository root:
+# Credential refresher: kubectl, jq, curl, and the publish scripts. It reads
+# the accounts signed in to CLIProxyAPI (k8s/cpa.yaml) and publishes sandbox
+# copies and real access tokens. Build from the repository root:
 #   docker build -f images/creds/Dockerfile -t nightshift-creds:local .
 # Build images/base first, or pass a published base with --build-arg BASE_IMAGE.
 ARG BASE_IMAGE=nightshift-base:local
@@ -9,21 +8,6 @@ FROM ${BASE_IMAGE}
 
 ARG TARGETARCH
 USER root
-
-# The agents whose logins are refreshed here. Each install verifies a checksum
-# where the vendor publishes one; the npm packages run their install scripts.
-RUN npm install --global @anthropic-ai/claude-code @openai/codex \
-    && npm cache clean --force
-
-RUN case "${TARGETARCH}" in amd64) platform=linux_amd64 ;; arm64) platform=linux_arm64 ;; *) exit 1 ;; esac \
-    && manifest=$(curl -fsSL "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/${platform}.json") \
-    && url=$(echo "${manifest}" | jq -er .url) \
-    && sha512=$(echo "${manifest}" | jq -er .sha512) \
-    && curl -fsSL "${url}" -o /tmp/agy.tar.gz \
-    && echo "${sha512}  /tmp/agy.tar.gz" | sha512sum -c - \
-    && tar -xzf /tmp/agy.tar.gz -C /usr/local/bin antigravity \
-    && mv /usr/local/bin/antigravity /usr/local/bin/agy \
-    && rm /tmp/agy.tar.gz
 
 RUN version=$(curl -fsSL https://dl.k8s.io/release/stable.txt) \
     && curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/${version}/bin/linux/${TARGETARCH}/kubectl" \
@@ -37,4 +21,4 @@ RUN chmod +x /usr/local/share/nightshift/*.sh \
 USER node
 WORKDIR /home/node
 ENTRYPOINT ["creds-publish"]
-CMD ["--watch", "1200"]
+CMD ["--cpa", "http://cpa.nightshift.svc:8317", "--watch", "300"]

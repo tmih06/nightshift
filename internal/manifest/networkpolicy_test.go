@@ -24,7 +24,7 @@ func TestNamespacePoliciesNeverSelectEveryPod(t *testing.T) {
 			t.Errorf("close k8s root: %v", err)
 		}
 	})
-	for _, file := range []string{"egress.yaml", "creds.yaml", "warmpool.yaml"} {
+	for _, file := range []string{"egress.yaml", "creds.yaml", "cpa.yaml", "warmpool.yaml"} {
 		raw, err := root.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
