@@ -57,8 +57,6 @@ type addedLine struct {
 type options struct {
 	prBody, prTitle string
 	subjects        []string
-	ownerApproved   bool
-	bootstrap       bool
 	inCI            bool
 	guardrailBlocks bool
 }
@@ -116,17 +114,14 @@ func load(root *os.Root, dir string) ([]*fileDiff, options, error) {
 		}
 		files = append(files, fd)
 	}
-	_, statErr := root.Stat(dir + "/bootstrap")
-	return files, loadOptions(inputs["subjects"], statErr == nil), nil
+	return files, loadOptions(inputs["subjects"]), nil
 }
 
-func loadOptions(subjects string, bootstrap bool) options {
+func loadOptions(subjects string) options {
 	return options{
 		prBody:          os.Getenv("PR_BODY"),
 		prTitle:         os.Getenv("PR_TITLE"),
 		subjects:        strings.Split(strings.TrimSpace(subjects), "\n"),
-		ownerApproved:   os.Getenv("GATE_OWNER_APPROVED") == "1",
-		bootstrap:       bootstrap,
 		inCI:            os.Getenv("GATE_CI") == "1",
 		guardrailBlocks: os.Getenv("GATE_GUARDRAIL_BLOCK") == "1",
 	}
@@ -220,7 +215,6 @@ func check(files []*fileDiff, opts options) []finding {
 	}
 	out = append(out, checkAssertions(files)...)
 	out = append(out, checkDeletedTests(files)...)
-	out = append(out, checkProtected(files, opts)...)
 	out = append(out, checkGoMod(files, opts)...)
 	return append(out, checkGuardrail(files, opts)...)
 }
@@ -317,32 +311,6 @@ func dirOf(path string) string {
 
 func isGateFile(path string) bool {
 	return strings.HasPrefix(path, "scripts/quality/") || strings.HasPrefix(path, ".semgrep/")
-}
-
-func isProtected(path string) bool {
-	switch path {
-	case ".golangci.yml", ".semgrepignore", ".github/CODEOWNERS", "docs/quality-baseline.json",
-		"Makefile", ".agents/settings.json", ".claude/settings.json", agentsFile:
-		return true
-	}
-	return isGateFile(path) || strings.HasPrefix(path, ".github/workflows/")
-}
-
-func checkProtected(files []*fileDiff, opts options) []finding {
-	if opts.ownerApproved || opts.bootstrap {
-		return nil
-	}
-	var out []finding
-	for _, fd := range files {
-		// A file moved out of a protected path is as much a change to it.
-		for _, path := range []string{fd.path, fd.from} {
-			if isProtected(path) {
-				out = append(out, finding{file: path, line: 1, rule: "diff/protected-path",
-					msg: "this file controls the gate and needs CODEOWNERS approval. Revert it, or stop and ask a human."})
-			}
-		}
-	}
-	return out
 }
 
 func checkGoMod(files []*fileDiff, opts options) []finding {

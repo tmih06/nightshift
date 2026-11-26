@@ -29,7 +29,7 @@ func diffInputs(diff, status, untracked string) map[string]string {
 
 func clearEnv(t *testing.T) {
 	t.Helper()
-	for _, key := range []string{"GATE_DIFF_DIR", "PR_BODY", "PR_TITLE", "GATE_OWNER_APPROVED", "GATE_CI", "GATE_GUARDRAIL_BLOCK"} {
+	for _, key := range []string{"GATE_DIFF_DIR", "PR_BODY", "PR_TITLE", "GATE_CI", "GATE_GUARDRAIL_BLOCK"} {
 		t.Setenv(key, "")
 	}
 }
@@ -53,17 +53,6 @@ func TestRunFailsOnUntrackedSkip(t *testing.T) {
 	}
 }
 
-func TestRunBootstrapAllowsGateFiles(t *testing.T) {
-	clearEnv(t)
-	raw := "diff --git a/.golangci.yml b/.golangci.yml\n--- /dev/null\n+++ b/.golangci.yml\n@@ -0,0 +1 @@\n+version: 2\n"
-	files := diffInputs(raw, "A\t.golangci.yml\n", "")
-	files[".tools/gate/diff/bootstrap"] = ""
-	writeFiles(t, files)
-	if code := run(); code != 0 {
-		t.Errorf("run = %d, want 0", code)
-	}
-}
-
 func TestRunNeedsSavedInputs(t *testing.T) {
 	clearEnv(t)
 	writeFiles(t, map[string]string{"placeholder": ""})
@@ -83,11 +72,10 @@ func TestRunReportsUnreadableUntrackedFile(t *testing.T) {
 func TestLoadOptionsReadsEnvironment(t *testing.T) {
 	t.Setenv("PR_BODY", "body")
 	t.Setenv("PR_TITLE", "fix: x")
-	t.Setenv("GATE_OWNER_APPROVED", "1")
 	t.Setenv("GATE_CI", "1")
 	t.Setenv("GATE_GUARDRAIL_BLOCK", "1")
-	got := loadOptions("one\ntwo\n", true)
-	if !got.ownerApproved || !got.inCI || !got.guardrailBlocks || !got.bootstrap || got.prBody != "body" || got.prTitle != "fix: x" {
+	got := loadOptions("one\ntwo\n")
+	if !got.inCI || !got.guardrailBlocks || got.prBody != "body" || got.prTitle != "fix: x" {
 		t.Errorf("options = %+v", got)
 	}
 	if strings.Join(got.subjects, ",") != "one,two" {

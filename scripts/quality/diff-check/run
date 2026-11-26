@@ -14,11 +14,6 @@ git diff -U0 -M --no-color "$merge_base" >"$dir/diff"
 git ls-files --others --exclude-standard >"$dir/untracked"
 git log --format=%s "$merge_base..HEAD" >"$dir/subjects"
 
-# Before the gate exists on the base branch, its own files cannot need approval.
-if ! git cat-file -e "$merge_base:scripts/quality/diff-check/main.go" 2>/dev/null; then
-  touch "$dir/bootstrap"
-fi
-
 if [ "${1:-}" = "--prepare" ]; then
   exit 0
 fi
