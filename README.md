@@ -87,6 +87,10 @@ Nightshift builds on these projects:
 - [x] Pick up a pull request in a fresh workspace with one key, and keep its
       work after the workspace is gone
 - [x] Switch between workspaces and pull requests with tabs
+- [x] Sign in coding-agent accounts, choose which one each agent uses, and see
+      how much each has been used
+- [x] Drive the same workspaces from any frontend, not only the terminal, and
+      run the services in the cluster for a whole team
 
 ### The factory
 

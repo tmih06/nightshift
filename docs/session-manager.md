@@ -2,8 +2,8 @@
 
 Nightshift uses [herdr-core](https://github.com/herdrdev/herdr-core) (`hc`)
 inside each claimed sandbox to keep a shell alive when the dashboard navigates
-away, exits, or loses its connection. The dashboard host needs `kubectl`, not
-`hc`. Ensure the published images are accessible as described in
+away, exits, or loses its connection. The host of the services (the laptop,
+or the pod, where the services run) needs `kubectl`, not `hc`. Ensure the published images are accessible as described in
 `images/agent/README.md` before applying the warm pool manifest.
 
 ## How it works
@@ -23,7 +23,7 @@ spawned inside the pod by an agent via `hc run --bg`—appear automatically in t
 window tab bar right below the `● herdr live` status line.
 
 Herdr's holder owns every shell process independently of kubectl and the
-dashboard. Each attached window keeps its own local terminal emulator that
+dashboard. Each viewer of a window keeps its own local terminal emulator that
 interprets the initial paint and subsequent output, preserving colors and other
 text styles. It continues processing output while the tab is hidden, without
 rendering the screen until the tab is visible again. Closing the dashboard
@@ -40,9 +40,9 @@ closes the `hc connect` tunnel, not the terminals inside the pod.
   - `C-b n` / `C-b l` / `C-b →` and `C-b p` / `C-b h` / `C-b ←` cycle windows
   - `C-b 1`..`9` jumps directly to window 1..9
   - `C-b x` (or `C-b &`) closes the active window
-  - `C-b F` (or `F` in navigation) opens `hc attach` fullscreen for the active
-    window (`Ctrl-\` detaches back to Nightshift and reconnects the embedded
-    viewer for a fresh paint)
+  - `C-b f` (or `F` in navigation) zooms the active window to the whole screen,
+    drawn the same way as the embedded one, so it works against a server on
+    another machine (`C-b f` again gives the screen back)
   - `C-b C-b` sends a literal `Ctrl-b` to the shell
   - `C-b q` (or `C-b d`) returns focus to sandbox navigation
 

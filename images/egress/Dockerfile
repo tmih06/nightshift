@@ -5,7 +5,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd/egress-proxy ./cmd/egress-proxy
-COPY internal/egress ./internal/egress
+COPY internal/services/egress ./internal/services/egress
 
 ARG TARGETOS=linux
 ARG TARGETARCH

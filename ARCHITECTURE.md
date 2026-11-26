@@ -2,7 +2,58 @@
 
 Nightshift combines a Kubernetes sandbox fleet with a terminal dashboard and
 GitHub views. The automated ticket-to-merge workflow is still on the roadmap.
-Nightshift runs in the `nightshift` namespace on `kind-agent-sandbox`.
+Nightshift runs in the `nightshift` namespace of any Kubernetes cluster, on
+`kind-agent-sandbox` by default.
+
+## Two programs
+
+Nightshift is **nightshift-services** and any number of frontends, with one
+contract between them. The services own everything that touches Kubernetes.
+A frontend, such as the terminal UI, draws screens and turns keys into API
+calls; it holds no kubeconfig and runs no `kubectl`. `docs/api.md` has the
+contract's rules, and `api/openapi.yaml` is the contract itself.
+
+```mermaid
+flowchart LR
+  TUI[nightshift TUI] -->|HTTP and JSON| API
+  Other[Another frontend] -->|HTTP and JSON| API
+  subgraph Services[nightshiftd]
+    API[server] --> Live[live backend]
+    Live --> Fleet[cluster]
+    Live --> Terms[session]
+    Live --> Acc[accounts]
+    Live --> Co[checkout]
+  end
+  Fleet --> K8s[(Kubernetes API)]
+  Terms -->|kubectl exec| K8s
+  Acc --> CPA[CLIProxyAPI]
+  Acc --> Proxy[egress proxy]
+```
+
+```text
+api/            the contract: openapi.yaml, v1 (types), client (Go SDK)
+cmd/nightshiftd the services as a daemon
+cmd/nightshift  the terminal UI: a client, it runs nothing else
+internal/services/{cluster,session,accounts,checkout,server,live,daemon,egress}
+internal/tui/{app,dashboard,accountsview,repoview,dialog,fleet}
+```
+
+Everything runs in the cluster, each part in its own pod: the services
+(`nightshiftd`), the egress proxy, CLIProxyAPI, the credential refresher, and
+the sandboxes. The laptop runs only the terminal. `nightshiftd` acts through a service account with `NIGHTSHIFT_CONTEXT=-` and reach
+CLIProxyAPI and the egress proxy by their Service addresses. In the cluster,
+many people on many machines use one address and nobody needs a kubeconfig. The
+manifests assume no provider, the setup script builds and loads an image on kind
+and pulls one anywhere else, and the services' permissions are pinned by
+`TestTheServicesHaveLeastPrivilege`. One server serves one cluster; a frontend
+can talk to several servers. Run one replica per cluster: what a server keeps in
+memory, the progress of running checkouts and its connections into sandboxes, is
+rebuilt from the cluster after a restart.
+
+Two things keep the halves apart. The terminal UI imports only `api/v1` and
+`api/client`, which `internal/architecture_test.go` enforces in both directions,
+and the HTTP layer imports nothing of the cluster, so the contract is the only
+thing they share.
 
 ## Sandbox fleet
 
@@ -101,8 +152,9 @@ scratch. The cluster's `standard` class is local-path, so a volume lives on
 one node's disk and pins its sandboxes to that node.
 
 Inside a claimed pod, Herdr keeps bash alive independently of the dashboard's
-connection. The dashboard reads and interacts with it through `kubectl exec`;
-see `docs/session-manager.md`. Pod deletion or restart ends the session and
+connection. The services read and interact with it through `kubectl exec`, and
+frontends through the terminal endpoints of the API; see
+`docs/session-manager.md`. Pod deletion or restart ends the session and
 its ephemeral workspace. Credentials must be supplied at runtime, or isolated
 outside the sandbox via Nightshift's optional lightweight Go egress proxy
 (`cmd/egress-proxy`, `k8s/egress.yaml`, `k8s/egress-setup.sh`): a single
@@ -111,6 +163,106 @@ default-deny host/method/path allowlists and SSRF-safe dialing, swaps opaque
 `nightshift:secret:*` env placeholders on matched hosts only, and scrubs
 reflected secrets from responses while `NetworkPolicy` blocks direct internet
 and DNS from checkout sandboxes.
+
+Interactive OAuth logins also fit the proxy model, because an OAuth access
+token is just a bearer string. Claude Code, Codex, and Antigravity (`agy`)
+log in once on a master and every sandbox then boots logged in, yet no real
+credential ever exists inside a sandbox. `k8s/creds-stage.sh` rewrites each
+login file: the access token becomes a placeholder
+(`nightshift:secret:CLAUDE_ACCESS_TOKEN`, `CODEX_ACCESS_TOKEN`, or
+`AGY_ACCESS_TOKEN`), the expiry moves far into the future so the agent never
+tries to refresh, and the refresh token is dropped (Codex insists on one, so
+it gets an inert string). `gh`'s `hosts.yml` gets the `GITHUB_TOKEN`
+placeholder. A login with no swap is never distributed. The proxy swaps each
+placeholder for the real token on that agent's hosts: `api.anthropic.com`,
+`chatgpt.com`, and `cloudcode-pa.googleapis.com` (plus Antigravity's token
+check under `www.googleapis.com/oauth2/`). The `sandbox-egress-env`
+ConfigMap sets `CLAUDE_CODE_OAUTH_TOKEN` and never `ANTHROPIC_API_KEY`,
+which Claude Code gives precedence over every OAuth path.
+
+Which agents get this treatment is data, not code: `k8s/creds-providers.json`
+lists, per agent, its login file, where the access token sits in it, how to
+swap it, the API hosts that must honor the placeholder, its warm pool, and the
+command that makes it refresh. `creds-stage.sh`, `creds-publish.sh`, and the
+pool sizing all read it, and `TestShippedPolicySwapsEveryRegisteredLogin`
+fails when an entry has no matching proxy rule. Adding an agent is one entry
+plus its proxy rule.
+
+Where the master logins come from is the one choice to make. Signing in needs a
+person with a browser, and the tokens then expire and rotate, so exactly one
+process must hold the refresh tokens:
+
+- **CLIProxyAPI (`k8s/cpa.yaml`)** is the login surface. You open its page
+  once per account (`docs/login-surface.md` explains the choice), and it keeps
+  the tokens fresh. The `creds-refresher` pod (`k8s/creds.yaml`, image
+  `images/creds`) runs `creds-publish.sh --cpa` every five minutes: it lists
+  the accounts over CLIProxyAPI's management API, rebuilds each agent's login
+  file from them (the `cpa` entries of `creds-providers.json`), and publishes
+  as below. Install both with `k8s/creds-setup.sh`. Nothing depends on a
+  laptop staying online.
+- **A laptop** also works: log in with `claude`, `codex`, and `agy`, then run
+  `creds-publish.sh --watch 1200`, which exercises each CLI to refresh it.
+  Do not run both for the same agent: each would overwrite the other's secrets.
+
+Publishing is the same either way. The placeholder copies go into the
+`agent-creds` secret that templates untar into `$HOME` at boot, the real
+access tokens into `egress-secrets`, and a warm sandbox is kept only for
+agents that have a login. The proxy binds those secrets to files on a mounted
+volume and re-reads them every 15 seconds (`internal/services/egress/reload.go`), so a
+refreshed token needs no restart; the kubelet takes up to about two minutes to
+update the volume. The refresher's service account may only edit the two
+credential secrets and the warm pool sizes
+(`TestCredsRefresherHasLeastPrivilege`), and CLIProxyAPI's network policy
+admits only the refresher.
+
+The **Accounts tab** (`internal/tui/accountsview`, over `internal/services/accounts`
+and the `/v1/accounts` endpoints) is how people drive all of this from the TUI.
+The services reach CLIProxyAPI's management API through a `kubectl port-forward`
+that they own and restart, and the egress proxy's admin port through another;
+in the cluster they use the Services' addresses instead, so on a laptop nothing
+is needed but the kubeconfig Nightshift already uses. It lists every signed-in account per agent, runs the
+sign-in (the link, then the pasted callback address), disables, removes, and
+refreshes accounts, and publishes on demand. Several accounts per agent are
+supported by choice, not by splitting traffic: the account picked with enter is
+recorded in the `nightshift-accounts` ConfigMap, `creds-publish.sh` publishes
+that one (or the first enabled one if it is gone), and only the sandboxes
+started afterwards get it. Usage comes from the proxy: it tags every request
+that carried a token with the account label published beside it
+(`LABEL_<secret>`), counts them in ten-minute windows, and serves the counts
+at `/usage` on its admin port, so a switch of account splits the history
+correctly. The counts live in the proxy's memory and start over when it
+restarts.
+
+One login can serve several clusters: `PUBLISH_CONTEXTS` lists the contexts to
+publish into (`-` is the cluster the refresher runs in), and
+`REMOTE_KUBECONFIG` points at a mounted kubeconfig for the others. Every
+cluster receives the same placeholders and tokens, so no cluster refreshes
+anything and no refresh token is ever held twice.
+
+Nothing here is specific to kind. `NIGHTSHIFT_CONTEXT` selects the kubeconfig
+context for the scripts and the TUI, the manifests pin no service address, and
+`egress-setup.sh` pulls the published proxy image on any cluster that is not
+kind (`EGRESS_IMAGE` points it at your own registry, `EGRESS_BUILD=1` builds
+and pushes one). The cluster needs a default StorageClass for the refresher's
+volume and a network plugin that enforces `NetworkPolicy`. Secrets live in
+ordinary Kubernetes Secrets, so an external secret manager that syncs into
+them (External Secrets, a CSI driver) slots in without changing the proxy.
+
+Two cluster facts shape the wiring. Sandbox pods use external DNS resolvers
+(`8.8.8.8`, `1.1.1.1`, set by the agent-sandbox controller), so cluster
+service names never resolve for them: `egress-setup.sh` reads the proxy
+Service's assigned `clusterIP` and patches it into `sandbox-egress-env`, which
+the manifest therefore leaves unset (a plain `kubectl apply` must not reset it).
+And the agent-sandbox controller generates a NetworkPolicy per template allowing
+egress to the public internet but denying all private ranges, which includes
+the proxy's ClusterIP; `sandbox-egress-proxy-access` additively re-opens the
+proxy path for sandbox pods only (network policies are union-permissive, so no
+rule of the controller's needs changing). It must not select every pod: an
+empty selector would isolate the refresher too. Note the corollary: warm pool
+pods retain direct internet access — credential safety rests on placeholders
+being worthless off the proxy path, not on network restriction. Tightening
+templates to proxy-only egress is possible through the template
+`networkPolicy` field but will break any tool the proxy rules do not cover.
 
 ## Operating the cluster
 

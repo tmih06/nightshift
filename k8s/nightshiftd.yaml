@@ -1,0 +1,315 @@
+# The Nightshift services, in the cluster: the API every frontend uses (the
+# terminal UI, a web page, a bot; see docs/api.md). Run in the cluster, many
+# people on many machines reach one address, and nobody needs a kubeconfig:
+# the pod acts through its service account, on any Kubernetes provider.
+#
+# Install with k8s/nightshiftd-setup.sh, which also creates the token secret and
+# the log permissions in the namespaces the fleet view reads. Reach it with
+#   kubectl -n nightshift port-forward svc/nightshiftd 7777:7777
+# or put your provider's ingress in front of the Service, with TLS. The Service
+# is a plain ClusterIP on purpose: Nightshift ships no load balancer of its own.
+#
+# Run one replica. What it keeps in memory (the progress of checkouts, its
+# connections into sandboxes) is rebuilt from the cluster after a restart.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nightshiftd
+  namespace: nightshift
+  labels:
+    nightshift.dev/component: services
+---
+# Read-only, cluster-wide: the fleet view lists the pods of Nightshift's
+# namespaces and the few cluster services it relies on, with their usage and
+# the events of the ones still starting. Acting is only ever in nightshift.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nightshiftd-read
+rules:
+- apiGroups: [""]
+  resources: ["pods", "events"]
+  verbs: ["get", "list"]
+- apiGroups: ["metrics.k8s.io"]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: nightshiftd-read
+subjects:
+- kind: ServiceAccount
+  name: nightshiftd
+  namespace: nightshift
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nightshiftd-read
+---
+# A pod's log, for the pods the fleet view shows. nightshiftd-setup.sh binds it
+# in each of those namespaces that exists on this cluster, not cluster-wide.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nightshiftd-logs
+rules:
+- apiGroups: [""]
+  resources: ["pods/log"]
+  verbs: ["get"]
+---
+# What the services do in nightshift: claim sandboxes, keep volumes, start
+# sandboxes and clone jobs on them, open terminals in sandboxes, and manage
+# the accounts.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: nightshiftd
+  namespace: nightshift
+rules:
+- apiGroups: ["agents.x-k8s.io"]
+  resources: ["sandboxes"]
+  verbs: ["get", "list", "create", "delete"]
+- apiGroups: ["extensions.agents.x-k8s.io"]
+  resources: ["sandboxclaims"]
+  verbs: ["get", "list", "create", "patch", "delete"]
+- apiGroups: ["extensions.agents.x-k8s.io"]
+  resources: ["sandboxwarmpools", "sandboxtemplates"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims"]
+  verbs: ["get", "list", "create", "patch", "delete"]
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["get", "list", "create", "delete"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+# Terminals and the live numbers are run inside the sandbox; the credential
+# refresher is asked to publish the same way.
+- apiGroups: [""]
+  resources: ["pods/exec"]
+  verbs: ["create"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  resourceNames: ["creds-refresher"]
+  verbs: ["get"]
+# The egress CA the sandboxes mount, and which account each agent uses.
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["create"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames: ["egress-ca", "nightshift-accounts"]
+  verbs: ["get", "patch", "update"]
+# The key to CLIProxyAPI's management API, and nothing else secret.
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["cpa-keys"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: nightshiftd
+  namespace: nightshift
+subjects:
+- kind: ServiceAccount
+  name: nightshiftd
+  namespace: nightshift
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: nightshiftd
+---
+# The egress proxy's own namespace: its address and policy are read to wire
+# sandboxes up and to show them. The real credentials in it are not.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: nightshiftd
+  namespace: nightshift-egress
+rules:
+- apiGroups: [""]
+  resources: ["configmaps", "services"]
+  verbs: ["get", "list"]
+- apiGroups: ["networking.k8s.io"]
+  resources: ["networkpolicies"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: nightshiftd
+  namespace: nightshift-egress
+subjects:
+- kind: ServiceAccount
+  name: nightshiftd
+  namespace: nightshift
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: nightshiftd
+---
+# The services read how much each account has been used from the egress proxy's
+# admin port. The proxy's own policy keeps that port from everyone; these two
+# objects, which only add, open it to nightshiftd and to nobody else.
+apiVersion: v1
+kind: Service
+metadata:
+  name: egress-admin
+  namespace: nightshift-egress
+spec:
+  selector:
+    app: egress-proxy
+  ports:
+  - name: admin
+    port: 9090
+    targetPort: admin
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-admin-from-nightshiftd
+  namespace: nightshift-egress
+spec:
+  podSelector:
+    matchLabels:
+      app: egress-proxy
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: nightshift
+      podSelector:
+        matchLabels:
+          app: nightshiftd
+    ports:
+    - protocol: TCP
+      port: 9090
+---
+# Likewise CLIProxyAPI, which only the credential refresher could reach.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cpa-from-nightshiftd
+  namespace: nightshift
+spec:
+  podSelector:
+    matchLabels:
+      app: cpa
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: nightshiftd
+    ports:
+    - protocol: TCP
+      port: 8317
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nightshiftd
+  namespace: nightshift
+  labels:
+    nightshift.dev/component: services
+spec:
+  selector:
+    app: nightshiftd
+  ports:
+  - name: api
+    port: 7777
+    targetPort: api
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nightshiftd
+  namespace: nightshift
+  labels:
+    nightshift.dev/component: services
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: nightshiftd
+  template:
+    metadata:
+      labels:
+        app: nightshiftd
+        nightshift.dev/component: services
+    spec:
+      serviceAccountName: nightshiftd
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: nightshiftd
+        image: ghcr.io/tmih06/nightshiftd:latest
+        imagePullPolicy: IfNotPresent
+        args:
+        - --listen=:7777
+        # Plain HTTP inside the cluster; TLS is the ingress's job, or the
+        # tunnel of kubectl port-forward.
+        - --plain-http
+        # Behind a Service or an ingress the Host header is whatever name it
+        # was given. The token is still required for everything.
+        - --any-host
+        - --cpa-url=http://cpa.nightshift.svc:8317
+        - --proxy-url=http://egress-admin.nightshift-egress.svc:9090
+        env:
+        # "-" is the cluster this pod runs in: kubectl uses the service
+        # account, with no kubeconfig.
+        - name: NIGHTSHIFT_CONTEXT
+          value: "-"
+        - name: HOME
+          value: /tmp
+        - name: NIGHTSHIFT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: nightshiftd-token
+              key: token
+        ports:
+        - name: api
+          containerPort: 7777
+        readinessProbe:
+          httpGet:
+            path: /v1/healthz
+            port: api
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /v1/healthz
+            port: api
+          initialDelaySeconds: 5
+          periodSeconds: 15
+        resources:
+          requests:
+            cpu: 20m
+            memory: 64Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        volumeMounts:
+        # kubectl keeps its discovery cache under $HOME.
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir: {}

@@ -1,0 +1,57 @@
+{
+  "_comment": "One entry per coding agent whose login Nightshift hands to sandboxes. file: where the agent keeps its login, relative to $HOME. access: jq path of the access token in that file. filter: jq building the sandbox copy from the login ($ph is the placeholder for secret, $far a far-future timestamp). It must construct the result from the fields it keeps, never copy the rest of the file: a login file can hold other credentials, such as Claude Code's MCP server tokens. hosts: the API hosts that must swap that secret (checked against k8s/egress.yaml). pool: the warm pool kept only while this login exists. exercise: command that makes the agent refresh an expiring token. cpa: how to rebuild this login file from a CLIProxyAPI credential (type is its provider name, build a jq program over the credential), so a CLIProxyAPI login can stand in for logging in with the CLI itself.",
+  "providers": [
+    {
+      "id": "claude-code",
+      "pool": "claude-code-pool",
+      "secret": "CLAUDE_ACCESS_TOKEN",
+      "file": ".claude/.credentials.json",
+      "access": ".claudeAiOauth.accessToken",
+      "filter": "{claudeAiOauth: (.claudeAiOauth | del(.refreshToken, .refreshTokenExpiresAt) | .accessToken = $ph | .expiresAt = 1999999999999)}",
+      "hosts": [
+        "api.anthropic.com"
+      ],
+      "exercise": "claude -p ping --model haiku",
+      "cpa": {
+        "type": "claude",
+        "build": "{claudeAiOauth: {accessToken: .access_token, refreshToken: .refresh_token, expiresAt: 1999999999999, scopes: [\"user:file_upload\",\"user:inference\",\"user:mcp_servers\",\"user:plugins\",\"user:privacy_consents:write\",\"user:profile\",\"user:sessions:claude_code\"], subscriptionType: \"pro\", rateLimitTier: \"default_claude_ai\", accountUuid: .account_uuid, organizationUuid: .organization_uuid}}"
+      }
+    },
+    {
+      "id": "codex",
+      "pool": "codex-pool",
+      "secret": "CODEX_ACCESS_TOKEN",
+      "file": ".codex/auth.json",
+      "access": ".tokens.access_token",
+      "filter": "{auth_mode: .auth_mode, OPENAI_API_KEY: null, tokens: (.tokens | .access_token = $ph | .refresh_token = \"nightshift:secret:CODEX_REFRESH_TOKEN_UNUSABLE\"), last_refresh: $far}",
+      "hosts": [
+        "chatgpt.com"
+      ],
+      "exercise": "codex exec --skip-git-repo-check ping",
+      "exercise_when_jwt_expiring": ".tokens.access_token",
+      "cpa": {
+        "type": "codex",
+        "build": "{auth_mode: \"chatgpt\", OPENAI_API_KEY: null, tokens: {id_token: .id_token, access_token: .access_token, refresh_token: .refresh_token, account_id: .account_id}, last_refresh: .last_refresh}"
+      }
+    },
+    {
+      "id": "antigravity",
+      "pool": "agy-pool",
+      "secret": "AGY_ACCESS_TOKEN",
+      "file": ".gemini/antigravity-cli/antigravity-oauth-token",
+      "access": ".token.access_token",
+      "filter": "{token: (.token | .access_token = $ph | .expiry = $far | .expires_in = 99999999 | del(.refresh_token)), auth_method: .auth_method, id_token_email: .id_token_email}",
+      "hosts": [
+        "cloudcode-pa.googleapis.com",
+        "daily-cloudcode-pa.googleapis.com",
+        "aicode.googleapis.com",
+        "www.googleapis.com"
+      ],
+      "exercise": "agy models",
+      "cpa": {
+        "type": "antigravity",
+        "build": "{token: {access_token: .access_token, token_type: \"Bearer\", refresh_token: .refresh_token, expiry: .expired, expires_in: .expires_in}, auth_method: \"consumer\", id_token_email: .email}"
+      }
+    }
+  ]
+}

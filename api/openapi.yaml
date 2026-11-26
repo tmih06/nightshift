@@ -1,0 +1,846 @@
+openapi: 3.1.0
+info:
+  title: Nightshift services API
+  version: v1
+  summary: The contract between the Nightshift services and any frontend.
+  description: |
+    The services (`nightshiftd`) own everything that touches the cluster. A
+    frontend, whether the terminal UI, a web page, a bot, or a script, uses
+    only this API. See `docs/api.md` for the reasoning and the rules that
+    keep v1 stable.
+
+    Conventions:
+
+    * Every endpoint except `/v1/healthz` needs `Authorization: Bearer <token>`.
+    * Errors are `application/problem+json` (RFC 9457) with a stable `code`.
+    * Times are RFC 3339 in UTC. Enumerations are lowercase strings; treat a
+      value you do not know as "other".
+    * Fields are only ever added in v1. Ignore fields you do not know.
+    * No response carries a credential.
+    * Streams are server-sent events (`text/event-stream`), one JSON object
+      per `data:` line.
+servers:
+  - url: http://127.0.0.1:7777
+    description: The default address of a local nightshiftd.
+security:
+  - bearer: []
+tags:
+  - name: meta
+  - name: fleet
+  - name: claims
+  - name: checkouts
+  - name: terminals
+  - name: accounts
+paths:
+  /v1/healthz:
+    get:
+      tags: [meta]
+      operationId: getHealth
+      summary: Liveness. Needs no token.
+      security: []
+      responses:
+        "200":
+          description: The server is up.
+          content:
+            text/plain:
+              schema: {type: string, examples: [ok]}
+  /v1:
+    get:
+      tags: [meta]
+      operationId: getInfo
+      summary: Who is answering, and what it can do.
+      responses:
+        "200":
+          description: The server's description.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Info"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/openapi.yaml:
+    get:
+      tags: [meta]
+      operationId: getSpec
+      summary: This document, as the running server implements it.
+      responses:
+        "200":
+          description: The OpenAPI document.
+          content:
+            application/yaml:
+              schema: {type: string}
+  /v1/fleet:
+    get:
+      tags: [fleet]
+      operationId: getFleet
+      summary: The sandbox fleet now.
+      parameters:
+        - {$ref: "#/components/parameters/Include"}
+      responses:
+        "200":
+          description: Pods and pools.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Fleet"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/fleet/watch:
+    get:
+      tags: [fleet]
+      operationId: watchFleet
+      summary: The fleet, again each time it changes.
+      description: |
+        Needs the `fleet.watch` capability. The first event arrives at once.
+        A `fleet` event carries a Fleet; an `error` event carries a Problem
+        and the stream then ends.
+      parameters:
+        - {$ref: "#/components/parameters/Include"}
+      responses:
+        "200":
+          description: A stream of `fleet` events.
+          content:
+            text/event-stream:
+              schema: {$ref: "#/components/schemas/Fleet"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/pods/{namespace}/{name}/logs:
+    get:
+      tags: [fleet]
+      operationId: getPodLogs
+      summary: A pod's recent log lines.
+      parameters:
+        - {name: namespace, in: path, required: true, schema: {type: string}}
+        - {name: name, in: path, required: true, schema: {type: string}}
+        - name: tail
+          in: query
+          description: How many lines, newest last. Default 200, at most 5000.
+          schema: {type: integer, minimum: 1, maximum: 5000}
+      responses:
+        "200":
+          description: The lines.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Logs"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/claims:
+    post:
+      tags: [claims]
+      operationId: createClaim
+      summary: Claim a sandbox from a warm pool.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ClaimRequest"}
+      responses:
+        "202":
+          description: The claim exists; it may not have a sandbox yet.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Claim"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/claims/{name}:
+    parameters:
+      - {name: name, in: path, required: true, schema: {type: string}}
+    get:
+      tags: [claims]
+      operationId: getClaim
+      summary: A claim, optionally waiting until it has a sandbox.
+      parameters:
+        - name: wait
+          in: query
+          description: Seconds to wait for a sandbox, at most 120. Default 0.
+          schema: {type: integer, minimum: 0, maximum: 120}
+      responses:
+        "200":
+          description: The claim. Its sandbox is empty if the wait ran out.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Claim"}
+        default: {$ref: "#/components/responses/Problem"}
+    delete:
+      tags: [claims]
+      operationId: deleteClaim
+      summary: Release a claim. Its sandbox and pod are destroyed.
+      responses:
+        "204": {description: Released.}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/checkouts:
+    post:
+      tags: [checkouts]
+      operationId: createCheckout
+      summary: Put a pull request, issue, or branch on its own volume and start a sandbox on it.
+      description: |
+        The pipeline runs in the server, so it carries on if the frontend goes
+        away. Follow it with `/v1/checkouts/{id}/events`. Asking again for a
+        target that is already being checked out returns that checkout.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CheckoutRequest"}
+      responses:
+        "202":
+          description: The pipeline has started.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Checkout"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/checkouts/{id}:
+    get:
+      tags: [checkouts]
+      operationId: getCheckout
+      summary: Where a checkout stands.
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      responses:
+        "200":
+          description: The checkout.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Checkout"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/checkouts/{id}/events:
+    get:
+      tags: [checkouts]
+      operationId: watchCheckout
+      summary: A checkout's progress, step by step.
+      description: |
+        Events of type `checkout`. A client that joins late first gets the last
+        event. The stream ends after an event with `done` or `error` set.
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      responses:
+        "200":
+          description: A stream of `checkout` events.
+          content:
+            text/event-stream:
+              schema: {$ref: "#/components/schemas/CheckoutEvent"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/volumes:
+    get:
+      tags: [checkouts]
+      operationId: listVolumes
+      summary: The volumes that keep checked-out work.
+      responses:
+        "200":
+          description: The volumes.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Volumes"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/volumes/{name}:
+    delete:
+      tags: [checkouts]
+      operationId: deleteVolume
+      summary: Delete a volume and the clone on it.
+      description: Kubernetes holds the deletion until no pod mounts it.
+      parameters:
+        - {name: name, in: path, required: true, schema: {type: string}}
+      responses:
+        "204": {description: Deleted, or on its way.}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/sandboxes/{name}:
+    delete:
+      tags: [checkouts]
+      operationId: deleteSandbox
+      summary: End a sandbox that a checkout started.
+      description: |
+        Only sandboxes with a volume. A claimed sandbox goes with its claim
+        (`DELETE /v1/claims/{name}`).
+      parameters:
+        - {name: name, in: path, required: true, schema: {type: string}}
+        - name: deleteVolume
+          in: query
+          description: Delete the volume too. The default keeps it.
+          schema: {type: boolean, default: false}
+      responses:
+        "204": {description: Ended.}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/sandboxes/{name}/terminals:
+    parameters:
+      - {name: name, in: path, required: true, schema: {type: string}}
+    get:
+      tags: [terminals]
+      operationId: listTerminals
+      summary: The live terminals in a claimed sandbox.
+      responses:
+        "200":
+          description: The terminals, oldest first.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Terminals"}
+        default: {$ref: "#/components/responses/Problem"}
+    post:
+      tags: [terminals]
+      operationId: createTerminal
+      summary: Open a terminal. The first one starts the sandbox's session.
+      requestBody:
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/TerminalRequest"}
+      responses:
+        "201":
+          description: The new terminal.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Terminal"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/sandboxes/{name}/terminals/{address}:
+    delete:
+      tags: [terminals]
+      operationId: deleteTerminal
+      summary: Stop a terminal.
+      parameters:
+        - {name: name, in: path, required: true, schema: {type: string}}
+        - {name: address, in: path, required: true, schema: {type: string}}
+      responses:
+        "204": {description: Stopped.}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/sandboxes/{name}/terminals/{address}/screen:
+    get:
+      tags: [terminals]
+      operationId: getScreen
+      summary: What a terminal shows, waiting for it to change.
+      description: |
+        Long poll. Returns at once if `resize` is set or the screen changed since
+        this client last looked, otherwise after `wait` milliseconds with
+        `changed: false`.
+      parameters:
+        - {name: name, in: path, required: true, schema: {type: string}}
+        - {name: address, in: path, required: true, schema: {type: string}}
+        - {name: cols, in: query, required: true, schema: {type: integer, minimum: 1, maximum: 1000}}
+        - {name: rows, in: query, required: true, schema: {type: integer, minimum: 1, maximum: 1000}}
+        - name: resize
+          in: query
+          description: The viewer's size changed; repaint everything.
+          schema: {type: boolean, default: false}
+        - name: viewer
+          in: query
+          description: |
+            An id the client picks and keeps. Each viewer has its own view of the
+            terminal, so two frontends can watch one terminal, each at its own
+            size, without taking each other's changes. A viewer idle for two
+            minutes is dropped.
+          schema: {type: string, maxLength: 64, pattern: "^[A-Za-z0-9_.-]+$"}
+        - name: wait
+          in: query
+          description: Milliseconds to wait for a change, at most 30000.
+          schema: {type: integer, minimum: 0, maximum: 30000, default: 0}
+      responses:
+        "200":
+          description: The screen.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Screen"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/sandboxes/{name}/terminals/{address}/input:
+    post:
+      tags: [terminals]
+      operationId: sendInput
+      summary: Press keys in a terminal, in order.
+      parameters:
+        - {name: name, in: path, required: true, schema: {type: string}}
+        - {name: address, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/Input"}
+      responses:
+        "204": {description: Delivered.}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/accounts:
+    get:
+      tags: [accounts]
+      operationId: listAccounts
+      summary: Signed-in accounts, which one each agent uses, and their usage.
+      description: Needs the `accounts` capability.
+      responses:
+        "200":
+          description: The accounts.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Accounts"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/accounts/logins:
+    post:
+      tags: [accounts]
+      operationId: startLogin
+      summary: Begin signing an account in.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/LoginRequest"}
+      responses:
+        "201":
+          description: Open the URL in a browser and approve.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Login"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/accounts/logins/{id}/complete:
+    post:
+      tags: [accounts]
+      operationId: completeLogin
+      summary: Finish a sign-in with the address the browser ended on.
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/LoginCompletion"}
+      responses:
+        "204": {description: The account is saved.}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/accounts/logins/{id}:
+    delete:
+      tags: [accounts]
+      operationId: cancelLogin
+      summary: Abandon a sign-in that was started.
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+        - {name: provider, in: query, required: true, schema: {type: string}}
+      responses:
+        "204": {description: Abandoned.}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/accounts/publish:
+    post:
+      tags: [accounts]
+      operationId: publishAccounts
+      summary: Put the chosen accounts into the cluster now.
+      description: Otherwise this happens at the publisher's next pass.
+      responses:
+        "200":
+          description: What the publisher reported.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PublishReport"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/accounts/active/{provider}:
+    put:
+      tags: [accounts]
+      operationId: setActiveAccount
+      summary: Choose the account a provider's new sandboxes get.
+      description: |
+        Running sandboxes keep the login they booted with. Publishing then
+        makes the choice take effect (`POST /v1/accounts/publish`).
+      parameters:
+        - {name: provider, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ActiveAccount"}
+      responses:
+        "204": {description: Chosen.}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/accounts/{name}:
+    parameters:
+      - {name: name, in: path, required: true, schema: {type: string}}
+    patch:
+      tags: [accounts]
+      operationId: patchAccount
+      summary: Disable or enable an account.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AccountPatch"}
+      responses:
+        "204": {description: Changed.}
+        default: {$ref: "#/components/responses/Problem"}
+    delete:
+      tags: [accounts]
+      operationId: deleteAccount
+      summary: Remove an account and its tokens.
+      responses:
+        "204": {description: Removed.}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/accounts/{name}/refresh:
+    post:
+      tags: [accounts]
+      operationId: refreshAccount
+      summary: Renew an account's access token now.
+      parameters:
+        - {name: name, in: path, required: true, schema: {type: string}}
+      responses:
+        "204": {description: Renewed.}
+        default: {$ref: "#/components/responses/Problem"}
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+  parameters:
+    Include:
+      name: include
+      in: query
+      description: |
+        Extra data to gather, comma separated. `configs` adds manifests,
+        `live` reads CPU and memory from each pod's own cgroup, and
+        `versions` reads the coding agent's version in each pod, and
+        `terminals` lists the live terminals of each claimed sandbox.
+      schema:
+        type: array
+        items: {type: string, enum: [configs, live, versions, terminals]}
+      style: form
+      explode: false
+  responses:
+    Problem:
+      description: An error. `code` is stable; `detail` is for people.
+      content:
+        application/problem+json:
+          schema: {$ref: "#/components/schemas/Problem"}
+  schemas:
+    Problem:
+      type: object
+      required: [title, status, code]
+      properties:
+        type: {type: string}
+        title: {type: string}
+        status: {type: integer}
+        detail: {type: string}
+        code:
+          type: string
+          description: Treat an unknown code by its HTTP status.
+          enum: [invalid, unauthorized, not_found, conflict, unavailable, timeout, internal]
+    Info:
+      type: object
+      required: [apiVersion, version, cluster, capabilities]
+      properties:
+        apiVersion: {type: string, examples: [v1]}
+        version: {type: string}
+        cluster:
+          type: object
+          required: [context, namespace]
+          properties:
+            context: {type: string}
+            namespace: {type: string}
+        capabilities:
+          type: array
+          items: {type: string, enum: [fleet.watch, accounts, checkouts, terminals]}
+    Fleet:
+      type: object
+      required: [observedAt, pods, pools, egress]
+      properties:
+        observedAt: {type: string, format: date-time}
+        pods:
+          type: array
+          items: {$ref: "#/components/schemas/Pod"}
+        pools:
+          type: array
+          items: {$ref: "#/components/schemas/Pool"}
+        egress: {type: boolean, description: Whether the egress proxy is installed.}
+    Pod:
+      type: object
+      required: [name, namespace, role, owner, phase, restarts, createdAt, resources]
+      properties:
+        name: {type: string}
+        namespace: {type: string}
+        role: {type: string, enum: [warm, claimed, egress, system, job, other]}
+        owner:
+          type: object
+          properties:
+            kind: {type: string}
+            name: {type: string}
+        volume: {type: string}
+        target: {$ref: "#/components/schemas/Target"}
+        template: {type: string}
+        node: {type: string}
+        phase: {type: string}
+        ip: {type: string}
+        ready: {type: string}
+        restarts: {type: integer}
+        waiting: {type: string}
+        ports:
+          type: array
+          items: {type: string}
+        container: {type: string}
+        createdAt: {type: string, format: date-time}
+        image: {type: string}
+        command: {type: string}
+        restartPolicy: {type: string}
+        agentVersion: {type: string}
+        resources:
+          type: object
+          required: [cpuRequestMillis, cpuLimitMillis, memRequestMiB, memLimitMiB]
+          properties:
+            cpuRequestMillis: {type: integer, format: int64}
+            cpuLimitMillis: {type: integer, format: int64}
+            memRequestMiB: {type: integer, format: int64}
+            memLimitMiB: {type: integer, format: int64}
+        usage:
+          type: object
+          required: [cpuMillis, memMiB, live]
+          properties:
+            cpuMillis: {type: integer, format: int64}
+            memMiB: {type: integer, format: int64}
+            live: {type: boolean}
+        startup:
+          type: object
+          required: [stage, since]
+          properties:
+            stage: {type: string, enum: [scheduling, pulling, starting, readying]}
+            since: {type: string, format: date-time}
+            error: {type: string}
+            detail: {type: string}
+            pullFailures: {type: integer}
+        configs:
+          type: object
+          properties:
+            sandbox: {type: string}
+            pod: {type: string}
+            extra: {type: string}
+        terminals:
+          type: array
+          items: {$ref: "#/components/schemas/Terminal"}
+    Pool:
+      type: object
+      required: [name, template, ready, desired, harness]
+      properties:
+        name: {type: string}
+        template: {type: string}
+        ready: {type: integer}
+        desired: {type: integer}
+        updateStrategy: {type: string}
+        harness: {$ref: "#/components/schemas/Harness"}
+        configs:
+          type: object
+          properties:
+            pool: {type: string}
+            template: {type: string}
+    Harness:
+      type: object
+      description: A coding agent installed in a pool's image.
+      required: [name, label, models]
+      properties:
+        name: {type: string, examples: [claude-code]}
+        label: {type: string, examples: [Claude Code]}
+        command: {type: string, description: The program that starts it; empty for a bare shell.}
+        models:
+          type: array
+          items: {$ref: "#/components/schemas/HarnessModel"}
+    HarnessModel:
+      type: object
+      required: [id, label]
+      properties:
+        id: {type: string, description: The value for --model; empty means the harness default.}
+        label: {type: string}
+        note: {type: string}
+    Logs:
+      type: object
+      required: [pod, lines]
+      properties:
+        pod: {type: string}
+        lines:
+          type: array
+          items: {type: string}
+    ClaimRequest:
+      type: object
+      required: [pool]
+      properties:
+        pool: {type: string, examples: [claude-code-pool]}
+    Claim:
+      type: object
+      required: [name, pool]
+      properties:
+        name: {type: string}
+        pool: {type: string}
+        sandbox: {type: string, description: The adopted pod; absent until it has one.}
+    Target:
+      type: object
+      required: [kind, repo]
+      properties:
+        kind: {type: string, enum: [pull_request, issue, branch]}
+        repo: {type: string, examples: [owner/name]}
+        number: {type: integer}
+        branch: {type: string}
+    CheckoutRequest:
+      type: object
+      required: [target, pool]
+      properties:
+        target: {$ref: "#/components/schemas/Target"}
+        pool: {type: string}
+        harness: {type: string, examples: [claude]}
+        model: {type: string}
+    Checkout:
+      type: object
+      required: [id, target, pool, volume, state, startedAt]
+      properties:
+        id: {type: string}
+        target: {$ref: "#/components/schemas/Target"}
+        pool: {type: string}
+        volume: {type: string}
+        state: {type: string, enum: [running, done, failed]}
+        sandbox: {type: string}
+        startedAt: {type: string, format: date-time}
+        last: {$ref: "#/components/schemas/CheckoutEvent"}
+    CheckoutEvent:
+      type: object
+      required: [step, at]
+      properties:
+        step: {type: string, enum: [volume, clone, sandbox, shell]}
+        detail: {type: string}
+        finished: {type: boolean}
+        sandbox: {type: string}
+        done: {type: boolean}
+        error: {type: string}
+        at: {type: string, format: date-time}
+    Volume:
+      type: object
+      required: [name, target, cloned, createdAt]
+      properties:
+        name: {type: string}
+        target: {$ref: "#/components/schemas/Target"}
+        cloned: {type: boolean}
+        sandbox: {type: string}
+        createdAt: {type: string, format: date-time}
+    Volumes:
+      type: object
+      required: [volumes]
+      properties:
+        volumes:
+          type: array
+          items: {$ref: "#/components/schemas/Volume"}
+    Terminal:
+      type: object
+      required: [address, label, createdAt]
+      properties:
+        address: {type: string, examples: [t1]}
+        name: {type: string}
+        command: {type: string}
+        title: {type: string}
+        label: {type: string, description: The short name to show on a tab.}
+        status: {type: string}
+        cwd: {type: string}
+        createdAt: {type: string, format: date-time}
+    Terminals:
+      type: object
+      required: [terminals]
+      properties:
+        terminals:
+          type: array
+          items: {$ref: "#/components/schemas/Terminal"}
+    TerminalRequest:
+      type: object
+      properties:
+        name: {type: string}
+        from: {type: string, description: Address of a terminal whose directory to start in.}
+        cwd: {type: string}
+    Key:
+      type: object
+      description: Typed text, or a named key such as Enter, Tab, Escape, Up, or C-c.
+      properties:
+        text: {type: string}
+        name: {type: string}
+    Input:
+      type: object
+      required: [keys]
+      properties:
+        keys:
+          type: array
+          items: {$ref: "#/components/schemas/Key"}
+    Screen:
+      type: object
+      required: [changed, cols, rows]
+      properties:
+        changed: {type: boolean}
+        cols: {type: integer}
+        rows: {type: integer}
+        lines:
+          type: array
+          items: {type: string, description: One row, with ANSI SGR styling.}
+    Provider:
+      type: object
+      required: [id, name]
+      properties:
+        id: {type: string, examples: [claude]}
+        name: {type: string, examples: [Claude Code]}
+    Accounts:
+      type: object
+      required: [observedAt, providers, accounts]
+      properties:
+        observedAt: {type: string, format: date-time}
+        providers:
+          type: array
+          items: {$ref: "#/components/schemas/Provider"}
+        accounts:
+          type: array
+          items: {$ref: "#/components/schemas/Account"}
+        published:
+          type: object
+          additionalProperties: {$ref: "#/components/schemas/Published"}
+        publishedAt: {type: string, format: date-time}
+        usageError: {type: string}
+    Account:
+      type: object
+      description: One signed-in login. It carries no token.
+      required: [name, provider, state, disabled, active, refreshOk, refreshFailed]
+      properties:
+        name: {type: string}
+        provider: {type: string}
+        email: {type: string}
+        state: {type: string, enum: [ok, expiring, failing, sign_in, disabled]}
+        disabled: {type: boolean}
+        active: {type: boolean}
+        expiresAt: {type: string, format: date-time}
+        lastRefreshAt: {type: string, format: date-time}
+        nextRefreshAt: {type: string, format: date-time}
+        refreshOk: {type: integer}
+        refreshFailed: {type: integer}
+        refreshError: {type: string}
+        statusNote: {type: string}
+        quotaBlocked: {type: boolean}
+        cooldowns: {type: integer}
+        usage: {$ref: "#/components/schemas/AccountUsage"}
+    AccountUsage:
+      type: object
+      required: [requests, ok, clientError, rateLimited, serverError]
+      properties:
+        requests: {type: integer}
+        ok: {type: integer}
+        clientError: {type: integer}
+        rateLimited: {type: integer}
+        serverError: {type: integer}
+        lastAt: {type: string, format: date-time}
+        recent:
+          type: array
+          items: {type: integer}
+    Published:
+      type: object
+      required: [account]
+      properties:
+        account: {type: string}
+        label: {type: string}
+        expiresAt: {type: string, format: date-time}
+    LoginRequest:
+      type: object
+      required: [provider]
+      properties:
+        provider: {type: string}
+    Login:
+      type: object
+      required: [id, provider, url]
+      properties:
+        id: {type: string}
+        provider: {type: string}
+        url: {type: string, format: uri}
+    LoginCompletion:
+      type: object
+      required: [provider, redirectUrl]
+      properties:
+        provider: {type: string}
+        redirectUrl: {type: string}
+    AccountPatch:
+      type: object
+      properties:
+        disabled: {type: boolean}
+    ActiveAccount:
+      type: object
+      required: [account]
+      properties:
+        account: {type: string}
+    PublishReport:
+      type: object
+      required: [report]
+      properties:
+        report: {type: string}

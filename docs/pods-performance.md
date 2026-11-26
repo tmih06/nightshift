@@ -12,7 +12,7 @@ These measurements cover the UI thread, not Kubernetes/network latency or
 terminal transport latency.
 
 ```sh
-go test ./internal/dashboard -run '^$' -bench BenchmarkPods -benchmem -count=6
+go test ./internal/tui/dashboard -run '^$' -bench BenchmarkPods -benchmem -count=6
 ```
 
 | Workload | Before | After | Time reduction |

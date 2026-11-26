@@ -53,11 +53,11 @@ rules:
     severity: ERROR
     message: >-
       Do not shell out to kubectl here. Add or reuse a helper in
-      internal/cluster, which owns cluster access.
+      internal/services/cluster, which owns cluster access.
     paths:
       exclude:
-        - "**/internal/cluster/**"
-        - "**/internal/session/**"
+        - "**/internal/services/cluster/**"
+        - "**/internal/services/session/**"
     pattern-either:
       - pattern: exec.Command("kubectl", ...)
       - pattern: exec.CommandContext($CTX, "kubectl", ...)

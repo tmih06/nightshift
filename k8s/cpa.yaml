@@ -1,0 +1,172 @@
+# CLIProxyAPI (github.com/router-for-me/CLIProxyAPI, MIT) as Nightshift's
+# login surface. Open its management page, sign each account in once (Claude,
+# Codex, Antigravity), and it stores the tokens and keeps them fresh. The
+# creds-refresher reads them over the management API and publishes the
+# sandbox copies; nothing here ever serves model traffic.
+#
+# Reach the page with:  kubectl -n nightshift port-forward svc/cpa 8317:8317
+# then open http://127.0.0.1:8317/management.html and sign in with the key
+# from:  kubectl -n nightshift get secret cpa-keys \
+#          -o jsonpath='{.data.management}' | base64 -d
+#
+# One replica on a ReadWriteOnce volume: refresh tokens rotate, so exactly one
+# process may hold them. Secrets (cpa-keys) are made by k8s/creds-setup.sh.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cpa-config
+  namespace: nightshift
+  labels:
+    nightshift.dev/component: cpa
+data:
+  # The init container fills in __CLIENT_KEY__ from the cpa-keys secret. The
+  # management key arrives as MANAGEMENT_PASSWORD and never touches a file.
+  config.yaml.tmpl: |
+    config-version: 8
+    server:
+      host: ""
+      port: 8317
+    management:
+      allow-remote: true
+    oauth:
+      auth-dir: /data/auths
+    access:
+      api-keys:
+        - "__CLIENT_KEY__"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cpa-auth
+  namespace: nightshift
+  labels:
+    nightshift.dev/component: cpa
+spec:
+  # The cluster's default StorageClass; set storageClassName for another.
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 128Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cpa
+  namespace: nightshift
+  labels:
+    nightshift.dev/component: cpa
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: cpa
+  template:
+    metadata:
+      labels:
+        app: cpa
+        nightshift.dev/component: cpa
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+      initContainers:
+      - name: config
+        image: eceasy/cli-proxy-api:latest
+        command:
+        - sh
+        - -c
+        - |
+          mkdir -p /data/auths
+          sed "s|__CLIENT_KEY__|$CLIENT_KEY|" /tmpl/config.yaml.tmpl \
+            > /data/config.yaml
+        env:
+        - name: CLIENT_KEY
+          valueFrom:
+            secretKeyRef:
+              name: cpa-keys
+              key: client
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: tmpl
+          mountPath: /tmpl
+      containers:
+      - name: cpa
+        image: eceasy/cli-proxy-api:latest
+        imagePullPolicy: IfNotPresent
+        command: ["./CLIProxyAPI", "-config", "/data/config.yaml"]
+        env:
+        - name: MANAGEMENT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: cpa-keys
+              key: management
+        - name: WRITABLE_PATH
+          value: /data
+        ports:
+        - name: http
+          containerPort: 8317
+        readinessProbe:
+          tcpSocket:
+            port: http
+          periodSeconds: 5
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        volumeMounts:
+        - name: data
+          mountPath: /data
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: cpa-auth
+      - name: tmpl
+        configMap:
+          name: cpa-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cpa
+  namespace: nightshift
+  labels:
+    nightshift.dev/component: cpa
+spec:
+  selector:
+    app: cpa
+  ports:
+  - name: http
+    port: 8317
+    targetPort: http
+---
+# Only the refresher may call CLIProxyAPI inside the cluster. A sandbox cannot
+# reach it at all (its egress policy denies private ranges), and kubectl
+# port-forward, which people use for the login page, is not a network flow.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cpa-ingress
+  namespace: nightshift
+spec:
+  podSelector:
+    matchLabels:
+      app: cpa
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: creds-refresher
+    ports:
+    - protocol: TCP
+      port: 8317

@@ -121,8 +121,6 @@ Each violation was committed on a throwaway branch, since deleted.
 | Skipped test | `diff/no-skip` | Yes |
 | Removed assertion | `diff/assertion-removed` | Yes |
 | Deleted test file | `diff/test-deleted` | Yes |
-| Loosened lint config | `diff/protected-path` | Yes |
-| Raised debt baseline | `diff/protected-path` | Yes |
 | Floating goroutine | `slop-floating-goroutine` | CI only |
 | Duplicated block | jscpd ratchet | CI only |
 
@@ -136,8 +134,9 @@ each moved check was rerun on its own except the vendored race tests.
   review those.
 - Local runs no longer run tests, so an agent can finish with failing tests until
   CI reports them.
-- A pull request runs its own copy of the workflow and gate scripts, so only
-  required code owner review stops a PR from rewriting them.
+- Nothing in the gate stops a change from editing the gate's own config, scripts,
+  or debt baseline. The `diff/protected-path` rule and its owner-approval step were
+  removed, so only human review of those files stands in for them.
 - Function-level limits apply when the signature line changes. Growing an existing
   long function is not flagged by `funlen`, `cyclop`, or `gocognit`.
 - `AGENTS.md` learned rules marked by tests only protect the behavior those tests
@@ -145,12 +144,8 @@ each moved check was rerun on its own except the vendored race tests.
 
 ## Open questions
 
-1. **How should gate changes get approved?** `tmih06` is the only collaborator and
-   GitHub blocks approving your own PR, so any PR touching protected files will fail
-   `diff/protected-path`. Running agents under a separate bot account would let
-   `tmih06` approve them. Adding a second reviewer also works.
-2. **Should branch protection go on now?** Requiring review with no admin bypass
-   would block every merge until question 1 is settled. Requiring only the
-   `Quality gate` check is safe to enable today.
-3. **When should the fix-guardrail check block?** It warns for now. Set
+1. **Should branch protection go on now?** Requiring only the
+   `Quality gate` check is safe to enable today. Requiring review as well
+   would need a second collaborator, since GitHub blocks approving your own PR.
+2. **When should the fix-guardrail check block?** It warns for now. Set
    `GATE_GUARDRAIL_BLOCK=1` in the workflow to enforce it.

@@ -1,0 +1,29 @@
+# Optional: reach nightshiftd from other machines, over TLS. The setup script
+# applies this when NIGHTSHIFTD_HOST is set, with the host, the TLS secret and
+# the ingress class filled in. The token is still required for every call.
+# The fleet watch and checkout events are long-lived streams, so give the
+# controller a read timeout of at least a few minutes.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nightshiftd
+  namespace: nightshift
+  labels:
+    nightshift.dev/component: services
+spec:
+  # ingressClassName: nginx
+  tls:
+  - hosts:
+    - nightshiftd.example.com
+    secretName: nightshiftd-tls
+  rules:
+  - host: nightshiftd.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: nightshiftd
+            port:
+              name: api
