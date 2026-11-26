@@ -33,6 +33,25 @@ func TestChosenPrefersTheActiveEnabledAccount(t *testing.T) {
 	}
 }
 
+func TestChainOrdersConfiguredEnabledAccountsAndAppendsRest(t *testing.T) {
+	accounts := []Account{
+		{Name: "claude-c.json", Provider: "claude"},
+		{Name: "claude-a.json", Provider: "claude"},
+		{Name: "claude-b.json", Provider: "claude"},
+		{Name: "claude-off.json", Provider: "claude", Disabled: true},
+	}
+	got := Chain(accounts, "claude", []string{"claude-c.json", "claude-off.json", "gone.json", "claude-c.json"}, "")
+	want := []string{"claude-c.json", "claude-a.json", "claude-b.json"}
+	if len(got) != len(want) {
+		t.Fatalf("Chain = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("Chain[%d] = %q, want %q (all=%v)", i, got[i], want[i], got)
+		}
+	}
+}
+
 func TestAccountStateIsTheWorstProblem(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	later := now.Add(time.Hour)

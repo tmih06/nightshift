@@ -3,18 +3,25 @@ package manifest
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 )
 
 // runCPAPublish runs creds-publish.sh --cpa against the fake CLIProxyAPI with
-// the nightshift-accounts ConfigMap holding active, and returns every kubectl
-// call it made.
+// the nightshift-accounts ConfigMap holding active and optional chains, and
+// returns every kubectl call it made.
 func runCPAPublish(t *testing.T, active string) string {
+	t.Helper()
+	return runCPAPublishWithChains(t, active, "")
+}
+
+func runCPAPublishWithChains(t *testing.T, active, chains string) string {
 	t.Helper()
 	srv := httptest.NewServer(&fakeCPA{})
 	defer srv.Close()
@@ -23,6 +30,7 @@ func runCPAPublish(t *testing.T, active string) string {
 	stub := `#!/bin/sh
 echo "$*" >> "$LOGS/calls"
 case "$*" in
+  *"get configmap nightshift-accounts"*data.chains*) printf '%s' "$CHAINS" ;;
   *"get configmap nightshift-accounts"*jsonpath*) printf '%s' "$ACTIVE" ;;
   *"get sandboxwarmpool"*) printf 'claude-code-pool\n' ;;
   *"get secret egress-secrets"*|*"get configmap nightshift-accounts"*) exit 0 ;;
@@ -39,7 +47,7 @@ exit 0
 	cmd.Env = append(os.Environ(),
 		"BIN="+binDir, "PATH="+binDir+":"+os.Getenv("PATH"), "HOME="+homeDir, "LOGS="+logDir,
 		"CPA_URL="+srv.URL, "CPA_MANAGEMENT_KEY=test-management-key",
-		"NIGHTSHIFT_CONTEXT=test", "ACTIVE="+active,
+		"NIGHTSHIFT_CONTEXT=test", "ACTIVE="+active, "CHAINS="+chains,
 	)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("creds-publish.sh --cpa: %v\n%s", err, out)
@@ -78,5 +86,46 @@ func TestCredsPublishFallsBackWhenTheChosenAccountIsGone(t *testing.T) {
 	calls := runCPAPublish(t, `{"claude":"claude-deleted@example.com.json"}`)
 	if !strings.Contains(calls, b64("sk-ant-oat-CPA-claude")) {
 		t.Errorf("with the chosen account gone, the first enabled one must be used:\n%s", calls)
+	}
+}
+
+func TestCredsPublishPublishesOrderedFallbackPoolAndCompanions(t *testing.T) {
+	calls := runCPAPublishWithChains(t, "", `{"claude":["claude-z@example.com.json","claude-a@example.com.json"]}`)
+
+	extractPool := func(key string) []struct {
+		Name      string            `json:"name"`
+		Label     string            `json:"label"`
+		Token     string            `json:"token"`
+		Companion map[string]string `json:"companion"`
+	} {
+		t.Helper()
+		re := regexp.MustCompile(`"` + key + `":"([^"]+)"`)
+		m := re.FindStringSubmatch(calls)
+		if len(m) != 2 {
+			t.Fatalf("%s not found in calls:\n%s", key, calls)
+		}
+		raw, err := base64.StdEncoding.DecodeString(m[1])
+		if err != nil {
+			t.Fatalf("decode %s: %v", key, err)
+		}
+		var out []struct {
+			Name      string            `json:"name"`
+			Label     string            `json:"label"`
+			Token     string            `json:"token"`
+			Companion map[string]string `json:"companion"`
+		}
+		if err := json.Unmarshal(raw, &out); err != nil {
+			t.Fatalf("unmarshal %s (%s): %v", key, raw, err)
+		}
+		return out
+	}
+
+	claude := extractPool("POOL_CLAUDE_ACCESS_TOKEN")
+	if len(claude) != 2 || claude[0].Name != "claude-z@example.com.json" || claude[1].Name != "claude-a@example.com.json" {
+		t.Errorf("claude pool = %+v, want [claude-z, claude-a]", claude)
+	}
+	codex := extractPool("POOL_CODEX_ACCESS_TOKEN")
+	if len(codex) != 1 || codex[0].Companion["CODEX_ACCOUNT_ID"] != "acct" {
+		t.Errorf("codex pool = %+v, want companion CODEX_ACCOUNT_ID=acct", codex)
 	}
 }

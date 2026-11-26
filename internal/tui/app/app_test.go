@@ -79,7 +79,9 @@ func (*fakeAccounts) SetDisabled(context.Context, string, bool) error       { re
 func (*fakeAccounts) RemoveAccount(context.Context, string) error           { return nil }
 func (*fakeAccounts) RefreshAccount(context.Context, string) error          { return nil }
 func (*fakeAccounts) SetActive(context.Context, string, string) error       { return nil }
+func (*fakeAccounts) SetChain(context.Context, string, []string) error      { return nil }
 func (*fakeAccounts) Publish(context.Context) (string, error)               { return "", nil }
+func (*fakeAccounts) RefreshQuotas(context.Context) error                   { return nil }
 
 func (*fakeAccounts) Fleet(context.Context, ...string) (v1.Fleet, error) { return v1.Fleet{}, nil }
 func (*fakeAccounts) PodLogs(context.Context, string, string, int) ([]string, error) {

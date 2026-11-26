@@ -76,5 +76,7 @@ type Accounts interface {
 	Remove(ctx context.Context, name string) error
 	Refresh(ctx context.Context, name string) error
 	SetActive(ctx context.Context, provider, name string) error
+	SetChain(ctx context.Context, provider string, names []string) error
 	Publish(ctx context.Context) (string, error)
+	RefreshQuotas(ctx context.Context) error
 }

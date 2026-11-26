@@ -123,6 +123,8 @@ func TestTheClientDrivesTerminalsAndAccounts(t *testing.T) {
 		"RemoveAccount": c.RemoveAccount(ctx, "a@b.json"),
 		"Refresh":       c.RefreshAccount(ctx, "a@b.json"),
 		"SetActive":     c.SetActive(ctx, "claude", "a@b.json"),
+		"SetChain":      c.SetChain(ctx, "claude", []string{"a@b.json", "b@b.json"}),
+		"RefreshQuotas": c.RefreshQuotas(ctx),
 	} {
 		if err != nil {
 			t.Errorf("%s: %v", name, err)

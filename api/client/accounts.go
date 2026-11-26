@@ -47,10 +47,16 @@ func (c *Client) RefreshAccount(ctx context.Context, name string) error {
 	return c.json(ctx, request{method: http.MethodPost, path: "/v1/accounts/" + esc(name) + "/refresh"}, nil)
 }
 
-// SetActive picks the account a provider's new sandboxes get.
+// SetActive picks the primary account at the head of a provider's chain.
 func (c *Client) SetActive(ctx context.Context, provider, name string) error {
 	body := v1.ActiveAccount{Account: name}
 	return c.json(ctx, request{method: http.MethodPut, path: "/v1/accounts/active/" + esc(provider), body: body}, nil)
+}
+
+// SetChain sets the ordered fallback chain for a provider's accounts.
+func (c *Client) SetChain(ctx context.Context, provider string, names []string) error {
+	body := v1.AccountChain{Accounts: names}
+	return c.json(ctx, request{method: http.MethodPut, path: "/v1/accounts/chain/" + esc(provider), body: body}, nil)
 }
 
 // Publish puts the chosen accounts into the cluster now, and returns what the
@@ -58,4 +64,10 @@ func (c *Client) SetActive(ctx context.Context, provider, name string) error {
 func (c *Client) Publish(ctx context.Context) (string, error) {
 	out, err := fetch[v1.PublishReport](ctx, c, request{method: http.MethodPost, path: "/v1/accounts/publish"})
 	return out.Report, err
+}
+
+// RefreshQuotas asks the egress proxy to actively fetch live provider quotas
+// for all loaded accounts now.
+func (c *Client) RefreshQuotas(ctx context.Context) error {
+	return c.json(ctx, request{method: http.MethodPost, path: "/v1/accounts/refresh-quotas"}, nil)
 }

@@ -19,6 +19,7 @@ func (p *Proxy) ReloadSecrets() (bool, error) {
 		return false, nil
 	}
 	p.secrets.Store(next)
+	p.pool.onReload(next)
 	return true, nil
 }
 

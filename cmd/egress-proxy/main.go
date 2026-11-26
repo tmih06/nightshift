@@ -20,13 +20,14 @@ import (
 
 func main() {
 	var (
-		listenAddr  = flag.String("listen", ":8080", "HTTP/HTTPS proxy listen address")
-		adminAddr   = flag.String("admin", ":9090", "Admin listen address (/healthz, /ca.crt, /events); empty disables")
-		configPath  = flag.String("config", "/etc/egress/policy.yaml", "Path to YAML egress policy config")
-		caCertPath  = flag.String("ca-cert", "", "Override CA certificate PEM path")
-		caKeyPath   = flag.String("ca-key", "", "Override CA private key PEM path")
-		caOutPath   = flag.String("ca-out", "", "Optional path to write the public CA certificate PEM on startup")
-		reloadEvery = flag.Duration("reload-secrets", 15*time.Second, "How often to re-read file-backed secrets")
+		listenAddr   = flag.String("listen", ":8080", "HTTP/HTTPS proxy listen address")
+		adminAddr    = flag.String("admin", ":9090", "Admin listen address (/healthz, /ca.crt, /events); empty disables")
+		configPath   = flag.String("config", "/etc/egress/policy.yaml", "Path to YAML egress policy config")
+		caCertPath   = flag.String("ca-cert", "", "Override CA certificate PEM path")
+		caKeyPath    = flag.String("ca-key", "", "Override CA private key PEM path")
+		caOutPath    = flag.String("ca-out", "", "Optional path to write the public CA certificate PEM on startup")
+		reloadEvery  = flag.Duration("reload-secrets", 15*time.Second, "How often to re-read file-backed secrets")
+		refreshQuota = flag.Duration("refresh-quota", 5*time.Minute, "How often to actively fetch provider account quotas (0 disables)")
 	)
 	flag.Parse()
 
@@ -88,6 +89,12 @@ func main() {
 			func(err error) { log.Printf("egress-proxy: %v", err) })
 	}()
 
+	quotaDone := make(chan struct{})
+	go func() {
+		defer close(quotaDone)
+		proxy.WatchQuota(ctx, *refreshQuota)
+	}()
+
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -103,6 +110,7 @@ func main() {
 	err = proxySrv.ListenAndServe()
 	stop()
 	<-watchDone
+	<-quotaDone
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fmt.Fprintf(os.Stderr, "egress-proxy: %v\n", err)
 		os.Exit(1)

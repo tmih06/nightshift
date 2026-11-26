@@ -84,11 +84,24 @@ type Account struct {
 	Cooldowns    int
 	NeedsSignIn  bool
 
-	// Active marks the account this agent's sandboxes get.
+	// Active marks the primary account this agent's sandboxes start with.
 	Active bool
+	// Priority is the 1-based position in the provider's fallback chain
+	// (0 when disabled).
+	Priority int
+	// ActiveNow is true when the egress proxy is currently routing traffic
+	// to this account (may differ from Active during a failover cooldown).
+	ActiveNow bool
+	// CooldownUntil is when the egress proxy stops skipping this account.
+	CooldownUntil  time.Time
+	CooldownReason string
+	Failovers      int
 	// Usage is what the egress proxy counted for this account; nil when it
 	// has not carried a request since the proxy last started.
 	Usage *Usage
+	// Quota holds the latest fetched or header-observed provider quota windows
+	// and next reset time for this account.
+	Quota *Quota
 }
 
 // Label is how the account is named on screen and in the proxy's usage.
@@ -115,18 +128,84 @@ func (a Account) State(now time.Time) State {
 	}
 }
 
-// Usage is the egress proxy's count of requests that carried one account's
-// token. It is kept in the proxy's memory and starts over when it restarts.
+// ModelUsage counts requests and tokens for one model.
+type ModelUsage struct {
+	Requests   int
+	Input      int64
+	Output     int64
+	CacheRead  int64
+	CacheWrite int64
+	Reasoning  int64
+	Total      int64
+}
+
+// Usage is the egress proxy's count of requests and tokens that carried one
+// account's credential. It lives in proxy memory and resets on restart.
 type Usage struct {
-	Requests    int
-	OK          int
-	ClientError int
-	RateLimited int
-	ServerError int
-	Last        time.Time
+	Requests        int
+	OK              int
+	ClientError     int
+	RateLimited     int
+	ServerError     int
+	Input           int64
+	Output          int64
+	CacheRead       int64
+	CacheWrite      int64
+	Reasoning       int64
+	Total           int64
+	CacheHitPercent float64
+	AvgLatencyMS    int64
+	Last            time.Time
+	ByModel         map[string]ModelUsage
 	// Recent is the request count of each ten-minute window of the last day,
 	// oldest first.
 	Recent []int
+	// RecentVolume is the total token count of each ten-minute window of the
+	// last day, oldest first.
+	RecentVolume []int64
+}
+
+// QuotaWindow is one provider quota window (5h, 7d, RPM/TPM, or model).
+type QuotaWindow struct {
+	Name          string
+	Label         string
+	UsedPercent   float64
+	Limit         int64
+	Used          int64
+	Remaining     int64
+	ResetsAt      time.Time
+	WindowMinutes int
+	Status        string
+}
+
+// Quota holds fetched or header-observed quota windows and next reset time.
+type Quota struct {
+	Plan           string
+	CreditsBalance string
+	Source         string
+	FetchedAt      time.Time
+	NextResetAt    time.Time
+	Windows        []QuotaWindow
+	Error          string
+}
+
+// Analytics aggregates requests, tokens, latency, and per-model usage across
+// all accounts.
+type Analytics struct {
+	Requests        int
+	OK              int
+	ClientError     int
+	RateLimited     int
+	ServerError     int
+	Input           int64
+	Output          int64
+	CacheRead       int64
+	CacheWrite      int64
+	Reasoning       int64
+	Total           int64
+	CacheHitPercent float64
+	AvgLatencyMS    int64
+	ByModel         map[string]ModelUsage
 }
 
 // Published is what the refresher last put into the cluster for one agent.
@@ -140,30 +219,58 @@ type Published struct {
 type Snapshot struct {
 	At          time.Time
 	Accounts    []Account
+	Chains      map[string][]string // by provider ID: ordered enabled account names
 	PublishedAt time.Time
 	Published   map[string]Published // by provider ID
+	Analytics   *Analytics
 	// UsageErr says why proxy usage is missing; the accounts still show.
 	UsageErr error
 }
 
-// Chosen is the credential an agent's sandboxes get: the one picked as active
-// if it is still enabled, else the first enabled one by name. k8s/creds-publish.sh
-// applies the same rule, so the tab shows what will be published.
-func Chosen(accounts []Account, provider, active string) (string, bool) {
-	var enabled []string
+// Chain returns the ordered enabled accounts for provider: configured entries
+// that are still enabled (or active first when configured is empty), followed
+// by any remaining enabled accounts sorted by name. k8s/creds-publish.sh
+// applies the same rule, so the tab shows the exact fallback order published.
+func Chain(accounts []Account, provider string, configured []string, active string) []string {
+	enabled := make([]string, 0, len(accounts))
+	allowed := map[string]bool{}
 	for i := range accounts {
 		if accounts[i].Provider == provider && !accounts[i].Disabled {
 			enabled = append(enabled, accounts[i].Name)
+			allowed[accounts[i].Name] = true
 		}
 	}
 	if len(enabled) == 0 {
-		return "", false
+		return nil
 	}
 	sort.Strings(enabled)
-	for _, name := range enabled {
-		if name == active {
-			return name, true
+	pref := configured
+	if len(pref) == 0 && active != "" {
+		pref = []string{active}
+	}
+	seen := make(map[string]bool, len(enabled))
+	out := make([]string, 0, len(enabled))
+	for _, name := range pref {
+		if allowed[name] && !seen[name] {
+			seen[name] = true
+			out = append(out, name)
 		}
 	}
-	return enabled[0], true
+	for _, name := range enabled {
+		if !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// Chosen is the primary credential an agent's sandboxes get: the one picked as
+// active if it is still enabled, else the first enabled one by name.
+func Chosen(accounts []Account, provider, active string) (string, bool) {
+	chain := Chain(accounts, provider, nil, active)
+	if len(chain) == 0 {
+		return "", false
+	}
+	return chain[0], true
 }

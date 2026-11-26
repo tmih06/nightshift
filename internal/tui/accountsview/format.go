@@ -2,6 +2,7 @@ package accountsview
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -71,6 +72,56 @@ func spark(counts []int, width int) string {
 		}
 	}
 	return b.String()
+}
+
+// spark64 draws int64 counts as a row of width cells, mirroring spark.
+func spark64(counts []int64, width int) string {
+	if width <= 0 || len(counts) == 0 {
+		return ""
+	}
+	cells := make([]int64, width)
+	for i, n := range counts {
+		cells[i*width/len(counts)] += n
+	}
+	var peak int64
+	for _, n := range cells {
+		peak = max(peak, n)
+	}
+	blocks := []rune(sparkBlocks)
+	var b strings.Builder
+	for _, n := range cells {
+		if n == 0 || peak == 0 {
+			b.WriteRune(blocks[0])
+			continue
+		}
+		idx := int(n * int64(len(blocks)-1) / peak)
+		b.WriteRune(blocks[max(1, min(len(blocks)-1, idx))])
+	}
+	return b.String()
+}
+
+// compactCount formats a token count compactly (e.g. 12.5K, 1.4M).
+func compactCount(n int64) string {
+	switch {
+	case n >= 1_000_000_000:
+		return fmt.Sprintf("%.2fB", float64(n)/1e9)
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.2fM", float64(n)/1e6)
+	case n >= 1_000:
+		return fmt.Sprintf("%.1fK", float64(n)/1e3)
+	default:
+		return strconv.FormatInt(n, 10)
+	}
+}
+
+// quotaBar draws a filled/empty bar of width cells for a 0..100 percentage.
+func quotaBar(pct float64, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	filled := int(pct*float64(width)/100 + 0.5)
+	filled = max(0, min(width, filled))
+	return strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
 }
 
 // wrap breaks s into lines of at most width runes, with no regard for words,

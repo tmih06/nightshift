@@ -131,46 +131,92 @@ exercise() {
   done < <(jq -c '.providers[]' "$REGISTRY")
 }
 
+# extract_companions ENTRY_JSON LOGIN_JSON returns a compact JSON object of
+# account-bound companion values (such as Codex's account_id) for one login.
+extract_companions() {
+  local entry=$1 login=$2 comp='{}' ckey cpath cval
+  while IFS= read -r ckey; do
+    [ -n "$ckey" ] || continue
+    cpath=$(jq -r --arg k "$ckey" '.companions[$k]' <<<"$entry")
+    cval=$(jq -r "$cpath // empty" <<<"$login" 2>/dev/null || true)
+    if [ -n "$cval" ]; then
+      comp=$(jq -cn --argjson m "$comp" --arg k "$ckey" --arg v "$cval" '$m + {($k): $v}')
+    fi
+  done < <(jq -r '(.companions // {}) | keys[]' <<<"$entry")
+  printf '%s' "$comp"
+}
+
 # cpa_home DIR rebuilds each agent's login file under DIR from the accounts
-# logged in to CLIProxyAPI, so the usual staging runs on them. CLIProxyAPI
-# keeps the tokens fresh; a token near expiry is refreshed first.
+# logged in to CLIProxyAPI, and writes each provider's ordered fallback chain
+# under $work/pools/<secret>.json. CLIProxyAPI keeps the tokens fresh; any
+# token near expiry in the chain is refreshed first.
 cpa_home() {
-  local dir=$1 key list entry type name exp file cred active label secret
+  local dir=$1 key list entry type name exp file cred active chains label secret
+  local built tok comp first primary_name primary_label primary_exp chain_json
   key=${CPA_MANAGEMENT_KEY:-}
   [ -n "$key" ] || key=$(cat "${CPA_MANAGEMENT_KEY_FILE:-/dev/null}" 2>/dev/null || true)
   [ -n "$key" ] || { echo "--cpa needs CPA_MANAGEMENT_KEY or CPA_MANAGEMENT_KEY_FILE" >&2; return 1; }
   cpa() { curl -fsS -m 30 -H "Authorization: Bearer $key" "$@"; }
   list=$(cpa "$CPA_URL/v8/management/credentials") || { echo "cannot reach CLIProxyAPI at $CPA_URL" >&2; return 1; }
-  # Which account each agent's sandboxes use is set in the Accounts tab and
-  # kept in the nightshift-accounts ConfigMap ({"claude": "<credential name>"}).
+  # Which account order each agent uses is set in the Accounts tab and kept in
+  # the nightshift-accounts ConfigMap (chains and legacy active).
   use_target "${TARGETS[0]}"
   active=$("${K[@]}" get configmap nightshift-accounts -o jsonpath='{.data.active}' 2>/dev/null || true)
-  jq -e type >/dev/null 2>&1 <<<"$active" || active='{}'
+  jq -e 'type == "object"' >/dev/null 2>&1 <<<"$active" || active='{}'
+  chains=$("${K[@]}" get configmap nightshift-accounts -o jsonpath='{.data.chains}' 2>/dev/null || true)
+  jq -e 'type == "object"' >/dev/null 2>&1 <<<"$chains" || chains='{}'
+  mkdir -p "$work/labels" "$work/pools"
   while IFS= read -r entry; do
     type=$(jq -r '.cpa.type // empty' <<<"$entry")
     [ -n "$type" ] || continue
-    # The chosen account when it is still enabled, else the first enabled one.
-    name=$(jq -r --arg t "$type" --argjson a "$active" '
-      [.files[] | select(.provider == $t and (.disabled | not))] | sort_by(.name) as $ok
-      | ([$ok[] | select(.name == $a[$t])] + $ok) | .[0].name // empty' <<<"$list")
-    [ -n "$name" ] || continue
-    exp=$(jq -r --arg n "$name" '.files[] | select(.name == $n) | .access_token_expires_at // empty' <<<"$list")
-    if [ -n "$exp" ] && [ "$(date -d "$exp" +%s 2>/dev/null || echo 0)" -lt $(( $(date +%s) + 600 )) ]; then
-      cpa -X POST -H 'Content-Type: application/json' -d "$(jq -cn --arg n "$name" '{name: $n}')" \
-        "$CPA_URL/v8/management/credentials/refresh" >/dev/null || echo "warning: refreshing $name failed" >&2
-    fi
-    cred=$(cpa --get --data-urlencode "name=$name" "$CPA_URL/v8/management/credentials/download") \
-      || { echo "warning: could not download $name" >&2; continue; }
-    file=$dir/$(jq -r .file <<<"$entry")
-    mkdir -p "$(dirname "$file")"
-    jq "$(jq -r .cpa.build <<<"$entry")" <<<"$cred" > "$file"
-    chmod 600 "$file"
     secret=$(jq -r .secret <<<"$entry")
-    label=$(jq -r --arg n "$name" '.files[] | select(.name == $n) | (.email // .account // .name)' <<<"$list")
-    mkdir -p "$work/labels"
-    printf '%s' "$label" > "$work/labels/$secret"
-    jq -cn --arg t "$type" --arg n "$name" --arg l "$label" --arg e "$exp" \
-      '{type: $t, name: $n, label: $l, expires: $e}' >> "$work/selected.jsonl"
+    : > "$work/pools/$secret.jsonl"
+    first=1
+    primary_name="" primary_label="" primary_exp=""
+    chain_json='[]'
+    while IFS= read -r name; do
+      [ -n "$name" ] || continue
+      exp=$(jq -r --arg n "$name" '.files[] | select(.name == $n) | .access_token_expires_at // empty' <<<"$list")
+      if [ -n "$exp" ] && [ "$(date -d "$exp" +%s 2>/dev/null || echo 0)" -lt $(( $(date +%s) + 600 )) ]; then
+        cpa -X POST -H 'Content-Type: application/json' -d "$(jq -cn --arg n "$name" '{name: $n}')" \
+          "$CPA_URL/v8/management/credentials/refresh" >/dev/null || echo "warning: refreshing $name failed" >&2
+      fi
+      cred=$(cpa --get --data-urlencode "name=$name" "$CPA_URL/v8/management/credentials/download") \
+        || { echo "warning: could not download $name" >&2; continue; }
+      built=$(jq -c "$(jq -r .cpa.build <<<"$entry")" <<<"$cred") || continue
+      tok=$(jq -r "$(jq -r .access <<<"$entry") // empty" <<<"$built" 2>/dev/null || true)
+      [ -n "$tok" ] || continue
+      label=$(jq -r --arg n "$name" '.files[] | select(.name == $n) | (.email // .account // .name)' <<<"$list")
+      comp=$(extract_companions "$entry" "$built")
+      if [ "$first" = 1 ]; then
+        file=$dir/$(jq -r .file <<<"$entry")
+        mkdir -p "$(dirname "$file")"
+        printf '%s\n' "$built" > "$file"
+        chmod 600 "$file"
+        printf '%s' "$label" > "$work/labels/$secret"
+        primary_name=$name
+        primary_label=$label
+        primary_exp=$exp
+        first=0
+      fi
+      jq -cn --arg n "$name" --arg l "$label" --arg t "$tok" --argjson c "$comp" \
+        'if ($c | length) > 0 then {name: $n, label: $l, token: $t, companion: $c} else {name: $n, label: $l, token: $t} end' \
+        >> "$work/pools/$secret.jsonl"
+      chain_json=$(jq -cn --argjson a "$chain_json" --arg n "$name" '$a + [$n]')
+    done < <(jq -r --arg t "$type" --argjson a "$active" --argjson c "$chains" '
+      [.files[] | select(.provider == $t and (.disabled | not))] | sort_by(.name) as $ok
+      | ($ok | map({key: .name, value: .}) | from_entries) as $by
+      | (if ($c[$t] | type) == "array" then $c[$t]
+         elif ($a[$t] | type) == "string" and $a[$t] != "" then [$a[$t]]
+         else [] end) as $pref
+      | ([($pref[] | select($by[.] != null))] + ($ok | map(.name)))
+      | reduce .[] as $n ([]; if index($n) then . else . + [$n] end)
+      | .[]' <<<"$list")
+    if [ -s "$work/pools/$secret.jsonl" ]; then
+      jq -cs '.' "$work/pools/$secret.jsonl" > "$work/pools/$secret.json"
+      jq -cn --arg t "$type" --arg n "$primary_name" --arg l "$primary_label" --arg e "$primary_exp" --argjson ch "$chain_json" \
+        '{type: $t, name: $n, label: $l, expires: $e, chain: $ch}' >> "$work/selected.jsonl"
+    fi
   done < <(jq -c '.providers[]' "$REGISTRY")
 }
 
@@ -198,14 +244,27 @@ publish_to() {
     --from-file=creds.tar="$work/creds.tar" \
     --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
 
-  local pairs="" secret label
+  local pairs="" secret label pool_b64 pool_count comp tok
   while IFS= read -r secret; do
     [ -s "$work/tokens/$secret" ] || continue
     pairs="$pairs\"REAL_$secret\":\"$(base64 -w0 < "$work/tokens/$secret")\","
     # The proxy tags usage with this label; without CLIProxyAPI it is the machine.
     label=$(cat "$work/labels/$secret" 2>/dev/null || printf 'this machine')
     pairs="$pairs\"LABEL_$secret\":\"$(printf '%s' "$label" | base64 -w0)\","
-    echo "  real $secret ($label) -> egress-secrets (proxy reloads it, no restart)"
+    if [ -s "$work/pools/$secret.json" ]; then
+      pool_b64=$(base64 -w0 < "$work/pools/$secret.json")
+      pool_count=$(jq 'length' "$work/pools/$secret.json")
+    else
+      tok=$(cat "$work/tokens/$secret")
+      comp='{}'
+      [ -s "$work/tokens/$secret.companions.json" ] && comp=$(cat "$work/tokens/$secret.companions.json")
+      pool_b64=$(jq -cn --arg n "$secret" --arg l "$label" --arg t "$tok" --argjson c "$comp" \
+        'if ($c | length) > 0 then [{name: $n, label: $l, token: $t, companion: $c}] else [{name: $n, label: $l, token: $t}] end' \
+        | base64 -w0)
+      pool_count=1
+    fi
+    pairs="$pairs\"POOL_$secret\":\"$pool_b64\","
+    echo "  real $secret ($label, chain=$pool_count) -> egress-secrets (proxy reloads it, no restart)"
   done < <(jq -r '.providers[].secret' "$REGISTRY")
   if [ -n "$pairs" ]; then
     # Merge into the existing Secret so the API keys setup seeded survive.
@@ -231,7 +290,7 @@ EOF
 publish_status() {
   local status
   status=$(jq -cs --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    '{published_at: $at, accounts: (map({key: .type, value: {name, label, expires}}) | from_entries)}' \
+    '{published_at: $at, accounts: (map({key: .type, value: {name, label, expires, chain}}) | from_entries)}' \
     "$work/selected.jsonl" 2>/dev/null) || status="{\"published_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"accounts\":{}}"
   if "${K[@]}" get configmap nightshift-accounts >/dev/null 2>&1; then
     "${K[@]}" patch configmap nightshift-accounts --type=merge \
@@ -266,7 +325,7 @@ chmod 700 "$work"
 
 run_once() {
   local src=$HOME
-  rm -rf "${work:?}/labels" "${work:?}/selected.jsonl" "${work:?}/tokens" "${work:?}/stage" "${work:?}/creds.tar"
+  rm -rf "${work:?}/labels" "${work:?}/pools" "${work:?}/selected.jsonl" "${work:?}/tokens" "${work:?}/stage" "${work:?}/creds.tar"
   : > "$work/selected.jsonl"
   if [ -n "$CPA_URL" ]; then
     rm -rf "${work:?}/home"

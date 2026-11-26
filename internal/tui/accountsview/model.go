@@ -335,6 +335,10 @@ func (m Model) actionKey(k string) (Model, tea.Cmd) {
 		return m.openProviderPicker(), nil
 	case keyEnter, "s":
 		return m.useSelected()
+	case "K", "[":
+		return m.moveInChain(-1)
+	case "J", "]":
+		return m.moveInChain(1)
 	case "d":
 		return m.toggleSelected()
 	case "x":
@@ -343,6 +347,8 @@ func (m Model) actionKey(k string) (Model, tea.Cmd) {
 		}
 	case "r":
 		return m.refreshSelected()
+	case "Q":
+		return m.refreshQuotas()
 	case "p":
 		return m.publishNow("Publishing…")
 	}
@@ -490,7 +496,49 @@ func (m Model) useSelected() (Model, tea.Cmd) {
 		if _, err := svc.Publish(ctx); err != nil {
 			return doneMsg{err: err, refetch: true}
 		}
-		return doneMsg{text: p.Name + " sandboxes now use " + label(a) + " (new sandboxes; running ones keep their login)", refetch: true}
+		return doneMsg{text: p.Name + " primary is now " + label(a) + " (fallback chain updated)", refetch: true}
+	}
+}
+
+func (m Model) moveInChain(delta int) (Model, tea.Cmd) {
+	a, ok := m.selected()
+	if !ok {
+		return m, nil
+	}
+	if a.Disabled {
+		cmd := m.say("That account is disabled; press d to enable it first.", true)
+		return m, cmd
+	}
+	accts := byProvider(m.snap, a.Provider)
+	enabled := make([]string, 0, len(accts))
+	idx := -1
+	for i := range accts {
+		if accts[i].Disabled {
+			continue
+		}
+		if accts[i].Name == a.Name {
+			idx = len(enabled)
+		}
+		enabled = append(enabled, accts[i].Name)
+	}
+	next := idx + delta
+	if idx < 0 || next < 0 || next >= len(enabled) {
+		return m, nil
+	}
+	enabled[idx], enabled[next] = enabled[next], enabled[idx]
+	p := providerByID(m.snap, a.Provider)
+	svc := m.svc
+	m.notice, m.noticeBad, m.noticeAt = "Updating "+p.Name+" fallback order…", false, m.now()
+	return m, func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if err := svc.SetChain(ctx, a.Provider, enabled); err != nil {
+			return doneMsg{err: err}
+		}
+		if _, err := svc.Publish(ctx); err != nil {
+			return doneMsg{err: err, refetch: true}
+		}
+		return doneMsg{text: p.Name + " fallback order updated", refetch: true}
 	}
 }
 
@@ -519,6 +567,19 @@ func (m Model) refreshSelected() (Model, tea.Cmd) {
 	return m, act(fetchWindow, "Refreshed "+label(a), func(ctx context.Context) error {
 		return svc.RefreshAccount(ctx, a.Name)
 	})
+}
+
+func (m Model) refreshQuotas() (Model, tea.Cmd) {
+	svc := m.svc
+	m.notice, m.noticeBad, m.noticeAt = "Fetching live quotas…", false, m.now()
+	return m, func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), fetchWindow)
+		defer cancel()
+		if err := svc.RefreshQuotas(ctx); err != nil {
+			return doneMsg{err: err}
+		}
+		return doneMsg{text: "Live quotas updated", refetch: true}
+	}
 }
 
 func (m Model) publishNow(label string) (Model, tea.Cmd) {

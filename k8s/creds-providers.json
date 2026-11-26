@@ -23,7 +23,10 @@
       "secret": "CODEX_ACCESS_TOKEN",
       "file": ".codex/auth.json",
       "access": ".tokens.access_token",
-      "filter": "{auth_mode: .auth_mode, OPENAI_API_KEY: null, tokens: (.tokens | .access_token = $ph | .refresh_token = \"nightshift:secret:CODEX_REFRESH_TOKEN_UNUSABLE\"), last_refresh: $far}",
+      "companions": {
+        "CODEX_ACCOUNT_ID": ".tokens.account_id"
+      },
+      "filter": "{auth_mode: .auth_mode, OPENAI_API_KEY: null, tokens: (.tokens | .access_token = $ph | .refresh_token = \"nightshift:secret:CODEX_REFRESH_TOKEN_UNUSABLE\" | if .account_id then .account_id = \"nightshift:secret:CODEX_ACCOUNT_ID\" else . end), last_refresh: $far}",
       "hosts": [
         "chatgpt.com"
       ],

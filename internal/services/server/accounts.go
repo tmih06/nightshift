@@ -14,7 +14,9 @@ func (s *Server) accountRoutes() []route {
 		{method: http.MethodPost, pattern: "/v1/accounts/logins/{id}/complete", handle: s.completeLogin},
 		{method: http.MethodDelete, pattern: "/v1/accounts/logins/{id}", handle: s.cancelLogin},
 		{method: http.MethodPost, pattern: "/v1/accounts/publish", handle: s.publishAccounts},
+		{method: http.MethodPost, pattern: "/v1/accounts/refresh-quotas", handle: s.refreshQuotas},
 		{method: http.MethodPut, pattern: "/v1/accounts/active/{provider}", handle: s.setActiveAccount},
+		{method: http.MethodPut, pattern: "/v1/accounts/chain/{provider}", handle: s.setAccountChain},
 		{method: http.MethodPatch, pattern: "/v1/accounts/{name}", handle: s.patchAccount},
 		{method: http.MethodDelete, pattern: "/v1/accounts/{name}", handle: s.deleteAccount},
 		{method: http.MethodPost, pattern: "/v1/accounts/{name}/refresh", handle: s.refreshAccount},
@@ -99,6 +101,10 @@ func (s *Server) publishAccounts(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+func (s *Server) refreshQuotas(w http.ResponseWriter, r *http.Request) error {
+	return s.acct(w, func(a Accounts) error { return a.RefreshQuotas(r.Context()) })
+}
+
 func (s *Server) setActiveAccount(w http.ResponseWriter, r *http.Request) error {
 	var req v1.ActiveAccount
 	if err := decode(r, &req); err != nil {
@@ -108,6 +114,17 @@ func (s *Server) setActiveAccount(w http.ResponseWriter, r *http.Request) error 
 		return invalid("account is required")
 	}
 	return s.acct(w, func(a Accounts) error { return a.SetActive(r.Context(), r.PathValue("provider"), req.Account) })
+}
+
+func (s *Server) setAccountChain(w http.ResponseWriter, r *http.Request) error {
+	var req v1.AccountChain
+	if err := decode(r, &req); err != nil {
+		return err
+	}
+	if len(req.Accounts) == 0 {
+		return invalid("accounts is required")
+	}
+	return s.acct(w, func(a Accounts) error { return a.SetChain(r.Context(), r.PathValue("provider"), req.Accounts) })
 }
 
 func (s *Server) patchAccount(w http.ResponseWriter, r *http.Request) error {

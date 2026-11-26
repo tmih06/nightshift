@@ -55,7 +55,8 @@ type Rule struct {
 }
 
 // SecretBinding maps an opaque placeholder string (exposed inside sandboxes)
-// to a real credential sourced outside the sandbox from Env, File, or Value.
+// to a real credential sourced outside the sandbox from PoolFile, Env, File,
+// or Value.
 type SecretBinding struct {
 	Placeholder string `yaml:"placeholder"`
 	Env         string `yaml:"env"`
@@ -65,6 +66,10 @@ type SecretBinding struct {
 	// proxy never injects it; it only tags usage so a rotated token's requests
 	// are counted against the account that was active.
 	LabelFile string `yaml:"label_file"`
+	// PoolFile points to an ordered JSON array of accounts for this secret.
+	// When present and non-empty, the proxy picks the first non-cooled-down
+	// account and fails over down the chain on quota or auth errors.
+	PoolFile string `yaml:"pool_file"`
 }
 
 // DefaultPlaceholderPrefix is the standard prefix for sandbox secret sentinels.
