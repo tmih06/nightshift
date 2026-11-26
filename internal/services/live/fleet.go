@@ -2,8 +2,8 @@ package live
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -45,8 +45,8 @@ type liveUsage struct {
 // Fleet reads the sandbox fleet and remembers what it needs between reads:
 // the cgroup samples that make a CPU rate, and each pod's agent version.
 type Fleet struct {
-	// fetch reads the cluster; reading shares one such read between everyone
-	// who asks while it runs, as each one starts several kubectl processes.
+	// fetch reads the cluster. reading shares it, and the other reads that
+	// start kubectl processes, between everyone who asks while they run.
 	fetch   func() ([]cluster.Sandbox, map[string]cluster.Pool, bool, error)
 	reading singleflight.Group
 
@@ -100,20 +100,27 @@ func (f *Fleet) Fleet(ctx context.Context, inc server.Include) (v1.Fleet, error)
 	return out, nil
 }
 
+// shared runs fn once for everyone who asks for key while it runs, and gives up
+// waiting for it when ctx ends. Callers must not change what it returns.
+func shared[T any](ctx context.Context, g *singleflight.Group, key string, fn func() (T, error)) (T, error) {
+	return call(ctx, func() (T, error) {
+		var zero T
+		v, err, _ := g.Do(key, func() (any, error) { return fn() })
+		if err != nil {
+			return zero, wrapErr("read "+key, err)
+		}
+		got, ok := v.(T)
+		if !ok {
+			return zero, fmt.Errorf("read %s: unexpected %T", key, v)
+		}
+		return got, nil
+	})
+}
+
 // refresh reads the cluster and remembers what it saw, joining a read that is
 // already under way.
 func (f *Fleet) refresh(ctx context.Context) (snapshot, error) {
-	return call(ctx, func() (snapshot, error) {
-		v, err, _ := f.reading.Do("fleet", func() (any, error) { return f.read() })
-		if err != nil {
-			return snapshot{}, wrapErr("read the cluster", err)
-		}
-		snap, ok := v.(snapshot)
-		if !ok {
-			return snapshot{}, errors.New("read the cluster: no snapshot")
-		}
-		return snap, nil
-	})
+	return shared(ctx, &f.reading, "the cluster", f.read)
 }
 
 func (f *Fleet) read() (snapshot, error) {
@@ -213,7 +220,9 @@ func (f *Fleet) sample(ctx context.Context, boxes []cluster.Sandbox) map[string]
 			pods = append(pods, boxes[i].Name)
 		}
 	}
-	got, err := call(ctx, func() (map[string]cluster.CgroupSample, error) { return cluster.ReadCgroups(pods), nil })
+	got, err := shared(ctx, &f.reading, "cgroups of "+strings.Join(pods, " "), func() (map[string]cluster.CgroupSample, error) {
+		return cluster.ReadCgroups(pods), nil
+	})
 	if err != nil {
 		return nil
 	}
@@ -285,7 +294,9 @@ func (f *Fleet) probe(ctx context.Context, boxes []cluster.Sandbox) {
 	if len(unprobed) == 0 {
 		return
 	}
-	got, err := call(ctx, func() (map[string]string, error) { return cluster.AgentVersions(unprobed), nil })
+	got, err := shared(ctx, &f.reading, "versions of "+strings.Join(unprobed, " "), func() (map[string]string, error) {
+		return cluster.AgentVersions(unprobed), nil
+	})
 	if err != nil {
 		return
 	}
@@ -305,7 +316,7 @@ func (f *Fleet) targets(ctx context.Context, boxes []cluster.Sandbox) map[string
 	if !want {
 		return nil
 	}
-	vols, err := call(ctx, cluster.ListVolumes)
+	vols, err := shared(ctx, &f.reading, "volumes", cluster.ListVolumes)
 	if err != nil {
 		return nil
 	}

@@ -40,13 +40,12 @@ type AuditEvent struct {
 
 // Options tunes a Proxy instance (all fields optional).
 type Options struct {
-	CA               *CA
-	Getenv           func(string) string
-	UpstreamTLS      *tls.Config // optional custom upstream TLS config (used in tests)
-	AuditWriter      io.Writer   // optional JSONL audit sink
-	EventRingMax     int
-	SkipAutoCA       bool
-	PlainHTTPDefault bool
+	CA           *CA
+	Getenv       func(string) string
+	UpstreamTLS  *tls.Config // optional custom upstream TLS config (used in tests)
+	AuditWriter  io.Writer   // optional JSONL audit sink
+	EventRingMax int
+	SkipAutoCA   bool
 }
 
 // Proxy is the HTTP/HTTPS egress proxy handler.
@@ -100,6 +99,7 @@ func NewProxy(cfg Config, opts Options) (*Proxy, error) {
 		TLSClientConfig:       tlsCfg,
 		ForceAttemptHTTP2:     false,
 		MaxIdleConns:          64,
+		MaxIdleConnsPerHost:   32, // every sandbox shares a few API hosts
 		IdleConnTimeout:       60 * time.Second,
 		TLSHandshakeTimeout:   15 * time.Second,
 		ExpectContinueTimeout: 2 * time.Second,

@@ -1,0 +1,7 @@
+#!/bin/sh
+# A kubectl that is slow enough for reads to overlap, and counts its runs.
+echo x >>"$CALLS"
+sleep 0.2
+case "$*" in
+*"get pvc"*) echo '{"items":[]}' ;;
+esac

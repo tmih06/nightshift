@@ -57,11 +57,23 @@ func New(base, token string, opts ...Option) (*Client, error) {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return nil, fmt.Errorf("%q is not a server address like http://127.0.0.1:7777", base)
 	}
-	c := &Client{base: u, token: token, http: &http.Client{}, viewer: "c" + strconv.FormatInt(time.Now().UnixNano(), 36)}
+	c := &Client{base: u, token: token, http: &http.Client{Transport: transport()}, viewer: "c" + strconv.FormatInt(time.Now().UnixNano(), 36)}
 	for _, o := range opts {
 		o(c)
 	}
 	return c, nil
+}
+
+// transport keeps enough idle connections for what a frontend asks at once:
+// the fleet, a screen, key input, logs, and a stream. The default keeps two.
+func transport() http.RoundTripper {
+	t, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return http.DefaultTransport
+	}
+	t = t.Clone()
+	t.MaxIdleConnsPerHost = 8
+	return t
 }
 
 // URL is the server's address.

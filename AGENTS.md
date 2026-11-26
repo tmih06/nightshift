@@ -123,6 +123,7 @@ Prune rules that no longer apply. Past about 200 lines, move older detail into
   - **Why**: Concurrent screen reads stacked `kubectl` processes until
     `nightshiftd` was throttled and OOM-killed (`cbf342a`).
   - **Enforced by**: `TestClaimedSharesOneClusterRead`,
+    `TestOverlappingFleetReadsShareTheirKubectls`,
     `TestTheServicesHaveRoomForTheirKubectls`.
 
 ## Commit messages
