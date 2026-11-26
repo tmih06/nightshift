@@ -41,6 +41,7 @@ func (f finding) String() string {
 // fileDiff is the part of one file's diff that the rules read.
 type fileDiff struct {
 	path, status      string
+	from              string // the path a renamed file came from
 	added             []addedLine
 	removedAssertions int
 	addedAssertions   int
@@ -147,8 +148,12 @@ func parseStatus(out string) map[string]string {
 	status := map[string]string{}
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		parts := strings.Split(line, "\t")
-		if len(parts) == 2 {
+		switch {
+		case len(parts) == 2:
 			status[parts[1]] = parts[0]
+		case len(parts) == 3 && strings.HasPrefix(parts[0], "R"):
+			// A move keeps its tests, so it is neither a delete nor an add.
+			status[parts[2]] = "R"
 		}
 	}
 	return status
@@ -166,6 +171,10 @@ func parseDiff(raw string, status map[string]string) []*fileDiff {
 			continue
 		}
 		if cur == nil {
+			continue
+		}
+		if from, ok := strings.CutPrefix(line, "rename from "); ok {
+			cur.from = from
 			continue
 		}
 		if m := hunkRE.FindStringSubmatch(line); m != nil {
@@ -208,8 +217,8 @@ func check(files []*fileDiff, opts options) []finding {
 	var out []finding
 	for _, fd := range files {
 		out = append(out, checkContent(fd)...)
-		out = append(out, checkAssertions(fd)...)
 	}
+	out = append(out, checkAssertions(files)...)
 	out = append(out, checkDeletedTests(files)...)
 	out = append(out, checkProtected(files, opts)...)
 	out = append(out, checkGoMod(files, opts)...)
@@ -238,13 +247,29 @@ func checkContent(fd *fileDiff) []finding {
 	return out
 }
 
-func checkAssertions(fd *fileDiff) []finding {
-	if !strings.HasSuffix(fd.path, "_test.go") || fd.status == "D" || fd.removedAssertions <= fd.addedAssertions {
+// checkAssertions fails a test file that loses assertions, unless the change
+// adds at least as many in its other test files. Tests move with the code they
+// check, so a file may shrink when the same checks appear in another package.
+func checkAssertions(files []*fileDiff) []finding {
+	removed, added := 0, 0
+	for _, fd := range files {
+		if strings.HasSuffix(fd.path, "_test.go") && fd.status != "D" {
+			removed += fd.removedAssertions
+			added += fd.addedAssertions
+		}
+	}
+	if removed <= added {
 		return nil
 	}
-	return []finding{{file: fd.path, line: 1, rule: "diff/assertion-removed",
-		msg: fmt.Sprintf("removes %d assertions and adds %d. Keep the checks, or replace them with equivalent ones.",
-			fd.removedAssertions, fd.addedAssertions)}}
+	var out []finding
+	for _, fd := range files {
+		if strings.HasSuffix(fd.path, "_test.go") && fd.status != "D" && fd.removedAssertions > fd.addedAssertions {
+			out = append(out, finding{file: fd.path, line: 1, rule: "diff/assertion-removed",
+				msg: fmt.Sprintf("removes %d assertions and adds %d, and the change adds %d in all against %d removed. Keep the checks, or replace them with equivalent ones.",
+					fd.removedAssertions, fd.addedAssertions, added, removed)})
+		}
+	}
+	return out
 }
 
 func checkDeletedTests(files []*fileDiff) []finding {
@@ -252,16 +277,35 @@ func checkDeletedTests(files []*fileDiff) []finding {
 	for _, fd := range files {
 		if strings.HasSuffix(fd.path, "_test.go") && fd.status != "D" && fd.addedTests > 0 {
 			addedIn[dirOf(fd.path)] = true
+			// A file rewritten as it moves is too different for git to pair.
+			addedIn["/"+baseOf(fd.path)] = true
 		}
 	}
 	var out []finding
 	for _, fd := range files {
-		if strings.HasSuffix(fd.path, "_test.go") && fd.status == "D" && !addedIn[dirOf(fd.path)] {
-			out = append(out, finding{file: fd.path, line: 1, rule: "diff/test-deleted",
+		if gone := lostTest(fd); gone != "" && !addedIn[dirOf(gone)] && !addedIn["/"+baseOf(gone)] {
+			out = append(out, finding{file: gone, line: 1, rule: "diff/test-deleted",
 				msg: "deletes a test file with no replacement in its package. Restore it or add a replacement."})
 		}
 	}
 	return out
+}
+
+// lostTest names the test file a change removes from the tests, or "". A test
+// file that moves to another test file is kept. One renamed to a non-test file
+// is lost.
+func lostTest(fd *fileDiff) string {
+	switch {
+	case fd.status == "D" && strings.HasSuffix(fd.path, "_test.go"):
+		return fd.path
+	case strings.HasSuffix(fd.from, "_test.go") && !strings.HasSuffix(fd.path, "_test.go"):
+		return fd.from
+	}
+	return ""
+}
+
+func baseOf(path string) string {
+	return path[strings.LastIndex(path, "/")+1:]
 }
 
 func dirOf(path string) string {
@@ -290,9 +334,12 @@ func checkProtected(files []*fileDiff, opts options) []finding {
 	}
 	var out []finding
 	for _, fd := range files {
-		if isProtected(fd.path) {
-			out = append(out, finding{file: fd.path, line: 1, rule: "diff/protected-path",
-				msg: "this file controls the gate and needs CODEOWNERS approval. Revert it, or stop and ask a human."})
+		// A file moved out of a protected path is as much a change to it.
+		for _, path := range []string{fd.path, fd.from} {
+			if isProtected(path) {
+				out = append(out, finding{file: path, line: 1, rule: "diff/protected-path",
+					msg: "this file controls the gate and needs CODEOWNERS approval. Revert it, or stop and ask a human."})
+			}
 		}
 	}
 	return out
