@@ -73,6 +73,21 @@ for ns in ${LOG_NAMESPACES:-nightshift nightshift-egress agent-sandbox-system ku
   fi
 done
 
+# Optional: an ingress with TLS, so frontends on other machines reach it.
+# The TLS secret must exist already (made by hand or by cert-manager).
+if [ -n "${NIGHTSHIFTD_HOST:-}" ]; then
+  if ! [[ "${NIGHTSHIFTD_HOST}" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]]; then
+    echo "NIGHTSHIFTD_HOST must be a DNS name, got: ${NIGHTSHIFTD_HOST}" >&2
+    exit 1
+  fi
+  edits=(-e "s|nightshiftd.example.com|${NIGHTSHIFTD_HOST}|g"
+    -e "s|secretName: nightshiftd-tls|secretName: ${NIGHTSHIFTD_TLS_SECRET:-nightshiftd-tls}|")
+  if [ -n "${NIGHTSHIFTD_INGRESS_CLASS:-}" ]; then
+    edits+=(-e "s|# ingressClassName: nginx|ingressClassName: ${NIGHTSHIFTD_INGRESS_CLASS}|")
+  fi
+  sed -E "${edits[@]}" "${SCRIPT_DIR}/nightshiftd-ingress.yaml" | k apply -f -
+fi
+
 # A locally built image keeps its tag, so a pod already running it must restart
 # to pick up a rebuild.
 if [ "${IS_KIND}" = 1 ] && [ -z "${NIGHTSHIFTD_IMAGE:-}" ]; then
@@ -91,6 +106,12 @@ cat <<EOF
 
 Set both in the environment of \`nightshift\` (or of any other frontend).
 
-For other machines, put your provider's ingress, with TLS, in front of
-svc/nightshiftd (port 7777). The token is required for everything.
+For other machines, run this again with NIGHTSHIFTD_HOST=<dns name> (and, as
+needed, NIGHTSHIFTD_TLS_SECRET and NIGHTSHIFTD_INGRESS_CLASS) to add an ingress
+with TLS, then use https://<that name> as NIGHTSHIFT_API. The token is
+required for everything.
 EOF
+if [ -n "${NIGHTSHIFTD_HOST:-}" ]; then
+  echo
+  echo "Ingress: NIGHTSHIFT_API=https://${NIGHTSHIFTD_HOST}"
+fi

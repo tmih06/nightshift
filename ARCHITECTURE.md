@@ -33,14 +33,14 @@ flowchart LR
 ```text
 api/            the contract: openapi.yaml, v1 (types), client (Go SDK)
 cmd/nightshiftd the services as a daemon
-cmd/nightshift  the terminal UI, which can run the services inside itself
+cmd/nightshift  the terminal UI: a client, it runs nothing else
 internal/services/{cluster,session,accounts,checkout,server,live,daemon,egress}
 internal/tui/{app,dashboard,accountsview,repoview,dialog,fleet}
 ```
 
-The services run where it suits: on a laptop, against the kubeconfig context in
-`NIGHTSHIFT_CONTEXT`, or as a Deployment in the cluster (`k8s/nightshiftd.yaml`),
-where they act through a service account with `NIGHTSHIFT_CONTEXT=-` and reach
+Everything runs in the cluster, each part in its own pod: the services
+(`nightshiftd`), the egress proxy, CLIProxyAPI, the credential refresher, and
+the sandboxes. The laptop runs only the terminal. `nightshiftd` acts through a service account with `NIGHTSHIFT_CONTEXT=-` and reach
 CLIProxyAPI and the egress proxy by their Service addresses. In the cluster,
 many people on many machines use one address and nobody needs a kubeconfig. The
 manifests assume no provider, the setup script builds and loads an image on kind

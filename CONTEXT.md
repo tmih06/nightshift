@@ -79,11 +79,10 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
 - The frontend: `internal/tui/app` is the root model: it draws the tab bar and
   routes input to the active tab. `dashboard` is the Pods tab, `accountsview`
   the Accounts tab, `repoview` the Repo view, `dialog` the shared widgets, and
-  `fleet` what the TUI makes of the contract's types. With no `-api`,
-  `cmd/nightshift` runs the services inside itself on a private loopback port;
-  with `-api` (or `NIGHTSHIFT_API` and `NIGHTSHIFT_TOKEN`) it talks to a
-  server, which may run in the cluster (`k8s/nightshiftd.yaml`,
-  `k8s/nightshiftd-setup.sh`). `NIGHTSHIFT_CONTEXT` picks the cluster,
+`fleet` what the TUI makes of the contract's types. `cmd/nightshift` is only
+  a client: it needs `-api` (or `NIGHTSHIFT_API` and `NIGHTSHIFT_TOKEN`) and
+  runs nothing else. The services run in the cluster as the `nightshiftd` pod
+  (`k8s/nightshiftd.yaml`, `k8s/nightshiftd-setup.sh`). `NIGHTSHIFT_CONTEXT` picks the cluster,
   `NIGHTSHIFT_CONTEXT=-` means the one the services run in. The TUI logs
   through charm's log, never the standard one, which would draw over it.
 - `internal/ghdash` is a vendored copy of

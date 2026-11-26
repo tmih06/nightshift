@@ -164,13 +164,19 @@ it is added it arrives as a capability, `terminal.raw`.
 ## Using it
 
 ```sh
-# Run the services locally against whatever kubeconfig points at.
-NIGHTSHIFT_CONTEXT=my-cluster nightshiftd --token-file ~/.nightshift/token
+# The services run in the cluster, as the nightshiftd pod. Deploy them once.
+k8s/nightshiftd-setup.sh
+
+# Reach it from your machine: a port-forward, or an ingress with TLS
+# (NIGHTSHIFTD_HOST=nightshift.example.com k8s/nightshiftd-setup.sh).
+kubectl -n nightshift port-forward svc/nightshiftd 7777:7777 &
+export NIGHTSHIFT_API=http://127.0.0.1:7777
+export NIGHTSHIFT_TOKEN=$(kubectl -n nightshift get secret nightshiftd-token \
+  -o jsonpath='{.data.token}' | base64 -d)
 
 # Any client: list the fleet.
-curl -H "Authorization: Bearer $(cat ~/.nightshift/token)" \
-  http://127.0.0.1:7777/v1/fleet
+curl -H "Authorization: Bearer $NIGHTSHIFT_TOKEN" "$NIGHTSHIFT_API/v1/fleet"
 
-# The terminal UI against a remote server.
-NIGHTSHIFT_API=https://nightshift.example.com NIGHTSHIFT_TOKEN=... nightshift
+# The terminal UI, a client of the same server.
+nightshift
 ```

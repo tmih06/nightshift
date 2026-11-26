@@ -1,10 +1,9 @@
 // Command nightshift is the software factory's terminal: a Pods tab to watch
 // and drive the agent-sandbox fleet, a GitHub tab that is gh-dash, and an
 // Accounts tab. It is a frontend of the Nightshift services and talks to them
-// only through their API (docs/api.md): given -api, or NIGHTSHIFT_API and
-// NIGHTSHIFT_TOKEN, it uses that server; given neither, it runs the services
-// inside itself, on a private loopback port, against the cluster kubectl
-// points at.
+// only through their API (docs/api.md), at the server named by -api, or by
+// NIGHTSHIFT_API and NIGHTSHIFT_TOKEN. The services run in the cluster as the
+// nightshiftd pod; nothing runs on the machine but this terminal.
 //
 // go run ./cmd/nightshift opens the TUI; -once prints one sandbox frame;
 // -pr owner/repo#123 (or a pull request URL) opens on that pull request;
@@ -20,7 +19,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/log/v2"
@@ -32,7 +30,6 @@ import (
 	"github.com/tmih06/nightshift/internal/ghdash/git"
 	ghtui "github.com/tmih06/nightshift/internal/ghdash/tui"
 	ghtheme "github.com/tmih06/nightshift/internal/ghdash/tui/theme"
-	"github.com/tmih06/nightshift/internal/services/daemon"
 	"github.com/tmih06/nightshift/internal/tui/app"
 	zgh "github.com/tmih06/nightshift/internal/zenocto/gh"
 )
@@ -51,7 +48,7 @@ func parseOptions(args []string) (options, error) {
 	fs.BoolVar(&o.once, "once", false, "print one frame of the Pods tab and exit")
 	fs.StringVar(&o.openPR, "pr", "", "open on a pull request: owner/repo#123 or its URL")
 	fs.BoolVar(&o.startRepos, "repos", false, "open on the GitHub Repo view")
-	fs.StringVar(&o.api, "api", os.Getenv("NIGHTSHIFT_API"), "address of a Nightshift services server; empty runs the services inside this program")
+	fs.StringVar(&o.api, "api", os.Getenv("NIGHTSHIFT_API"), "address of the Nightshift services server (nightshiftd), e.g. https://nightshift.example.com")
 	fs.StringVar(&o.token, "token", os.Getenv("NIGHTSHIFT_TOKEN"), "bearer token for -api")
 	if err := fs.Parse(args); err != nil {
 		return o, fmt.Errorf("arguments: %w", err)
@@ -70,36 +67,21 @@ func main() {
 	}
 }
 
-// connect is the services client: the server o names, or the services started
-// in this process. stop ends what connect started.
-func connect(o options) (c *client.Client, stop func(), err error) {
-	if o.api != "" {
-		if o.token == "" {
-			return nil, nil, errors.New("-api needs a token: pass -token or set NIGHTSHIFT_TOKEN")
-		}
-		c, err = client.New(o.api, o.token)
-		if err != nil {
-			return nil, nil, fmt.Errorf("connect: %w", err)
-		}
-		return c, func() {}, nil
+// connect is the services client for the server o names. The services never
+// run inside this program: they run in the cluster (k8s/nightshiftd.yaml).
+func connect(o options) (*client.Client, error) {
+	if o.api == "" {
+		return nil, errors.New("no services server: pass -api, or set NIGHTSHIFT_API and NIGHTSHIFT_TOKEN " +
+			"(deploy one with k8s/nightshiftd-setup.sh; docs/api.md says how to reach it)")
 	}
-	d, err := daemon.Start(daemon.Config{Listen: "127.0.0.1:0", Version: "embedded"})
+	if o.token == "" {
+		return nil, errors.New("-api needs a token: pass -token or set NIGHTSHIFT_TOKEN")
+	}
+	c, err := client.New(o.api, o.token)
 	if err != nil {
-		return nil, nil, fmt.Errorf("connect: %w", err)
+		return nil, fmt.Errorf("connect: %w", err)
 	}
-	stop = func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := d.Close(ctx); err != nil {
-			log.Debug("stop the services", "err", err)
-		}
-	}
-	c, err = client.New(d.URL(), d.Token())
-	if err != nil {
-		stop()
-		return nil, nil, fmt.Errorf("connect: %w", err)
-	}
-	return c, stop, nil
+	return c, nil
 }
 
 // logTo points the program's log at the NIGHTSHIFT_DEBUG file, or nowhere:
@@ -141,11 +123,10 @@ func run(o options) error {
 	}
 	defer closeLog()
 
-	svc, stop, err := connect(o)
+	svc, err := connect(o)
 	if err != nil {
 		return err
 	}
-	defer stop()
 	if o.once {
 		if _, err := fmt.Fprintln(os.Stdout, app.Once(120, 32, svc)); err != nil {
 			return fmt.Errorf("print the frame: %w", err)

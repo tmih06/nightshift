@@ -123,6 +123,23 @@ func TestFrontendsReachTheServicesOnlyThroughTheirAPI(t *testing.T) {
 	}
 }
 
+// The terminal program is a client of a server somewhere else. It must not
+// carry the services inside itself, or "nothing runs here but the terminal"
+// stops being true.
+func TestTheTerminalProgramCarriesNoServices(t *testing.T) {
+	root := repoRoot(t)
+	code, tests := imports(t, root, "cmd/nightshift")
+	for _, set := range []map[string][]string{code, tests} {
+		for file, imps := range set {
+			for _, imp := range imps {
+				if under(imp, "internal/services") {
+					t.Errorf("%s imports %s. The terminal talks to nightshiftd through api/client.", file, imp)
+				}
+			}
+		}
+	}
+}
+
 func TestTheServicesKnowNothingOfAnyFrontend(t *testing.T) {
 	root := repoRoot(t)
 	code, tests := imports(t, root, "internal/services")
