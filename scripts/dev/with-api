@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# with-api — run a frontend command with the Nightshift API reachable.
+#
+# Sets NIGHTSHIFT_API and NIGHTSHIFT_TOKEN for the command. If nothing answers
+# on the local port, it port-forwards nightshiftd there until the command ends.
+# An NIGHTSHIFT_API you already set is used as it is, with your own token.
+#
+# Usage:  scripts/dev/with-api COMMAND [ARG...]
+# Env:    NIGHTSHIFT_CONTEXT  kubeconfig context (default kind-agent-sandbox)
+#         PORT                local port (default 7777)
+set -euo pipefail
+
+[ $# -gt 0 ] || { echo "usage: with-api COMMAND [ARG...]" >&2; exit 2; }
+if [ -n "${NIGHTSHIFT_API:-}" ]; then
+  exec "$@"
+fi
+
+CONTEXT="${NIGHTSHIFT_CONTEXT:-kind-agent-sandbox}"
+PORT="${PORT:-7777}"
+url="http://127.0.0.1:${PORT}"
+k() { kubectl --context "${CONTEXT}" -n nightshift "$@"; }
+healthy() { curl -fsS -m 2 "${url}/v1/healthz" >/dev/null 2>&1; }
+
+token="$(k get secret nightshiftd-token -o jsonpath='{.data.token}' | base64 -d)"
+[ -n "${token}" ] || { echo "no API token in ${CONTEXT}; run: make up" >&2; exit 1; }
+
+if ! healthy; then
+  log="$(mktemp)"
+  # kubectl itself, not k(): $! of a function is a subshell, and killing that
+  # would leave the forward running.
+  kubectl --context "${CONTEXT}" -n nightshift port-forward svc/nightshiftd \
+    "${PORT}:7777" </dev/null >"${log}" 2>&1 &
+  forward=$!
+  trap 'kill "${forward}" 2>/dev/null || true; rm -f "${log}"' EXIT
+  for _ in $(seq 50); do
+    healthy && break
+    kill -0 "${forward}" 2>/dev/null || break
+    sleep 0.2
+  done
+  if ! healthy; then
+    echo "cannot reach nightshiftd in ${CONTEXT} on port ${PORT}:" >&2
+    cat "${log}" >&2
+    exit 1
+  fi
+fi
+
+NIGHTSHIFT_API="${url}" NIGHTSHIFT_TOKEN="${token}" "$@"

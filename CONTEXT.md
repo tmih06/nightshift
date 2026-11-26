@@ -263,6 +263,28 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
 - Herdr (`hc`) runs inside each claimed sandbox, not on the host. See
   `docs/session-manager.md`.
 
+## Running it
+
+`make` lists every command.
+
+- `make tui` opens the dashboard. `scripts/dev/with-api` reads the token and,
+  if nothing answers on `PORT` (7777), port-forwards the API until the
+  dashboard closes. `make once` prints one frame the same way. Pass flags in
+  `ARGS`, as in `make tui ARGS=-repos`.
+- `make redeploy` rebuilds the egress, refresher, and services images from
+  the checkout, loads them into kind, and restarts them. It leaves secrets,
+  replica counts, and warm pools alone, and applies only
+  `k8s/nightshiftd.yaml`.
+- `make up` installs or updates everything after the kind cluster and the
+  agent-sandbox controller exist. It runs the three setup scripts and applies
+  `k8s/warmpool.yaml`, so it copies API keys from your environment into the
+  egress proxy, starts the credential refresher, and resets warm pool sizes.
+  Use it for a first install or when those manifests change.
+- `make status`, `make logs`, and `make forward` show the fleet, follow the
+  services' log, and keep the API forwarded for another frontend.
+- `CONTEXT` picks the cluster; it defaults to `NIGHTSHIFT_CONTEXT`, then
+  `kind-agent-sandbox`.
+
 ## Go toolchain
 
 The module is pinned to `go 1.27.4`. The `go` command downloads that
