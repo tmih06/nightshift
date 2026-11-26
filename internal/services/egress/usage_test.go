@@ -15,14 +15,14 @@ func TestUsageCountsByStatusAndWindow(t *testing.T) {
 	u := newUsageStore()
 	u.now = func() time.Time { return now }
 	for _, status := range []int{200, 200, 404, 429, 503} {
-		u.record("CLAUDE_ACCESS_TOKEN", "a@example.com", status)
+		u.record(t.Context(), "CLAUDE_ACCESS_TOKEN", "a@example.com", status)
 	}
 	now = now.Add(25 * time.Minute)
-	u.record("CLAUDE_ACCESS_TOKEN", "a@example.com", 200)
-	u.record("CLAUDE_ACCESS_TOKEN", "b@example.com", 200)
+	u.record(t.Context(), "CLAUDE_ACCESS_TOKEN", "a@example.com", 200)
+	u.record(t.Context(), "CLAUDE_ACCESS_TOKEN", "b@example.com", 200)
 
 	got := map[string]AccountUsage{}
-	for _, s := range u.snapshot() {
+	for _, s := range u.snapshot(t.Context()) {
 		got[s.Label] = s
 	}
 	a := got["a@example.com"]
@@ -41,8 +41,8 @@ func TestUsageCountsByStatusAndWindow(t *testing.T) {
 
 	// Windows older than a day fall off.
 	now = now.Add(25 * time.Hour)
-	u.record("CLAUDE_ACCESS_TOKEN", "a@example.com", 200)
-	for _, s := range u.snapshot() {
+	u.record(t.Context(), "CLAUDE_ACCESS_TOKEN", "a@example.com", 200)
+	for _, s := range u.snapshot(t.Context()) {
 		if s.Label != "a@example.com" {
 			continue
 		}
@@ -77,18 +77,18 @@ func TestProxyUsageFollowsTheAccountLabel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.record(AuditEvent{Action: "ALLOW", Status: 200, SecretsInjected: []string{"TOKEN"}})
-	p.record(AuditEvent{Action: "DENY", Status: 403, SecretsInjected: []string{"TOKEN"}})
+	p.record(t.Context(), AuditEvent{Action: "ALLOW", Status: 200, SecretsInjected: []string{"TOKEN"}})
+	p.record(t.Context(), AuditEvent{Action: "DENY", Status: 403, SecretsInjected: []string{"TOKEN"}})
 
 	write(token, "real-2")
 	write(label, "second@example.com")
 	if changed, err := p.ReloadSecrets(); err != nil || !changed {
 		t.Fatalf("reload after switching account = (%v, %v)", changed, err)
 	}
-	p.record(AuditEvent{Action: "ALLOW", Status: 429, SecretsInjected: []string{"TOKEN"}})
+	p.record(t.Context(), AuditEvent{Action: "ALLOW", Status: 429, SecretsInjected: []string{"TOKEN"}})
 
 	counts := map[string]int{}
-	for _, s := range p.Usage() {
+	for _, s := range p.Usage(t.Context()) {
 		counts[s.Label] += s.Requests
 	}
 	if counts["first@example.com"] != 1 || counts["second@example.com"] != 1 || len(counts) != 2 {

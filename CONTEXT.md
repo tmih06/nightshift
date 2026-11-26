@@ -31,7 +31,8 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
   a symlink in `~/.local/bin`. `egress.yaml` and `egress-setup.sh` deploy the
   single-pod Go egress + credential-injection proxy in the separate
   `nightshift-egress` namespace with default-deny `NetworkPolicy` enforcement.
-  The proxy keeps a year of daily usage on the `egress-usage` volume.
+  The proxy records all usage in a SQLite database on the `egress-usage`
+  volume.
   `creds-providers.json` lists the agents whose logins reach sandboxes;
   `creds-publish.sh` reads each master login, `creds-stage.sh` swaps its
   access token for a placeholder, and the real tokens go into the egress
@@ -277,8 +278,8 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
   `ARGS`, as in `make tui ARGS=-repos`.
 - `make redeploy` rebuilds the egress, refresher, and services images from
   the checkout, loads them into kind, and restarts them. It leaves secrets,
-  replica counts, and warm pools alone, and applies only
-  `k8s/nightshiftd.yaml`.
+  replica counts, and warm pools alone, and applies
+  `k8s/egress.yaml` and `k8s/nightshiftd.yaml`.
 - `make up` installs or updates everything after the kind cluster and the
   agent-sandbox controller exist. It runs the three setup scripts and applies
   `k8s/warmpool.yaml`, so it copies API keys from your environment into the

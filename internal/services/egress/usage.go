@@ -1,6 +1,9 @@
 package egress
 
 import (
+	"context"
+	"database/sql"
+	"log"
 	"math"
 	"sort"
 	"sync"
@@ -24,7 +27,7 @@ type ModelUsage struct {
 }
 
 // AccountUsage counts requests, latency, and token metrics that carried one
-// secret for one account. Counts live in memory and start over on restart.
+// secret for one account. Production counts are durable in SQLite.
 type AccountUsage struct {
 	Binding         string                `json:"binding"` // the secret binding's name
 	Label           string                `json:"label"`
@@ -85,25 +88,66 @@ type usageStore struct {
 	mu  sync.Mutex
 	now func() time.Time
 	m   map[usageKey]*usageSeries
-	// days is the daily history, kept apart from m because it can be saved
-	// and restored across restarts.
-	days    map[usageKey]map[string]DayUsage
-	unsaved bool
+	// days is the in-memory daily history used by tests. A persistent store
+	// keeps days in SQLite instead.
+	days     map[usageKey]map[string]DayUsage
+	db       *sql.DB
+	errMu    sync.Mutex
+	writeErr error
+	readErr  error
 }
 
 func newUsageStore() *usageStore {
 	return &usageStore{now: time.Now, m: map[usageKey]*usageSeries{}, days: map[usageKey]map[string]DayUsage{}}
 }
 
+func (u *usageStore) setWriteError(err error) {
+	u.errMu.Lock()
+	u.writeErr = err
+	u.errMu.Unlock()
+}
+
+func (u *usageStore) setReadError(err error) {
+	u.errMu.Lock()
+	u.readErr = err
+	u.errMu.Unlock()
+}
+
+// UsageError reports whether the durable usage store is degraded.
+func (p *Proxy) UsageError() error {
+	p.usage.errMu.Lock()
+	defer p.usage.errMu.Unlock()
+	if p.usage.writeErr != nil {
+		return p.usage.writeErr
+	}
+	return p.usage.readErr
+}
+
 func (u *usageStore) window(t time.Time) int64 { return t.Unix() / int64(usageBucket.Seconds()) }
 
 // record counts one request that carried secret, tagged with its account label.
-func (u *usageStore) record(secret, label string, status int) {
-	u.recordDetailed(secret, label, status, 0, TokenMetrics{})
+func (u *usageStore) record(ctx context.Context, secret, label string, status int) {
+	u.recordDetailed(ctx, secret, label, usageObservation{status: status})
+}
+
+// usageObservation is the measurable result of one upstream attempt.
+type usageObservation struct {
+	status    int
+	latencyMS int64
+	tokens    TokenMetrics
 }
 
 // recordDetailed counts one request along with latency and token telemetry.
-func (u *usageStore) recordDetailed(secret, label string, status int, latencyMS int64, tok TokenMetrics) {
+func (u *usageStore) recordDetailed(ctx context.Context, secret, label string, obs usageObservation) {
+	if u.db != nil {
+		if err := u.insertEvent(ctx, secret, label, obs); err != nil {
+			log.Printf("egress usage database: %v", err)
+			u.setWriteError(err)
+		} else {
+			u.setWriteError(nil)
+		}
+		return
+	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	k := usageKey{secret, label}
@@ -117,33 +161,28 @@ func (u *usageStore) recordDetailed(secret, label string, status int, latencyMS 
 		u.m[k] = s
 	}
 	now := u.now()
-	u.addDay(k, now, tok.Total)
+	u.addDay(k, now, obs.tokens.Total)
 	s.Requests++
 	s.LastRequest = now.UTC()
-	if latencyMS > 0 {
-		s.totalLatencyMS += latencyMS
+	if obs.latencyMS > 0 {
+		s.totalLatencyMS += obs.latencyMS
 	}
-	recordStatus(&s.AccountUsage, status)
-	recordTokens(s, tok)
+	recordStatus(&s.AccountUsage, obs.status)
+	recordTokens(s, obs.tokens)
 	w := u.window(now)
 	s.windows[w]++
-	if tok.Total > 0 {
-		s.tokenWindows[w] += tok.Total
+	if obs.tokens.Total > 0 {
+		s.tokenWindows[w] += obs.tokens.Total
 	}
 	pruneOldWindows(s, w)
 }
 
 func recordStatus(a *AccountUsage, status int) {
-	switch {
-	case status == 429:
-		a.RateLimited++
-	case status >= 500:
-		a.ServerError++
-	case status >= 400:
-		a.ClientError++
-	default:
-		a.OK++
-	}
+	ok, clientError, rateLimited, serverError := statusDeltas(status)
+	a.OK += int(ok)
+	a.ClientError += int(clientError)
+	a.RateLimited += int(rateLimited)
+	a.ServerError += int(serverError)
 }
 
 func recordTokens(s *usageSeries, tok TokenMetrics) {
@@ -195,7 +234,10 @@ func cacheHitPercent(input, cacheRead, cacheWrite int64) float64 {
 }
 
 // snapshot returns every series, most recently used first.
-func (u *usageStore) snapshot() []AccountUsage {
+func (u *usageStore) snapshot(ctx context.Context) []AccountUsage {
+	if u.db != nil {
+		return u.snapshotDB(ctx)
+	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	now := u.window(u.now())
@@ -237,11 +279,11 @@ func buildUsageSnapshot(s *usageSeries, nowWindow int64) AccountUsage {
 }
 
 // Usage reports, per secret and account, how many requests and tokens carried it.
-func (p *Proxy) Usage() []AccountUsage { return p.usage.snapshot() }
+func (p *Proxy) Usage(ctx context.Context) []AccountUsage { return p.usage.snapshot(ctx) }
 
 // Analytics reports fleet-wide request, token, model, and quota analytics.
-func (p *Proxy) Analytics() AnalyticsSnapshot {
-	accounts := p.usage.snapshot()
+func (p *Proxy) Analytics(ctx context.Context) AnalyticsSnapshot {
+	accounts := p.usage.snapshot(ctx)
 	quotas := p.Quota()
 	out := AnalyticsSnapshot{
 		GeneratedAt: p.pool.now().UTC(),

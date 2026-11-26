@@ -37,6 +37,7 @@ images: # Builds the local service images and loads them into kind.
 
 # Leaves secrets, replica counts, and warm pools as they are.
 redeploy: images ## Rebuild from this checkout and restart (kind only)
+	$(KUBECTL) apply -f k8s/egress.yaml
 	$(KUBECTL) -n nightshift-egress rollout restart deploy/egress-proxy
 	$(KUBECTL) -n nightshift-egress rollout status deploy/egress-proxy --timeout=120s
 	$(KUBECTL) -n nightshift rollout restart deploy/creds-refresher

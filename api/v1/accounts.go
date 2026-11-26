@@ -75,11 +75,11 @@ type Account struct {
 	Cooldowns     int    `json:"cooldowns,omitempty"`
 
 	// Usage is what the egress proxy counted for this account; absent when it
-	// has carried no request since the proxy last started.
+	// has carried no recorded request.
 	Usage *AccountUsage `json:"usage,omitempty"`
 	// History is the account's daily usage for up to the last 53 weeks, oldest
-	// day first, without the days that saw no request. Unlike Usage it survives
-	// a restart of the egress proxy.
+	// day first, without the days that saw no request. Both Usage and History
+	// survive a restart of the egress proxy.
 	History []DayUsage `json:"history,omitempty"`
 	// Quota holds the latest fetched or header-observed provider quota windows
 	// and next reset times for this account.
@@ -98,7 +98,8 @@ type ModelUsage struct {
 }
 
 // AccountUsage is the egress proxy's count of requests and tokens that carried
-// one account's credential. It lives in proxy memory and resets on restart.
+// one account's credential. In the cluster it is stored in SQLite and survives
+// proxy restarts.
 type AccountUsage struct {
 	Requests        int                   `json:"requests"`
 	OK              int                   `json:"ok"`
@@ -135,6 +136,7 @@ type DayUsage struct {
 type QuotaWindow struct {
 	Name          string    `json:"name"`
 	Label         string    `json:"label"`
+	Group         string    `json:"group,omitempty"`
 	UsedPercent   float64   `json:"usedPercent"`
 	Limit         int64     `json:"limit,omitempty"`
 	Used          int64     `json:"used,omitempty"`

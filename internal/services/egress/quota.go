@@ -2,13 +2,17 @@ package egress
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math"
 	"net/http"
+	"runtime"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -16,16 +20,22 @@ import (
 const (
 	claudeUsageURL      = "https://api.anthropic.com/api/oauth/usage"
 	codexUsageURL       = "https://chatgpt.com/backend-api/wham/usage"
-	antigravityUsageURL = "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
-	antigravityUA       = "antigravity/1.15.8 linux/amd64"
+	antigravityLoadURL  = "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
+	antigravityUsageURL = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
 	quotaFetchTimeout   = 15 * time.Second
 	quotaMaxConcurrent  = 4
 )
+
+// antigravityUA is the User-Agent agy 1.5.18 sends on this architecture.
+func antigravityUA() string {
+	return "antigravity/cli/1.5.18 (aidev_client; os_type=" + runtime.GOOS + "; arch=" + runtime.GOARCH + "; cl=1030252320; auth_method=consumer)"
+}
 
 // QuotaWindow is one normalized provider quota window (5h, 7d, RPM/TPM, or model).
 type QuotaWindow struct {
 	Name          string    `json:"name"`
 	Label         string    `json:"label"`
+	Group         string    `json:"group,omitempty"`
 	UsedPercent   float64   `json:"used_percent"`
 	Limit         int64     `json:"limit,omitempty"`
 	Used          int64     `json:"used,omitempty"`
@@ -51,9 +61,10 @@ type AccountQuota struct {
 
 // QuotaEndpoints overrides provider quota URLs (used in tests).
 type QuotaEndpoints struct {
-	Claude      string
-	Codex       string
-	Antigravity string
+	Claude          string
+	Codex           string
+	Antigravity     string
+	AntigravityLoad string
 }
 
 func (q QuotaEndpoints) withDefaults() QuotaEndpoints {
@@ -65,6 +76,9 @@ func (q QuotaEndpoints) withDefaults() QuotaEndpoints {
 	}
 	if q.Antigravity == "" {
 		q.Antigravity = antigravityUsageURL
+	}
+	if q.AntigravityLoad == "" {
+		q.AntigravityLoad = antigravityLoadURL
 	}
 	return q
 }
@@ -400,53 +414,171 @@ func parseCodexQuotaJSON(now time.Time, raw []byte, out *AccountQuota) error {
 	return nil
 }
 
-func (qs *quotaStore) fetchAntigravity(ctx context.Context, acct resolvedAccount, out *AccountQuota) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, qs.endpoints.Antigravity, bytes.NewReader([]byte("{}")))
+func (qs *quotaStore) postAntigravity(ctx context.Context, endpoint string, body any, token, what string) ([]byte, error) {
+	rawBody, err := json.Marshal(body)
 	if err != nil {
-		return fmt.Errorf("build antigravity quota request: %w", err)
+		return nil, fmt.Errorf("encode antigravity %s request: %w", what, err)
 	}
-	req.Header.Set("Authorization", "Bearer "+acct.value)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(rawBody))
+	if err != nil {
+		return nil, fmt.Errorf("build antigravity %s request: %w", what, err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", antigravityUA)
-	raw, err := qs.doJSON(req)
+	req.Header.Set("User-Agent", antigravityUA())
+	return qs.doJSON(req)
+}
+
+// fetchAntigravityProject asks Code Assist which project serves the account,
+// as agy does before reading /usage. Consumer accounts are served under
+// aicode-consumers when the answer names no project.
+func (qs *quotaStore) fetchAntigravityProject(ctx context.Context, acct resolvedAccount) (project, plan string, err error) {
+	raw, err := qs.postAntigravity(ctx, qs.endpoints.AntigravityLoad, map[string]any{
+		"metadata": map[string]string{"ideType": "ANTIGRAVITY"},
+	}, acct.value, "load")
+	if err != nil {
+		return "", "", err
+	}
+	var body struct {
+		Project     json.RawMessage        `json:"cloudaicompanionProject"`
+		PaidTier    *struct{ Name string } `json:"paidTier"`
+		CurrentTier *struct{ Name string } `json:"currentTier"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return "", "", fmt.Errorf("parse antigravity load: %w", err)
+	}
+	project = antigravityProjectID(body.Project)
+
+	if body.PaidTier != nil && body.PaidTier.Name != "" {
+		plan = body.PaidTier.Name
+	} else if body.CurrentTier != nil {
+		plan = body.CurrentTier.Name
+	}
+	return project, plan, nil
+}
+
+func antigravityProjectID(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var id string
+	if err := json.Unmarshal(raw, &id); err == nil {
+		return id
+	}
+	var obj struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(raw, &obj); err == nil {
+		return obj.ID
+	}
+	return ""
+}
+
+func (qs *quotaStore) fetchAntigravity(ctx context.Context, acct resolvedAccount, out *AccountQuota) error {
+	project, plan, err := qs.fetchAntigravityProject(ctx, acct)
+	if err != nil {
+		return fmt.Errorf("load antigravity project: %w", err)
+	}
+	if plan != "" {
+		out.Plan = plan
+	}
+	payload := map[string]string{}
+	if project != "" {
+		payload["project"] = project
+	}
+	raw, err := qs.postAntigravity(ctx, qs.endpoints.Antigravity, payload, acct.value, "quota")
 	if err != nil {
 		return err
 	}
 	return parseAntigravityQuotaJSON(qs.now().UTC(), raw, out)
 }
 
+type antigravityQuotaBucket struct {
+	BucketID          string          `json:"bucketId"`
+	DisplayName       string          `json:"displayName"`
+	Window            string          `json:"window"`
+	ResetTime         string          `json:"resetTime"`
+	Disabled          bool            `json:"disabled"`
+	RemainingFraction *float64        `json:"remainingFraction"`
+	RemainingAmount   json.RawMessage `json:"remainingAmount"`
+}
+
 func parseAntigravityQuotaJSON(now time.Time, raw []byte, out *AccountQuota) error {
 	var body struct {
-		Models map[string]struct {
-			DisplayName string `json:"displayName"`
-			QuotaInfo   *struct {
-				RemainingFraction *float64 `json:"remainingFraction"`
-				ResetTime         string   `json:"resetTime"`
-			} `json:"quotaInfo"`
-		} `json:"models"`
+		Groups []struct {
+			DisplayName string                   `json:"displayName"`
+			Buckets     []antigravityQuotaBucket `json:"buckets"`
+		} `json:"groups"`
+		Buckets []antigravityQuotaBucket `json:"buckets"`
 	}
 	if err := json.Unmarshal(raw, &body); err != nil {
 		return fmt.Errorf("parse antigravity quota: %w", err)
 	}
-	for k, m := range body.Models {
-		if m.DisplayName == "" || m.QuotaInfo == nil || m.QuotaInfo.RemainingFraction == nil {
-			continue
+	for _, g := range body.Groups {
+		for _, b := range g.Buckets {
+			addAntigravityBucket(now, out, g.DisplayName, b)
 		}
-		used := clampPercent((1.0 - *m.QuotaInfo.RemainingFraction) * 100)
-		out.Windows = append(out.Windows, QuotaWindow{
-			Name:        k,
-			Label:       m.DisplayName,
-			UsedPercent: math.Round(used*10) / 10,
-			ResetsAt:    parseResetTime(now, m.QuotaInfo.ResetTime),
-		})
 	}
-	sort.Slice(out.Windows, func(i, j int) bool {
-		if out.Windows[i].UsedPercent != out.Windows[j].UsedPercent {
-			return out.Windows[i].UsedPercent > out.Windows[j].UsedPercent
-		}
-		return out.Windows[i].Label < out.Windows[j].Label
-	})
+	for _, b := range body.Buckets {
+		addAntigravityBucket(now, out, "", b)
+	}
 	return nil
+}
+
+func addAntigravityBucket(now time.Time, out *AccountQuota, group string, b antigravityQuotaBucket) {
+	if b.BucketID == "" || b.Disabled {
+		return
+	}
+	w := QuotaWindow{
+		Name:          b.BucketID,
+		Label:         cmp.Or(b.DisplayName, b.BucketID),
+		Group:         group,
+		ResetsAt:      parseResetTime(now, b.ResetTime),
+		WindowMinutes: antigravityWindowMinutes(b.Window, b.BucketID, b.DisplayName),
+	}
+	amount, hasAmount := antigravityRemainingAmount(b.RemainingAmount)
+	switch {
+	case b.RemainingFraction != nil:
+		w.UsedPercent = math.Round(clampPercent((1.0-*b.RemainingFraction)*100)*10) / 10
+	case hasAmount:
+		w.Remaining = amount
+		w.Status = "amount"
+	case b.ResetTime != "":
+		// Proto3 JSON omits a zero fraction, so a reset with no fraction is exhausted.
+		w.UsedPercent = 100
+	default:
+		w.Status = "unknown"
+	}
+	out.Windows = append(out.Windows, w)
+}
+
+func antigravityRemainingAmount(raw json.RawMessage) (int64, bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return 0, false
+	}
+	var n int64
+	if err := json.Unmarshal(raw, &n); err == nil {
+		return n, true
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		if v, err := strconv.ParseInt(text, 10, 64); err == nil {
+			return v, true
+		}
+	}
+	return 0, false
+}
+
+func antigravityWindowMinutes(window, id, label string) int {
+	s := strings.ToLower(window + " " + id + " " + label)
+	switch {
+	case strings.Contains(s, "5h"), strings.Contains(s, "five hour"), strings.Contains(s, "five-hour"):
+		return 300
+	case strings.Contains(s, "weekly"), strings.Contains(s, "week"), strings.Contains(s, "7d"):
+		return 10080
+	default:
+		return 0
+	}
 }
 
 func (qs *quotaStore) doJSON(req *http.Request) ([]byte, error) {

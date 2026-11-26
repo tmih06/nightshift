@@ -97,10 +97,10 @@ type Account struct {
 	CooldownReason string
 	Failovers      int
 	// Usage is what the egress proxy counted for this account; nil when it
-	// has not carried a request since the proxy last started.
+	// has not carried a recorded request.
 	Usage *Usage
 	// History is the account's daily usage, oldest day first, which the proxy
-	// keeps across restarts.
+	// derives from its durable usage database.
 	History []DayUsage
 	// Quota holds the latest fetched or header-observed provider quota windows
 	// and next reset time for this account.
@@ -143,7 +143,8 @@ type ModelUsage struct {
 }
 
 // Usage is the egress proxy's count of requests and tokens that carried one
-// account's credential. It lives in proxy memory and resets on restart.
+// account's credential. In the cluster it is stored in SQLite and survives
+// proxy restarts.
 type Usage struct {
 	Requests        int
 	OK              int
@@ -179,6 +180,7 @@ type DayUsage struct {
 type QuotaWindow struct {
 	Name          string
 	Label         string
+	Group         string
 	UsedPercent   float64
 	Limit         int64
 	Used          int64

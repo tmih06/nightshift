@@ -131,8 +131,8 @@ data:
   GITHUB_TOKEN: nightshift:secret:GITHUB_TOKEN
   CLAUDE_CODE_OAUTH_TOKEN: nightshift:secret:CLAUDE_ACCESS_TOKEN
 ---
-# Daily usage per account, behind the Accounts tab's calendar. The proxy counts
-# everything else in memory.
+# SQLite usage database behind the Accounts tab. Cooldowns and the quota
+# cache stay in memory.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -183,6 +183,8 @@ spec:
         - name: admin
           containerPort: 9090
         env:
+        - name: EGRESS_USAGE_DB
+          value: /var/lib/egress/usage.db
         - name: EGRESS_USAGE_HISTORY
           value: /var/lib/egress/usage-history.json
         envFrom:

@@ -135,7 +135,7 @@ func quotaOf(q *accounts.Quota) *v1.AccountQuota {
 		out.Windows = make([]v1.QuotaWindow, len(q.Windows))
 		for i, w := range q.Windows {
 			out.Windows[i] = v1.QuotaWindow{
-				Name: w.Name, Label: w.Label, UsedPercent: w.UsedPercent,
+				Name: w.Name, Label: w.Label, Group: w.Group, UsedPercent: w.UsedPercent,
 				Limit: w.Limit, Used: w.Used, Remaining: w.Remaining,
 				ResetsAt: w.ResetsAt.UTC(), WindowMinutes: w.WindowMinutes, Status: w.Status,
 			}

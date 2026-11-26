@@ -95,7 +95,7 @@ func TestExtractHeaderQuotaParsesAnthropicAndCodexHeaders(t *testing.T) {
 
 func TestActiveQuotaFetcherFetchesAllThreeProviders(t *testing.T) {
 	now := time.Date(2026, 11, 26, 2, 0, 0, 0, time.UTC)
-	var gotCodexAcctID, gotAgyUA string
+	var gotCodexAcctID, gotAgyUA, gotAgyProject string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/claude":
@@ -113,9 +113,21 @@ func TestActiveQuotaFetcherFetchesAllThreeProviders(t *testing.T) {
 			if err != nil {
 				t.Errorf("write codex: %v", err)
 			}
+		case "/agy-load":
+			_, err := io.WriteString(w, `{"cloudaicompanionProject":"project-42","paidTier":{"name":"Google AI Pro"},"currentTier":{"name":"Antigravity"}}`)
+			if err != nil {
+				t.Errorf("write agy load: %v", err)
+			}
 		case "/agy":
 			gotAgyUA = r.Header.Get("User-Agent")
-			_, err := io.WriteString(w, `{"models":{"chat_23310":{"quotaInfo":{"remainingFraction":1}},"gemini-2.5-pro":{"displayName":"Gemini 2.5 Pro","quotaInfo":{"remainingFraction":0.75,"resetTime":"2026-11-26T06:00:00Z"}}}}`)
+			var body struct {
+				Project string `json:"project"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode agy request: %v", err)
+			}
+			gotAgyProject = body.Project
+			_, err := io.WriteString(w, `{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-weekly","displayName":"Weekly Limit Remaining","window":"weekly","remainingFraction":0.75,"resetTime":"2026-12-03T07:03:48Z"},{"bucketId":"gemini-5h","displayName":"Five Hour Limit Remaining","window":"5h","remainingFraction":0.25,"resetTime":"2026-11-26T06:00:00Z"},{"bucketId":"gemini-empty","displayName":"Five Hour Limit Remaining","window":"5h","resetTime":"2026-11-26T08:00:00Z"},{"bucketId":"gemini-unknown","displayName":"Five Hour Limit Remaining","window":"5h"},{"bucketId":"credits","displayName":"Credits","window":"weekly","remainingAmount":"1500","resetTime":"2026-12-01T00:00:00Z"},{"bucketId":"gemini-disabled","displayName":"Five Hour Limit Remaining","window":"5h","disabled":true,"remainingFraction":0.9,"resetTime":"2026-11-26T09:00:00Z"}]},{"displayName":"Claude and GPT models","buckets":[{"bucketId":"3p-weekly","displayName":"Weekly Limit Remaining","window":"weekly","remainingFraction":0.5,"resetTime":"2026-12-02T15:55:37Z"},{"bucketId":"3p-5h","displayName":"Five Hour Limit Remaining","window":"5h","remainingFraction":1,"resetTime":"2026-11-26T07:00:00Z"}]}]}`)
 			if err != nil {
 				t.Errorf("write agy: %v", err)
 			}
@@ -145,9 +157,10 @@ func TestActiveQuotaFetcherFetchesAllThreeProviders(t *testing.T) {
 		SkipAutoCA: true,
 		Now:        func() time.Time { return now },
 		QuotaEndpoints: QuotaEndpoints{
-			Claude:      srv.URL + "/claude",
-			Codex:       srv.URL + "/codex",
-			Antigravity: srv.URL + "/agy",
+			Claude:          srv.URL + "/claude",
+			Codex:           srv.URL + "/codex",
+			Antigravity:     srv.URL + "/agy",
+			AntigravityLoad: srv.URL + "/agy-load",
 		},
 	})
 	if err != nil {
@@ -172,6 +185,9 @@ func TestActiveQuotaFetcherFetchesAllThreeProviders(t *testing.T) {
 	if !strings.HasPrefix(gotAgyUA, "antigravity/") {
 		t.Errorf("Antigravity User-Agent = %q, want antigravity/ prefix", gotAgyUA)
 	}
+	if gotAgyProject != "project-42" {
+		t.Errorf("Antigravity quota project = %q, want the loadCodeAssist project", gotAgyProject)
+	}
 
 	byBinding := map[string]AccountQuota{}
 	for _, q := range quotas {
@@ -186,8 +202,54 @@ func TestActiveQuotaFetcherFetchesAllThreeProviders(t *testing.T) {
 		t.Errorf("codex quota = %+v", cx)
 	}
 	ag := byBinding["AGY_ACCESS_TOKEN"]
-	if len(ag.Windows) != 1 || ag.Windows[0].UsedPercent != 25 || ag.NextResetAt.Hour() != 6 {
-		t.Errorf("agy quota = %+v", ag)
+	if ag.Plan != "Google AI Pro" || len(ag.Windows) != 7 {
+		t.Fatalf("agy quota = %+v", ag)
+	}
+	for i, want := range []QuotaWindow{
+		{Name: "gemini-weekly", Label: "Weekly Limit Remaining", Group: "Gemini Models", UsedPercent: 25, WindowMinutes: 10080},
+		{Name: "gemini-5h", Label: "Five Hour Limit Remaining", Group: "Gemini Models", UsedPercent: 75, WindowMinutes: 300},
+		{Name: "gemini-empty", Label: "Five Hour Limit Remaining", Group: "Gemini Models", UsedPercent: 100, WindowMinutes: 300},
+		{Name: "gemini-unknown", Label: "Five Hour Limit Remaining", Group: "Gemini Models", WindowMinutes: 300, Status: "unknown"},
+		{Name: "credits", Label: "Credits", Group: "Gemini Models", WindowMinutes: 10080, Status: "amount", Remaining: 1500},
+		{Name: "3p-weekly", Label: "Weekly Limit Remaining", Group: "Claude and GPT models", UsedPercent: 50, WindowMinutes: 10080},
+		{Name: "3p-5h", Label: "Five Hour Limit Remaining", Group: "Claude and GPT models", UsedPercent: 0, WindowMinutes: 300},
+	} {
+		got := ag.Windows[i]
+		if got.Name != want.Name || got.Label != want.Label || got.Group != want.Group || got.UsedPercent != want.UsedPercent || got.WindowMinutes != want.WindowMinutes || got.Status != want.Status || got.Remaining != want.Remaining {
+			t.Errorf("agy window %d = %+v, want %+v", i, got, want)
+		}
+	}
+	if !ag.NextResetAt.Equal(time.Date(2026, 11, 26, 6, 0, 0, 0, time.UTC)) {
+		t.Errorf("agy next reset = %v", ag.NextResetAt)
+	}
+}
+
+func TestAntigravityQuotaOmitsProjectWhenLoadNamesNone(t *testing.T) {
+	var quotaBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/load" {
+			if _, err := io.WriteString(w, `{}`); err != nil {
+				t.Errorf("write load: %v", err)
+			}
+			return
+		}
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read quota body: %v", err)
+		}
+		quotaBody = string(raw)
+		if _, err := io.WriteString(w, `{"groups":[]}`); err != nil {
+			t.Errorf("write quota: %v", err)
+		}
+	}))
+	defer srv.Close()
+	qs := newQuotaStore(nil, nil, QuotaEndpoints{Antigravity: srv.URL + "/quota", AntigravityLoad: srv.URL + "/load"})
+	var out AccountQuota
+	if err := qs.fetchAntigravity(t.Context(), resolvedAccount{value: "tok"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if quotaBody != `{}` {
+		t.Errorf("quota body = %q, want no project key", quotaBody)
 	}
 }
 

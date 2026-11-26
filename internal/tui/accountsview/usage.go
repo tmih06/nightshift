@@ -19,7 +19,7 @@ func (m Model) usageBlock(a v1.Account, width int) []string {
 	}
 	u := a.Usage
 	if u == nil {
-		note := "No request has carried this account's token since the proxy last started."
+		note := "No request has been recorded for this account's token."
 		if !a.Active && a.Priority > 1 {
 			note = fmt.Sprintf("Not in use yet (fallback #%d). Press enter to make it primary, or K/J to reorder.", a.Priority)
 		} else if !a.Active {
@@ -28,7 +28,7 @@ func (m Model) usageBlock(a v1.Account, width int) []string {
 		return []string{m.section("Usage", "", width), s.faint.Render(note)}
 	}
 	now := m.now()
-	out := []string{m.section("Usage", "since the proxy last started", width)}
+	out := []string{m.section("Usage", "all recorded usage", width)}
 	reqLine := fmt.Sprintf("%s requests   %s ok", s.title.Render(strconv.Itoa(u.Requests)), s.ok.Render(strconv.Itoa(u.OK)))
 	if u.AvgLatencyMS > 0 {
 		reqLine += s.faint.Render(fmt.Sprintf("   avg %dms", u.AvgLatencyMS))

@@ -113,6 +113,7 @@ func applyAccountHistory(acct *Account, p Provider, history []wireHistory) {
 type wireQuotaWindow struct {
 	Name          string    `json:"name"`
 	Label         string    `json:"label"`
+	Group         string    `json:"group"`
 	UsedPercent   float64   `json:"used_percent"`
 	Limit         int64     `json:"limit"`
 	Used          int64     `json:"used"`

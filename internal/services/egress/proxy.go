@@ -43,17 +43,19 @@ type AuditEvent struct {
 
 // Options tunes a Proxy instance (all fields optional).
 type Options struct {
-	CA                *CA
-	Getenv            func(string) string
-	UpstreamTLS       *tls.Config // optional custom upstream TLS config (used in tests)
-	AuditWriter       io.Writer   // optional JSONL audit sink
-	EventRingMax      int
-	SkipAutoCA        bool
-	PlainHTTPDefault  bool
-	Now               func() time.Time // optional clock override (used in tests)
-	DefaultCooldown   time.Duration    // optional failover cooldown override
-	MaxRetryBodyBytes int64            // max request body buffered for failover retries
-	QuotaEndpoints    QuotaEndpoints   // optional provider quota URL overrides
+	CA                     *CA
+	Getenv                 func(string) string
+	UpstreamTLS            *tls.Config // optional custom upstream TLS config (used in tests)
+	AuditWriter            io.Writer   // optional JSONL audit sink
+	EventRingMax           int
+	SkipAutoCA             bool
+	PlainHTTPDefault       bool
+	Now                    func() time.Time // optional clock override (used in tests)
+	DefaultCooldown        time.Duration    // optional failover cooldown override
+	MaxRetryBodyBytes      int64            // max request body buffered for failover retries
+	QuotaEndpoints         QuotaEndpoints   // optional provider quota URL overrides
+	UsageDBPath            string           // optional SQLite database that persists all usage
+	LegacyUsageHistoryPath string           // optional pre-SQLite JSON history imported once
 }
 
 // Proxy is the HTTP/HTTPS egress proxy handler.
@@ -132,6 +134,12 @@ func NewProxy(cfg Config, opts Options) (*Proxy, error) {
 		maxBody = defaultMaxRetryBodyBytes
 	}
 	usage := newUsageStore()
+	if opts.UsageDBPath != "" {
+		usage, err = openSQLiteUsageStore(opts.UsageDBPath, opts.LegacyUsageHistoryPath)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if opts.Now != nil {
 		usage.now = opts.Now
 	}
@@ -165,6 +173,9 @@ func needsMITM(cfg Config) bool {
 // CA returns the proxy's MITM CA (nil when no MITM rules exist and none was set).
 func (p *Proxy) CA() *CA { return p.ca }
 
+// Close releases resources owned by the proxy.
+func (p *Proxy) Close() error { return p.usage.close() }
+
 // Pools returns the live fallback-chain and cooldown state of every loaded
 // secret's accounts.
 func (p *Proxy) Pools() []PoolAccountStatus { return p.pool.snapshot(p.secrets.Load()) }
@@ -178,24 +189,24 @@ func (p *Proxy) Events() []AuditEvent {
 	return out
 }
 
-func (p *Proxy) record(ev AuditEvent) {
-	p.recordTelemetry(ev, nil, TokenMetrics{})
+func (p *Proxy) record(ctx context.Context, ev AuditEvent) {
+	p.recordTelemetry(ctx, ev, nil, TokenMetrics{})
 }
 
-func (p *Proxy) recordTelemetry(ev AuditEvent, bindings []injectedBinding, tok TokenMetrics) {
+func (p *Proxy) recordTelemetry(ctx context.Context, ev AuditEvent, bindings []injectedBinding, tok TokenMetrics) {
 	if ev.Time.IsZero() {
 		ev.Time = time.Now().UTC()
 	}
 	if ev.Action == auditAllow {
-		p.recordUsage(ev, bindings, tok)
+		p.recordUsage(ctx, ev, bindings, tok)
 	}
 	p.appendAudit(ev)
 }
 
-func (p *Proxy) recordUsage(ev AuditEvent, bindings []injectedBinding, tok TokenMetrics) {
+func (p *Proxy) recordUsage(ctx context.Context, ev AuditEvent, bindings []injectedBinding, tok TokenMetrics) {
 	if len(bindings) > 0 {
 		for _, b := range bindings {
-			p.usage.recordDetailed(b.secret, b.label, ev.Status, ev.DurationMS, tok)
+			p.usage.recordDetailed(ctx, b.secret, b.label, usageObservation{status: ev.Status, latencyMS: ev.DurationMS, tokens: tok})
 		}
 		return
 	}
@@ -205,7 +216,7 @@ func (p *Proxy) recordUsage(ev AuditEvent, bindings []injectedBinding, tok Token
 		if ev.Account != "" && len(ev.SecretsInjected) == 1 {
 			label = ev.Account
 		}
-		p.usage.recordDetailed(name, label, ev.Status, ev.DurationMS, tok)
+		p.usage.recordDetailed(ctx, name, label, usageObservation{status: ev.Status, latencyMS: ev.DurationMS, tokens: tok})
 	}
 }
 
@@ -243,11 +254,11 @@ func (p *Proxy) AdminHandler() http.Handler {
 		w.Header().Set("Content-Type", "application/x-pem-file")
 		_, _ = w.Write(p.ca.CertPEM())
 	})
-	mux.HandleFunc("/usage", func(w http.ResponseWriter, _ *http.Request) {
-		writeAdminJSON(w, p.Usage(), "encode usage")
+	mux.HandleFunc("/usage", func(w http.ResponseWriter, r *http.Request) {
+		writeUsageJSON(w, p, p.Usage(r.Context()), "encode usage")
 	})
-	mux.HandleFunc("/history", func(w http.ResponseWriter, _ *http.Request) {
-		writeAdminJSON(w, p.History(), "encode history")
+	mux.HandleFunc("/history", func(w http.ResponseWriter, r *http.Request) {
+		writeUsageJSON(w, p, p.History(r.Context()), "encode history")
 	})
 	mux.HandleFunc("/pools", func(w http.ResponseWriter, _ *http.Request) {
 		writeAdminJSON(w, p.Pools(), "encode pools")
@@ -262,13 +273,21 @@ func (p *Proxy) AdminHandler() http.Handler {
 		}
 		writeAdminJSON(w, p.RefreshQuota(r.Context()), "encode quota")
 	})
-	mux.HandleFunc("/analytics", func(w http.ResponseWriter, _ *http.Request) {
-		writeAdminJSON(w, p.Analytics(), "encode analytics")
+	mux.HandleFunc("/analytics", func(w http.ResponseWriter, r *http.Request) {
+		writeUsageJSON(w, p, p.Analytics(r.Context()), "encode analytics")
 	})
 	mux.HandleFunc("/events", func(w http.ResponseWriter, _ *http.Request) {
 		writeAdminJSON(w, p.Events(), "encode events")
 	})
 	return mux
+}
+
+func writeUsageJSON(w http.ResponseWriter, p *Proxy, v any, errMsg string) {
+	if err := p.UsageError(); err != nil {
+		http.Error(w, "usage database degraded: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	writeAdminJSON(w, v, errMsg)
 }
 
 func writeAdminJSON(w http.ResponseWriter, v any, errMsg string) {
@@ -315,7 +334,7 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	rule, ok := p.cfg.MatchHostPort(host, port)
 	if !ok {
-		p.record(AuditEvent{
+		p.record(r.Context(), AuditEvent{
 			Action: "DENY", Mode: "http", Client: r.RemoteAddr,
 			Method: r.Method, Host: host, Port: port, Path: r.URL.Path,
 			Status: http.StatusForbidden, Reason: "host/port not allowed",
@@ -324,7 +343,7 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !rule.AllowsRequest(r.Method, r.URL.Path) {
-		p.record(AuditEvent{
+		p.record(r.Context(), AuditEvent{
 			Action: "DENY", Mode: "http", Client: r.RemoteAddr,
 			Method: r.Method, Host: host, Port: port, Path: r.URL.Path,
 			Rule: rule.Name, Status: http.StatusForbidden, Reason: "method/path not allowed",
@@ -349,7 +368,7 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(err.Error(), "egress blocked:") {
 			status = http.StatusForbidden
 		}
-		p.record(AuditEvent{
+		p.record(r.Context(), AuditEvent{
 			Action: "DENY", Mode: "http", Client: r.RemoteAddr,
 			Method: r.Method, Host: host, Port: port, Path: r.URL.Path,
 			Rule: rule.Name, Status: status, Reason: err.Error(),
@@ -370,7 +389,7 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
 
-	p.recordTelemetry(AuditEvent{
+	p.recordTelemetry(r.Context(), AuditEvent{
 		Action: "ALLOW", Mode: "http", Client: r.RemoteAddr,
 		Method: r.Method, Host: host, Port: port, Path: r.URL.Path,
 		Rule: rule.Name, Status: resp.StatusCode,
@@ -389,7 +408,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	rule, ok := p.cfg.MatchHostPort(host, port)
 	if !ok {
-		p.record(AuditEvent{
+		p.record(r.Context(), AuditEvent{
 			Action: "DENY", Mode: "tunnel", Client: r.RemoteAddr,
 			Method: http.MethodConnect, Host: host, Port: port,
 			Status: http.StatusForbidden, Reason: "host/port not allowed",
@@ -410,7 +429,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(err.Error(), "egress blocked:") {
 			status = http.StatusForbidden
 		}
-		p.record(AuditEvent{
+		p.record(r.Context(), AuditEvent{
 			Action: "DENY", Mode: "tunnel", Client: r.RemoteAddr,
 			Method: http.MethodConnect, Host: host, Port: port,
 			Rule: rule.Name, Status: status, Reason: err.Error(),
@@ -438,7 +457,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	p.record(AuditEvent{
+	p.record(r.Context(), AuditEvent{
 		Action: "ALLOW", Mode: "tunnel", Client: r.RemoteAddr,
 		Method: http.MethodConnect, Host: host, Port: port,
 		Rule: rule.Name, Status: http.StatusOK,
@@ -493,7 +512,7 @@ func (p *Proxy) handleMITM(w http.ResponseWriter, r *http.Request, host string, 
 		req, err := http.ReadRequest(br)
 		if err != nil {
 			if !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
-				p.record(AuditEvent{
+				p.record(r.Context(), AuditEvent{
 					Action: "DENY", Mode: "mitm", Client: r.RemoteAddr,
 					Host: host, Port: port, Rule: rule.Name, Reason: err.Error(),
 				})
@@ -502,7 +521,7 @@ func (p *Proxy) handleMITM(w http.ResponseWriter, r *http.Request, host string, 
 		}
 		started := time.Now()
 		if !rule.AllowsRequest(req.Method, req.URL.Path) {
-			p.record(AuditEvent{
+			p.record(r.Context(), AuditEvent{
 				Action: "DENY", Mode: "mitm", Client: r.RemoteAddr,
 				Method: req.Method, Host: host, Port: port, Path: req.URL.Path,
 				Rule: rule.Name, Status: http.StatusForbidden, Reason: "method/path not allowed",
@@ -527,7 +546,7 @@ func (p *Proxy) handleMITM(w http.ResponseWriter, r *http.Request, host string, 
 			if strings.Contains(err.Error(), "egress blocked:") {
 				status = http.StatusForbidden
 			}
-			p.record(AuditEvent{
+			p.record(r.Context(), AuditEvent{
 				Action: "DENY", Mode: "mitm", Client: r.RemoteAddr,
 				Method: req.Method, Host: host, Port: port, Path: req.URL.Path,
 				Rule: rule.Name, Status: status, Reason: err.Error(),
@@ -546,7 +565,7 @@ func (p *Proxy) handleMITM(w http.ResponseWriter, r *http.Request, host string, 
 			return
 		}
 
-		p.recordTelemetry(AuditEvent{
+		p.recordTelemetry(r.Context(), AuditEvent{
 			Action: "ALLOW", Mode: "mitm", Client: r.RemoteAddr,
 			Method: req.Method, Host: host, Port: port, Path: req.URL.Path,
 			Rule: rule.Name, Status: resp.StatusCode,
@@ -683,7 +702,7 @@ func (p *Proxy) recordFailoverAttempt(fr forwardReq, bindings []injectedBinding,
 	for _, b := range bindings {
 		p.quota.observeHeaders(b.secret, b.account, b.label, resp.Header)
 	}
-	p.recordTelemetry(AuditEvent{
+	p.recordTelemetry(fr.ctx, AuditEvent{
 		Action: "ALLOW", Mode: fr.mode, Client: fr.clientAddr,
 		Method: fr.req.Method, Host: fr.host, Port: fr.port, Path: fr.req.URL.Path,
 		Rule: fr.rule.Name, Status: resp.StatusCode,

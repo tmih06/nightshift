@@ -192,7 +192,7 @@ func TestProxyFallbackChainFailsOverAndRespectsCooldowns(t *testing.T) {
 
 	// 3. Usage credits 429 to a@example.com and 2x 200 to b@example.com.
 	usageByLabel := map[string]AccountUsage{}
-	for _, u := range proxy.Usage() {
+	for _, u := range proxy.Usage(t.Context()) {
 		usageByLabel[u.Label] = u
 	}
 	if usageByLabel["a@example.com"].RateLimited != 1 || usageByLabel["a@example.com"].Requests != 1 {

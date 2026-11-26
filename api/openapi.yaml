@@ -966,7 +966,7 @@ components:
           type: array
           description: >-
             Daily usage for up to the last 53 weeks, oldest day first, without
-            days that saw no request. Survives an egress proxy restart.
+            days that saw no request. Read from the proxy's durable usage database.
           items: {$ref: "#/components/schemas/DayUsage"}
         quota: {$ref: "#/components/schemas/AccountQuota"}
     ModelUsage:
@@ -982,6 +982,7 @@ components:
         total: {type: integer, format: int64}
     AccountUsage:
       type: object
+      description: All usage recorded in the egress proxy's durable SQLite store.
       required: [requests, ok, clientError, rateLimited, serverError]
       properties:
         requests: {type: integer}
@@ -1020,13 +1021,14 @@ components:
       properties:
         name: {type: string}
         label: {type: string}
+        group: {type: string, description: Provider-defined quota group, when models share one pool.}
         usedPercent: {type: number}
         limit: {type: integer, format: int64}
         used: {type: integer, format: int64}
         remaining: {type: integer, format: int64}
         resetsAt: {type: string, format: date-time}
         windowMinutes: {type: integer}
-        status: {type: string}
+        status: {type: string, description: "Provider state: unknown when no quota fraction was reported, amount for a counted balance."}
     AccountQuota:
       type: object
       properties:

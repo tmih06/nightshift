@@ -137,6 +137,27 @@ Prune rules that no longer apply. Past about 200 lines, move older detail into
     `nightshiftd` until it was deleted, enough to OOM-kill it after about nine.
   - **Enforced by**: `TestStartingARunHoldsNoConnectionOpen`.
 
+- **Rule**: Read Antigravity quota as the provider's grouped pools, never as
+  one window per available model.
+  - **Why**: `fetchAvailableModels` named retired routes, so the Accounts tab
+    spread stale per-model bars instead of agy's Gemini and Claude & GPT pools.
+  - **Enforced by**: `TestActiveQuotaFetcherFetchesAllThreeProviders`,
+    `TestAntigravityQuotaWindowsKeepAgyPools`.
+
+- **Rule**: Apply the workload manifest before restarting a workload whose
+  deployment spec the checkout changed.
+  - **Why**: `make redeploy` restarted an older egress spec without its usage
+    volume, so the restart discarded every in-memory usage counter.
+  - **Enforced by**: manual.
+
+- **Rule**: Record egress usage transactionally in SQLite and derive usage
+  views from durable aggregates, never as restart-time snapshots alone.
+  - **Why**: In-memory counters and JSON daily snapshots lost detailed usage
+    whenever the egress pod restarted.
+  - **Enforced by**: `TestSQLiteUsagePersistsEveryRequestAcrossReopen`,
+    `TestSQLiteUsagePrunesRawEventsAfterTheRecentWindow`,
+    `TestSQLiteUsageHandlesConcurrentRecords`.
+
 ## Commit messages
 
 Every commit message follows [Conventional Commits 1.0.0](https://www.conventionalcommits.org/). The format is `type(scope): subject`.

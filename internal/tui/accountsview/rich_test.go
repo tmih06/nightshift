@@ -55,6 +55,63 @@ func TestQuotaWindowsAreGroupedByModelFamily(t *testing.T) {
 	}
 }
 
+func TestAntigravityQuotaWindowsKeepAgyPools(t *testing.T) {
+	windows := []v1.QuotaWindow{
+		{Name: "gemini-weekly", Label: "Weekly Limit Remaining", Group: "Gemini Models", UsedPercent: 25},
+		{Name: "gemini-5h", Label: "Five Hour Limit Remaining", Group: "Gemini Models", UsedPercent: 75},
+		{Name: "3p-weekly", Label: "Weekly Limit Remaining", Group: "Claude and GPT models", UsedPercent: 50},
+		{Name: "3p-5h", Label: "Five Hour Limit Remaining", Group: "Claude and GPT models", UsedPercent: 10},
+	}
+	groups := groupQuota("antigravity", windows)
+	if len(groups) != 2 || groups[0].family != "Gemini Models" || groups[1].family != "Claude and GPT models" {
+		t.Fatalf("groups = %+v, want agy's two pools in order", groups)
+	}
+	for i, g := range groups {
+		if len(g.windows) != 2 || g.windows[0].Name != windows[i*2].Name || g.windows[1].Name != windows[i*2+1].Name {
+			t.Errorf("group %d windows = %+v, want the provider's weekly then 5h order", i, g.windows)
+		}
+	}
+}
+
+func TestAntigravityQuotaRowShowsRemainingShare(t *testing.T) {
+	m := newTestModel(&fakeService{})
+	row := m.quotaRow(testNow(), v1.QuotaWindow{
+		Name:        "gemini-weekly",
+		Label:       "Weekly Limit Remaining",
+		Group:       "Gemini Models",
+		UsedPercent: 25,
+	}, quotaColumns{label: 24, meter: 20, pane: 80}, true)
+	plainRow := ansi.Strip(row)
+	if !strings.Contains(plainRow, "Weekly Limit Remaining") || !strings.Contains(plainRow, "75%") || strings.Contains(plainRow, "25%") {
+		t.Errorf("remaining quota row = %q", plainRow)
+	}
+}
+
+func TestAmountQuotaRowShowsAmount(t *testing.T) {
+	m := newTestModel(&fakeService{})
+	row := m.quotaRow(testNow(), v1.QuotaWindow{
+		Name: "credits", Label: "Credits", Status: "amount", Remaining: 1500,
+	}, quotaColumns{label: 12, meter: 20, pane: 80}, true)
+	if plainRow := ansi.Strip(row); !strings.Contains(plainRow, "1500 remaining") {
+		t.Errorf("amount quota row = %q", plainRow)
+	}
+}
+
+func TestUnknownQuotaDoesNotReadAsEmptyOrFull(t *testing.T) {
+	m := newTestModel(&fakeService{})
+	row := m.quotaRow(testNow(), v1.QuotaWindow{
+		Name:          "gemini-5h",
+		Label:         "Five Hour Limit Used",
+		Status:        "unknown",
+		ResetsAt:      testNow().Add(2 * time.Hour),
+		WindowMinutes: 300,
+	}, quotaColumns{label: 20, meter: 20, pane: 80}, false)
+	plainRow := ansi.Strip(row)
+	if !strings.Contains(plainRow, "limits not available") || strings.Contains(plainRow, "0%") || strings.Contains(plainRow, "100%") {
+		t.Errorf("unknown quota row = %q", plainRow)
+	}
+}
+
 func TestDetailShowsFamiliesPaceAndCalendar(t *testing.T) {
 	m := shown(t, &fakeService{snap: richSnapshot()})
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 150, Height: 50})

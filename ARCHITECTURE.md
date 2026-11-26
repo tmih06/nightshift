@@ -237,17 +237,26 @@ rate-limit headers, counts them in ten-minute request and token windows at
 `/usage` and `/analytics`, exposes live chain and cooldown state at `/pools`,
 and actively fetches provider quota windows and next reset times from Claude,
 Codex, and Antigravity at `/quota` and `POST /quota/refresh` (triggered with
-`Q` in the Accounts tab or periodically in the background). The counts,
-cooldowns, and quota cache live in the proxy's memory and start over when it
-restarts.
+`Q` in the Accounts tab or periodically in the background). Antigravity's
+reading is the grouped weekly and five-hour pool summary its own `/usage`
+shows, not the per-model availability catalog. Cooldowns and the quota cache
+live in the proxy's memory and start over when it restarts.
 
-The one exception is the daily history behind the tab's calendar: requests and
-tokens per account and UTC day, 53 weeks of them, served at `/history`. The
-proxy saves it every 30 seconds and at shutdown to the file named by
-`EGRESS_USAGE_HISTORY`, which `egress.yaml` puts on the `egress-usage` volume
-(64Mi from the default StorageClass). That volume has one writer, so the
-deployment replaces the pod (`Recreate`) instead of rolling it. A file the
-proxy cannot read is left alone and nothing is saved over it.
+Usage is durable. Every allowed upstream attempt is committed to a SQLite
+database in one transaction with its account, status, latency, model, and token
+metrics. Raw events stay in `usage_events` only for the rolling 24-hour
+recent window, while all-time account, model, and daily aggregate tables keep
+`/usage` fast and bounded. `/usage` therefore reports all recorded usage, and
+`/history` serves up to 53 weeks of daily requests and tokens from a daily
+aggregate table updated in the same transaction for the tab's calendar.
+`EGRESS_USAGE_DB` names the database, which `egress.yaml` puts at
+`/var/lib/egress/usage.db` on the `egress-usage` volume
+(64Mi from the default StorageClass). A legacy JSON file named by
+`EGRESS_USAGE_HISTORY` is imported once so existing calendars are not lost;
+new writes go only to SQLite. That volume has one writer, so the deployment
+replaces the pod (`Recreate`) instead of rolling it. When the database cannot
+be opened or migrated, the proxy refuses to start rather than running without
+usage persistence.
 
 The tab draws each account's quota as meters grouped by model family (the
 account's own windows first), with a tick for how much of the window has
