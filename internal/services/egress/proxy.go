@@ -75,6 +75,24 @@ type Proxy struct {
 	ringMax int
 }
 
+// proxyCA is the CA the proxy signs with: the one given, else the one the
+// config names, else a new one when a rule intercepts TLS. It is nil when none
+// is needed or opts says not to make one.
+func proxyCA(cfg Config, opts Options) (*CA, error) {
+	ca := opts.CA
+	if ca != nil || opts.SkipAutoCA {
+		return ca, nil
+	}
+	if cfg.CA.CertFile != "" && cfg.CA.KeyFile != "" {
+		return LoadCA(cfg.CA.CertFile, cfg.CA.KeyFile)
+	}
+	if !needsMITM(cfg) {
+		return ca, nil
+	}
+	ca, _, _, err := GenerateCA("Nightshift Egress Proxy CA")
+	return ca, err
+}
+
 // NewProxy constructs a validated Proxy from cfg and opts.
 func NewProxy(cfg Config, opts Options) (*Proxy, error) {
 	if err := cfg.Validate(); err != nil {
@@ -85,19 +103,9 @@ func NewProxy(cfg Config, opts Options) (*Proxy, error) {
 		return nil, err
 	}
 
-	ca := opts.CA
-	if ca == nil && !opts.SkipAutoCA {
-		if cfg.CA.CertFile != "" && cfg.CA.KeyFile != "" {
-			ca, err = LoadCA(cfg.CA.CertFile, cfg.CA.KeyFile)
-			if err != nil {
-				return nil, err
-			}
-		} else if needsMITM(cfg) {
-			ca, _, _, err = GenerateCA("Nightshift Egress Proxy CA")
-			if err != nil {
-				return nil, err
-			}
-		}
+	ca, err := proxyCA(cfg, opts)
+	if err != nil {
+		return nil, err
 	}
 
 	dialer := NewSafeDialer(cfg.ShouldBlockPrivateIPs())

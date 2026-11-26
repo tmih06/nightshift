@@ -189,6 +189,23 @@ func (m Model) View() string {
 	return out
 }
 
+// trafficSummary is the requests counted in a few words, or "" when there are
+// none.
+func (m Model) trafficSummary() string {
+	an := m.snap.Analytics
+	if an == nil || an.Requests <= 0 {
+		return ""
+	}
+	summary := fmt.Sprintf("%d req", an.Requests)
+	if an.Total > 0 {
+		summary += " · " + compactCount(an.Total) + " tok"
+	}
+	if an.CacheHitPercent > 0 {
+		summary += fmt.Sprintf(" · %.0f%% cache", an.CacheHitPercent)
+	}
+	return summary
+}
+
 func (m Model) titleLine() string {
 	s := m.st
 	parts := []string{s.title.Render("Accounts")}
@@ -207,15 +224,7 @@ func (m Model) titleLine() string {
 		} else {
 			parts = append(parts, s.warn.Render("nothing published yet"))
 		}
-		if m.snap.Analytics != nil && m.snap.Analytics.Requests > 0 {
-			an := m.snap.Analytics
-			summary := fmt.Sprintf("%d req", an.Requests)
-			if an.Total > 0 {
-				summary += " · " + compactCount(an.Total) + " tok"
-			}
-			if an.CacheHitPercent > 0 {
-				summary += fmt.Sprintf(" · %.0f%% cache", an.CacheHitPercent)
-			}
+		if summary := m.trafficSummary(); summary != "" {
 			parts = append(parts, s.faint.Render(summary))
 		}
 		if m.snap.UsageError != "" {

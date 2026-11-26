@@ -352,6 +352,19 @@ func (m Model) actionKey(k string) (Model, tea.Cmd) {
 		return m, m.fetch()
 	case "a":
 		return m.openProviderPicker(), nil
+	case "Q":
+		return m.refreshQuotas()
+	case "p":
+		return m.publishNow("Publishing…")
+	default:
+		return m.accountKey(k)
+	}
+	return m, nil
+}
+
+// accountKey acts on the selected account.
+func (m Model) accountKey(k string) (Model, tea.Cmd) {
+	switch k {
 	case keyEnter, "s":
 		return m.useSelected()
 	case "K", "[":
@@ -366,10 +379,6 @@ func (m Model) actionKey(k string) (Model, tea.Cmd) {
 		}
 	case "r":
 		return m.refreshSelected()
-	case "Q":
-		return m.refreshQuotas()
-	case "p":
-		return m.publishNow("Publishing…")
 	}
 	return m, nil
 }
