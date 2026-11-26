@@ -1,0 +1,6 @@
+#!/bin/sh
+# A stand-in for with_api_test.go: port-forward makes the fake API answer.
+case "$*" in
+  *port-forward*) : >"$MARKER"; exec sleep 30 ;;
+  *) printf 'fresh' | base64 ;;
+esac

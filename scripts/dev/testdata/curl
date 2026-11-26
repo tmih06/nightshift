@@ -1,0 +1,3 @@
+#!/bin/sh
+# A stand-in for with_api_test.go: healthy only once the port is forwarded.
+test -f "$MARKER"

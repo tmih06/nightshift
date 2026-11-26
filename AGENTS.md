@@ -107,6 +107,12 @@ Prune rules that no longer apply. Past about 200 lines, move older detail into
   - **Why**: A long comment failed Lint on `main` (`9ee64a4`).
   - **Enforced by**: `make lint`.
 
+- **Rule**: Forward the API in `with-api` when `NIGHTSHIFT_API` names its own
+  local port.
+  - **Why**: An exported address from an earlier session made `make tui` skip
+    the forward and fail with connection refused (`13a8f3e`).
+  - **Enforced by**: `TestWithAPIForwardsALeftoverLocalAddress`.
+
 ## Commit messages
 
 Every commit message follows [Conventional Commits 1.0.0](https://www.conventionalcommits.org/). The format is `type(scope): subject`.
