@@ -77,6 +77,10 @@ type Account struct {
 	// Usage is what the egress proxy counted for this account; absent when it
 	// has carried no request since the proxy last started.
 	Usage *AccountUsage `json:"usage,omitempty"`
+	// History is the account's daily usage for up to the last 53 weeks, oldest
+	// day first, without the days that saw no request. Unlike Usage it survives
+	// a restart of the egress proxy.
+	History []DayUsage `json:"history,omitempty"`
 	// Quota holds the latest fetched or header-observed provider quota windows
 	// and next reset times for this account.
 	Quota *AccountQuota `json:"quota,omitempty"`
@@ -117,6 +121,14 @@ type AccountUsage struct {
 	// RecentVolume is the total token count of each ten-minute window of the
 	// last day, oldest first.
 	RecentVolume []int64 `json:"recentVolume,omitempty"`
+}
+
+// DayUsage counts the requests and tokens of one UTC day.
+type DayUsage struct {
+	Date     string `json:"date"` // YYYY-MM-DD
+	Requests int    `json:"requests"`
+	// Total is the day's token count.
+	Total int64 `json:"total,omitempty"`
 }
 
 // QuotaWindow is one provider quota window (5h, 7d, RPM/TPM, or model).

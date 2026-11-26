@@ -840,6 +840,12 @@ components:
         quotaBlocked: {type: boolean}
         cooldowns: {type: integer}
         usage: {$ref: "#/components/schemas/AccountUsage"}
+        history:
+          type: array
+          description: >-
+            Daily usage for up to the last 53 weeks, oldest day first, without
+            days that saw no request. Survives an egress proxy restart.
+          items: {$ref: "#/components/schemas/DayUsage"}
         quota: {$ref: "#/components/schemas/AccountQuota"}
     ModelUsage:
       type: object
@@ -879,6 +885,13 @@ components:
         recentVolume:
           type: array
           items: {type: integer, format: int64}
+    DayUsage:
+      type: object
+      required: [date, requests]
+      properties:
+        date: {type: string, format: date}
+        requests: {type: integer}
+        total: {type: integer, format: int64, description: Tokens used that day.}
     QuotaWindow:
       type: object
       required: [name, label, usedPercent]

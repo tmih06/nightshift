@@ -28,6 +28,7 @@ func main() {
 		caOutPath    = flag.String("ca-out", "", "Optional path to write the public CA certificate PEM on startup")
 		reloadEvery  = flag.Duration("reload-secrets", 15*time.Second, "How often to re-read file-backed secrets")
 		refreshQuota = flag.Duration("refresh-quota", 5*time.Minute, "How often to actively fetch provider account quotas (0 disables)")
+		historyPath  = flag.String("usage-history", os.Getenv("EGRESS_USAGE_HISTORY"), "File that keeps daily usage across restarts; empty keeps it in memory")
 	)
 	flag.Parse()
 
@@ -54,6 +55,8 @@ func main() {
 			log.Fatalf("egress-proxy: write CA cert %s: %v", *caOutPath, err)
 		}
 	}
+
+	history := openHistory(proxy, *historyPath)
 
 	proxySrv := &http.Server{
 		Addr:              *listenAddr,
@@ -95,7 +98,15 @@ func main() {
 		proxy.WatchQuota(ctx, *refreshQuota)
 	}()
 
+	historyDone := make(chan struct{})
 	go func() {
+		defer close(historyDone)
+		saveHistoryEvery(ctx, proxy, history, 30*time.Second)
+	}()
+
+	shutdownDone := make(chan struct{})
+	go func() {
+		defer close(shutdownDone)
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -111,8 +122,47 @@ func main() {
 	stop()
 	<-watchDone
 	<-quotaDone
+	<-historyDone
+	<-shutdownDone
+	saveHistory(proxy, history) // after the last request has been counted
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fmt.Fprintf(os.Stderr, "egress-proxy: %v\n", err)
 		os.Exit(1)
+	}
+}
+
+// openHistory restores the daily usage kept at path and returns where to save
+// it: nowhere when path is empty, or when the file there cannot be read, so a
+// damaged history is left for someone to look at rather than overwritten.
+func openHistory(proxy *egress.Proxy, path string) string {
+	if path == "" {
+		return ""
+	}
+	if err := proxy.LoadHistory(path); err != nil {
+		log.Printf("egress-proxy: %v; daily usage will not be saved", err)
+		return ""
+	}
+	return path
+}
+
+func saveHistory(proxy *egress.Proxy, path string) {
+	if path == "" {
+		return
+	}
+	if err := proxy.SaveHistory(path); err != nil {
+		log.Printf("egress-proxy: %v", err)
+	}
+}
+
+func saveHistoryEvery(ctx context.Context, proxy *egress.Proxy, path string, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			saveHistory(proxy, path)
+		}
 	}
 }

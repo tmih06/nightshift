@@ -45,6 +45,8 @@ func TestFetchMarksTheActiveAccountAndAttachesUsage(t *testing.T) {
 			reply(t, w, `[{"binding":"CLAUDE_ACCESS_TOKEN","name":"claude-a.json","label":"a@example.com","priority":1,"active_now":true,"cooldown_until":"2026-01-01T12:05:00Z","cooldown_reason":"rate limited (429)","failovers":3}]`)
 		case "/quota":
 			reply(t, w, `[{"binding":"CLAUDE_ACCESS_TOKEN","name":"claude-a.json","label":"a@example.com","plan":"max","source":"fetch","next_reset_at":"2026-01-01T15:00:00Z","windows":[{"name":"5h","label":"5-hour window","used_percent":42,"resets_at":"2026-01-01T15:00:00Z"}]}]`)
+		case "/history":
+			reply(t, w, `[{"binding":"CLAUDE_ACCESS_TOKEN","label":"a@example.com","days":[{"date":"2025-12-31","requests":7,"total":5500}]}]`)
 		case "/quota/refresh":
 			quotaRefreshed = true
 			reply(t, w, `[]`)
@@ -81,6 +83,9 @@ func TestFetchMarksTheActiveAccountAndAttachesUsage(t *testing.T) {
 	}
 	if q := byName["claude-a.json"].Quota; q == nil || q.Plan != "max" || len(q.Windows) != 1 || q.Windows[0].UsedPercent != 42 {
 		t.Errorf("quota = %+v, want fetched quota windows", q)
+	}
+	if h := byName["claude-a.json"].History; len(h) != 1 || h[0] != (DayUsage{Date: "2025-12-31", Requests: 7, Total: 5500}) {
+		t.Errorf("history = %+v, want the proxy's daily counts", h)
 	}
 	if snap.Analytics == nil || snap.Analytics.Total != 5500 || snap.Analytics.ByModel["claude-sonnet-4-6"].Requests != 7 {
 		t.Errorf("analytics = %+v", snap.Analytics)

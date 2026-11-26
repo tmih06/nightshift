@@ -123,12 +123,17 @@ func (l *Live) attachUsage(ctx context.Context, accounts []Account) (*Analytics,
 	if qerr != nil {
 		log.Debug("accounts: fetch proxy quotas", "err", qerr)
 	}
+	history, herr := fetchHistory(ctx, base)
+	if herr != nil {
+		log.Debug("accounts: fetch proxy history", "err", herr)
+	}
 	for i := range accounts {
 		p, ok := ProviderByID(accounts[i].Provider)
 		if !ok {
 			continue
 		}
 		applyAccountProxyData(&accounts[i], p, usage, pools, quotas)
+		applyAccountHistory(&accounts[i], p, history)
 	}
 	return summarizeAnalytics(usage), nil
 }

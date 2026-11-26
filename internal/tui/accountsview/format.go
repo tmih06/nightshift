@@ -114,16 +114,6 @@ func compactCount(n int64) string {
 	}
 }
 
-// quotaBar draws a filled/empty bar of width cells for a 0..100 percentage.
-func quotaBar(pct float64, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	filled := int(pct*float64(width)/100 + 0.5)
-	filled = max(0, min(width, filled))
-	return strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
-}
-
 // wrap breaks s into lines of at most width runes, with no regard for words,
 // so a long address stays whole when copied back out of a narrow box.
 func wrap(s string, width int) []string {

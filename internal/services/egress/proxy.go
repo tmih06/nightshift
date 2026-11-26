@@ -238,6 +238,9 @@ func (p *Proxy) AdminHandler() http.Handler {
 	mux.HandleFunc("/usage", func(w http.ResponseWriter, _ *http.Request) {
 		writeAdminJSON(w, p.Usage(), "encode usage")
 	})
+	mux.HandleFunc("/history", func(w http.ResponseWriter, _ *http.Request) {
+		writeAdminJSON(w, p.History(), "encode history")
+	})
 	mux.HandleFunc("/pools", func(w http.ResponseWriter, _ *http.Request) {
 		writeAdminJSON(w, p.Pools(), "encode pools")
 	})

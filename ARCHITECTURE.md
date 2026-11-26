@@ -241,6 +241,20 @@ Codex, and Antigravity at `/quota` and `POST /quota/refresh` (triggered with
 cooldowns, and quota cache live in the proxy's memory and start over when it
 restarts.
 
+The one exception is the daily history behind the tab's calendar: requests and
+tokens per account and UTC day, 53 weeks of them, served at `/history`. The
+proxy saves it every 30 seconds and at shutdown to the file named by
+`EGRESS_USAGE_HISTORY`, which `egress.yaml` puts on the `egress-usage` volume
+(64Mi from the default StorageClass). That volume has one writer, so the
+deployment replaces the pod (`Recreate`) instead of rolling it. A file the
+proxy cannot read is left alone and nothing is saved over it.
+
+The tab draws each account's quota as meters grouped by model family (the
+account's own windows first), with a tick for how much of the window has
+passed, then the calendar (`v` switches between this account and all of them)
+and the usage counts. The details scroll with `ctrl+u`/`ctrl+d` or the
+wheel.
+
 One login can serve several clusters: `PUBLISH_CONTEXTS` lists the contexts to
 publish into (`-` is the cluster the refresher runs in), and
 `REMOTE_KUBECONFIG` points at a mounted kubeconfig for the others. Every

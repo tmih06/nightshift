@@ -100,6 +100,9 @@ func accountOf(a *accounts.Account, now time.Time) v1.Account {
 	if u := a.Usage; u != nil {
 		out.Usage = usageOf(u)
 	}
+	for _, d := range a.History {
+		out.History = append(out.History, v1.DayUsage(d))
+	}
 	if q := a.Quota; q != nil {
 		out.Quota = quotaOf(q)
 	}

@@ -99,6 +99,9 @@ type Account struct {
 	// Usage is what the egress proxy counted for this account; nil when it
 	// has not carried a request since the proxy last started.
 	Usage *Usage
+	// History is the account's daily usage, oldest day first, which the proxy
+	// keeps across restarts.
+	History []DayUsage
 	// Quota holds the latest fetched or header-observed provider quota windows
 	// and next reset time for this account.
 	Quota *Quota
@@ -163,6 +166,13 @@ type Usage struct {
 	// RecentVolume is the total token count of each ten-minute window of the
 	// last day, oldest first.
 	RecentVolume []int64
+}
+
+// DayUsage counts the requests and tokens of one UTC day.
+type DayUsage struct {
+	Date     string // YYYY-MM-DD
+	Requests int
+	Total    int64
 }
 
 // QuotaWindow is one provider quota window (5h, 7d, RPM/TPM, or model).

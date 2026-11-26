@@ -125,6 +125,11 @@ Prune rules that no longer apply. Past about 200 lines, move older detail into
   - **Enforced by**: `TestClaimedSharesOneClusterRead`,
     `TestOverlappingFleetReadsShareTheirKubectls`,
     `TestTheServicesHaveRoomForTheirKubectls`.
+- **Rule**: Give each styled part of a highlighted row the highlight's
+  background itself.
+  - **Why**: A style around the whole account row ended at the first part's
+    reset, so the selection stopped after the dot (`cbf342a`).
+  - **Enforced by**: `TestSelectedRowIsHighlightedToTheEnd`.
 
 ## Commit messages
 

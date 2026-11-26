@@ -83,6 +83,33 @@ type wirePoolStatus struct {
 	Failovers      int       `json:"failovers"`
 }
 
+type wireDay struct {
+	Date     string `json:"date"`
+	Requests int    `json:"requests"`
+	Total    int64  `json:"total"`
+}
+
+// wireHistory is one entry of the egress proxy's /history.
+type wireHistory struct {
+	Binding string    `json:"binding"`
+	Label   string    `json:"label"`
+	Days    []wireDay `json:"days"`
+}
+
+// applyAccountHistory gives acct the daily usage recorded under its label.
+func applyAccountHistory(acct *Account, p Provider, history []wireHistory) {
+	lbl := acct.Label()
+	for i := range history {
+		if history[i].Binding != p.Secret || history[i].Label != lbl {
+			continue
+		}
+		acct.History = make([]DayUsage, len(history[i].Days))
+		for j, d := range history[i].Days {
+			acct.History[j] = DayUsage(d)
+		}
+	}
+}
+
 type wireQuotaWindow struct {
 	Name          string    `json:"name"`
 	Label         string    `json:"label"`
@@ -169,6 +196,11 @@ func fetchPools(ctx context.Context, base string) ([]wirePoolStatus, error) {
 // fetchQuotas reads the egress proxy's live per-account quota windows.
 func fetchQuotas(ctx context.Context, base string) ([]wireQuota, error) {
 	return proxyGetJSON[[]wireQuota](ctx, base, "/quota", "quota", true)
+}
+
+// fetchHistory reads the egress proxy's daily usage. An older proxy has none.
+func fetchHistory(ctx context.Context, base string) ([]wireHistory, error) {
+	return proxyGetJSON[[]wireHistory](ctx, base, "/history", "history", true)
 }
 
 // triggerQuotaRefresh asks the egress proxy to actively fetch provider quotas now.

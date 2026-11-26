@@ -85,10 +85,14 @@ type usageStore struct {
 	mu  sync.Mutex
 	now func() time.Time
 	m   map[usageKey]*usageSeries
+	// days is the daily history, kept apart from m because it can be saved
+	// and restored across restarts.
+	days    map[usageKey]map[string]DayUsage
+	unsaved bool
 }
 
 func newUsageStore() *usageStore {
-	return &usageStore{now: time.Now, m: map[usageKey]*usageSeries{}}
+	return &usageStore{now: time.Now, m: map[usageKey]*usageSeries{}, days: map[usageKey]map[string]DayUsage{}}
 }
 
 func (u *usageStore) window(t time.Time) int64 { return t.Unix() / int64(usageBucket.Seconds()) }
@@ -113,6 +117,7 @@ func (u *usageStore) recordDetailed(secret, label string, status int, latencyMS 
 		u.m[k] = s
 	}
 	now := u.now()
+	u.addDay(k, now, tok.Total)
 	s.Requests++
 	s.LastRequest = now.UTC()
 	if latencyMS > 0 {

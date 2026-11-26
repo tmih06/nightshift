@@ -2,10 +2,7 @@ package accountsview
 
 import (
 	"fmt"
-	"sort"
-	"strconv"
 	"strings"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -122,17 +119,35 @@ func (m Model) mouse(msg tea.MouseMsg) (Model, tea.Cmd) {
 	}
 	switch ev := msg.(type) {
 	case tea.MouseWheelMsg:
-		switch ev.Button {
-		case tea.MouseWheelUp:
-			m.move(-1)
-		case tea.MouseWheelDown:
-			m.move(1)
-		default:
-		}
+		m.wheel(ev)
 	case tea.MouseClickMsg:
 		m.click(ev)
 	}
 	return m, nil
+}
+
+// wheel scrolls the detail pane under the pointer, and moves through the list
+// anywhere else.
+func (m *Model) wheel(ev tea.MouseWheelMsg) {
+	delta := 0
+	switch ev.Button {
+	case tea.MouseWheelUp:
+		delta = -1
+	case tea.MouseWheelDown:
+		delta = 1
+	default:
+		return
+	}
+	overDetail := ev.X >= m.leftWidth()
+	if m.width < 90 {
+		_, height := m.detailSize()
+		overDetail = ev.Y >= m.height-1-height
+	}
+	if overDetail {
+		m.scrollDetail(3 * delta)
+		return
+	}
+	m.move(delta)
 }
 
 // click selects the account under a left click on the list.
@@ -143,7 +158,7 @@ func (m *Model) click(ev tea.MouseClickMsg) {
 	row := ev.Y - 1 + m.top
 	lines := m.listLines()
 	if row >= 0 && row < len(lines) && lines[row].acc >= 0 {
-		m.cursor = lines[row].acc
+		m.cursor, m.scroll = lines[row].acc, 0
 	}
 }
 
@@ -218,7 +233,7 @@ func (m Model) titleLine() string {
 }
 
 func (m Model) helpLine() string {
-	keys := [][2]string{{"j/k", "move"}, {"K/J", "order"}, {"a", "add"}, {"⏎", "primary"}, {"Q", "quota"}, {"d", "disable"}, {"x", "remove"}, {"r", "refresh"}, {"p", "publish"}, {"R", "reload"}, {"⇥", "tabs"}, {"q", "quit"}, {"?", "help"}}
+	keys := [][2]string{{"j/k", "move"}, {"v", "calendar"}, {"K/J", "order"}, {"a", "add"}, {"⏎", "primary"}, {"Q", "quota"}, {"d", "disable"}, {"x", "remove"}, {"r", "refresh"}, {"p", "publish"}, {"R", "reload"}, {"⇥", "tabs"}, {"q", "quit"}, {"?", "help"}}
 	var b strings.Builder
 	b.WriteString(" ")
 	for i, k := range keys {
@@ -238,7 +253,8 @@ func (m Model) body() []string {
 	left := m.listPane(m.leftWidth(), m.listHeight())
 	var right []string
 	if a, ok := m.selected(); ok {
-		right = m.detail(a)
+		width, height := m.detailSize()
+		right = m.detail(a, width, height)
 	} else {
 		right = m.noSelection()
 	}
@@ -330,321 +346,62 @@ func (m Model) listRow(l listLine, width int) string {
 	return m.accountRow(a, l.acc == m.cursor, width)
 }
 
+// accountRow is one account in the list: its health, name, most used quota
+// window, state, and request count, as far as width allows.
 func (m Model) accountRow(a v1.Account, selected bool, width int) string {
 	s := m.st
-	now := m.now()
-	cooling := !a.CooldownUntil.IsZero() && a.CooldownUntil.After(now)
-	mark := s.faint.Render("○")
+	// Each part carries the selection's background itself: a style around the
+	// whole line would end at the first part's reset.
+	on := func(st lipgloss.Style) lipgloss.Style {
+		if selected {
+			return st.Background(m.theme.SelectedBackground)
+		}
+		return st
+	}
+	blank := func(n int) string { return on(s.text).Render(strings.Repeat(" ", max(0, n))) }
+	cooling := a.CooldownUntil.After(m.now())
+	mark, markStyle := "○", s.faint
 	switch {
 	case cooling:
-		mark = s.warn.Render("◔")
+		mark, markStyle = "◔", s.warn
 	case a.ActiveNow || a.Active:
-		mark = s.ok.Render("●")
+		mark, markStyle = "●", s.ok
 	}
-	stateText := m.stateText(a.State)
+	state, stateStyle := stateName(a.State), m.stateStyle(a.State)
 	if cooling {
-		stateText = s.warn.Render("cooldown")
+		state, stateStyle = "cooldown", s.warn
 	}
-	req := ""
-	if a.Usage != nil {
-		req = fmt.Sprintf("%d req", a.Usage.Requests)
+	tail := m.listQuota(a, width, on) + on(stateStyle).Render(pad(state, 10))
+	if width >= 70 {
+		req := ""
+		if a.Usage != nil {
+			req = fmt.Sprintf("%d req", a.Usage.Requests)
+		}
+		tail += on(s.faint).Render(lipgloss.NewStyle().Width(9).Align(lipgloss.Right).Render(req))
 	}
 	prefix := ""
 	if a.Priority > 0 {
-		prefix = s.faint.Render(fmt.Sprintf("#%d ", a.Priority))
+		prefix = fmt.Sprintf("#%d ", a.Priority)
 	}
-	tail := lipgloss.NewStyle().Width(10).Render(stateText) + s.faint.Render(lipgloss.NewStyle().Width(9).Align(lipgloss.Right).Render(req))
 	room := max(8, width-3-lipgloss.Width(tail))
-	line := " " + mark + " " + pad(prefix+s.text.Render(label(a)), room) + tail
-	line = pad(line, width)
-	if selected {
-		line = s.selected.Render(line)
-	}
-	return line
+	name := ansi.Truncate(label(a), room-len(prefix), "…")
+	line := blank(1) + on(markStyle).Render(mark) + blank(1) + on(s.faint).Render(prefix) + on(s.text).Render(name) +
+		blank(room-len(prefix)-lipgloss.Width(name)) + tail
+	return pad(line+blank(width-lipgloss.Width(line)), width)
 }
 
-func (m Model) detail(a v1.Account) []string {
-	s := m.st
-	now := m.now()
-	p := providerByID(m.snap, a.Provider)
-	title := s.title.Render(label(a))
-	switch {
-	case a.Active:
-		title += "  " + s.ok.Render("in use by sandboxes")
-	case a.ActiveNow:
-		title += "  " + s.ok.Render("handling failover")
-	case a.Priority > 1:
-		title += "  " + s.faint.Render(fmt.Sprintf("fallback #%d", a.Priority))
-	}
-	rows := m.statusRows(a, p)
-	rows = append(rows,
-		[2]string{"Token", "expires " + until(now, a.ExpiresAt)},
-		[2]string{"Refreshed", ago(now, a.LastRefreshAt) + nextCheck(now, a)},
-	)
-	if pub, ok := m.snap.Published[a.Provider]; ok && a.Active {
-		rows = append(rows, [2]string{"Published", ago(now, m.snap.PublishedAt) + s.faint.Render(" as "+pub.Label)})
-	}
-	out := []string{title, s.faint.Render(p.Name + " · " + a.Name), ""}
-	w := 0
-	for _, r := range rows {
-		w = max(w, lipgloss.Width(r[0]))
-	}
-	for _, r := range rows {
-		out = append(out, s.faint.Render(pad(r[0], w))+"  "+r[1])
-	}
-	out = append(out, "")
-	out = append(out, m.quotaBlock(a)...)
-	out = append(out, "")
-	out = append(out, m.usageBlock(a)...)
-	return append(out, "", m.stateHint(a))
-}
-
-// stateText is a's state by name, in the color that says how it is doing.
-func (m Model) stateText(state string) string {
-	style := m.st.faint
-	switch state {
-	case v1.AccountOK:
-		style = m.st.ok
-	case v1.AccountExpiring:
-		style = m.st.warn
-	case v1.AccountFailing, v1.AccountSignIn:
-		style = m.st.bad
-	}
-	return style.Render(stateName(state))
-}
-
-// statusRows are the detail pane's rows about the account's health.
-func (m Model) statusRows(a v1.Account, p v1.Provider) [][2]string {
-	s := m.st
-	now := m.now()
-	rows := [][2]string{{"Status", m.stateText(a.State)}}
-	if a.Priority > 0 {
-		enabled := 0
-		accts := byProvider(m.snap, a.Provider)
-		for i := range accts {
-			if !accts[i].Disabled {
-				enabled++
-			}
-		}
-		chainVal := fmt.Sprintf("#%d of %d", a.Priority, max(enabled, a.Priority))
-		if a.ActiveNow && !a.Active {
-			chainVal += "  " + s.ok.Render("· handling failover")
-		}
-		rows = append(rows, [2]string{"Chain", chainVal})
-	}
-	if !a.CooldownUntil.IsZero() && a.CooldownUntil.After(now) {
-		cd := "until " + until(now, a.CooldownUntil)
-		if a.CooldownReason != "" {
-			cd += " (" + a.CooldownReason + ")"
-		}
-		rows = append(rows, [2]string{"Cooldown", s.warn.Render(cd)})
-	}
-	if a.Failovers > 0 {
-		rows = append(rows, [2]string{"Failovers", strconv.Itoa(a.Failovers)})
-	}
-	if a.StatusNote != "" {
-		rows = append(rows, [2]string{"", s.faint.Render(a.StatusNote)})
-	}
-	if a.RefreshError != "" {
-		rows = append(rows, [2]string{"Problem", s.bad.Render(a.RefreshError)})
-	}
-	if a.State == v1.AccountSignIn {
-		rows = append(rows, [2]string{"", s.warn.Render("Sign in again: press a, pick " + p.Name + ", then remove the old entry.")})
-	}
-	if a.QuotaBlocked {
-		rows = append(rows, [2]string{"Quota", s.warn.Render("blocked by the provider")})
-	}
-	return rows
-}
-
-// nextCheck says when CLIProxyAPI will next look at the account's token.
-func nextCheck(now time.Time, a v1.Account) string {
-	if a.NextRefreshAt.IsZero() || !a.NextRefreshAt.After(now) {
+// listQuota is the list's small meter of the account's most used window. A
+// narrow list leaves it out.
+func (m Model) listQuota(a v1.Account, width int, on func(lipgloss.Style) lipgloss.Style) string {
+	if width < 46 {
 		return ""
 	}
-	return "  ·  next check " + until(now, a.NextRefreshAt)
-}
-
-func (m Model) quotaBlock(a v1.Account) []string {
-	s := m.st
-	q := a.Quota
-	if q == nil {
-		return []string{s.head.Render("Quota"), s.faint.Render("No quota reading yet — press Q to fetch live quotas.")}
+	peak, ok := peakQuota(a.Quota)
+	if !ok {
+		return on(m.st.faint).Render(pad("", 13))
 	}
-	now := m.now()
-	head := s.head.Render("Quota")
-	var meta []string
-	if q.Plan != "" {
-		meta = append(meta, q.Plan)
-	}
-	if q.CreditsBalance != "" {
-		meta = append(meta, "credits "+q.CreditsBalance)
-	}
-	if !q.FetchedAt.IsZero() {
-		src := q.Source
-		if src == "" {
-			src = "updated"
-		}
-		meta = append(meta, src+" "+ago(now, q.FetchedAt))
-	}
-	if len(meta) > 0 {
-		head += s.faint.Render("  " + strings.Join(meta, " · "))
-	}
-	out := []string{head}
-	if q.Error != "" {
-		out = append(out, s.warn.Render("fetch error: "+q.Error))
-	}
-	if !q.NextResetAt.IsZero() && q.NextResetAt.After(now) {
-		out = append(out, s.faint.Render("next reset "+until(now, q.NextResetAt)+" ("+q.NextResetAt.UTC().Format("15:04Z")+")"))
-	}
-	for i := range q.Windows {
-		out = append(out, m.quotaWindowLine(now, q.Windows[i]))
-	}
-	return out
-}
-
-func (m Model) quotaWindowLine(now time.Time, w v1.QuotaWindow) string {
-	s := m.st
-	barStyle := s.ok
-	switch {
-	case w.UsedPercent >= 90:
-		barStyle = s.bad
-	case w.UsedPercent >= 70:
-		barStyle = s.warn
-	}
-	lbl := w.Label
-	if lbl == "" {
-		lbl = w.Name
-	}
-	line := s.faint.Render(pad(lbl, 16)) + " " + barStyle.Render(quotaBar(w.UsedPercent, 10)) + " " + barStyle.Render(fmt.Sprintf("%4.0f%%", w.UsedPercent))
-	if w.Limit > 0 {
-		line += s.faint.Render(fmt.Sprintf(" (%s/%s)", compactCount(w.Used), compactCount(w.Limit)))
-	}
-	if !w.ResetsAt.IsZero() && w.ResetsAt.After(now) {
-		line += s.faint.Render("  resets " + until(now, w.ResetsAt))
-	}
-	return line
-}
-
-func (m Model) usageBlock(a v1.Account) []string {
-	s := m.st
-	if m.snap.UsageError != "" {
-		return []string{s.head.Render("Usage"), s.warn.Render("unavailable: " + m.snap.UsageError)}
-	}
-	u := a.Usage
-	if u == nil {
-		note := "No request has carried this account's token since the proxy last started."
-		if !a.Active && a.Priority > 1 {
-			note = fmt.Sprintf("Not in use yet (fallback #%d). Press enter to make it primary, or K/J to reorder.", a.Priority)
-		} else if !a.Active {
-			note = "Not in use, so no requests. Press enter to use it for sandboxes."
-		}
-		return []string{s.head.Render("Usage"), s.faint.Render(note)}
-	}
-	now := m.now()
-	out := []string{s.head.Render("Usage") + s.faint.Render("  through the egress proxy, since it last started")}
-	reqLine := fmt.Sprintf("%s requests   %s ok", s.title.Render(strconv.Itoa(u.Requests)), s.ok.Render(strconv.Itoa(u.OK)))
-	if u.AvgLatencyMS > 0 {
-		reqLine += s.faint.Render(fmt.Sprintf("   avg %dms", u.AvgLatencyMS))
-	}
-	out = append(out, reqLine)
-	if bad := m.errorSummary(u); bad != "" {
-		out = append(out, bad)
-	}
-	out = append(out, m.tokenLines(u)...)
-	out = append(out, m.modelLines(u)...)
-	out = append(out, s.faint.Render("last request "+ago(now, u.LastAt)))
-	width := min(48, max(12, m.width-m.leftWidth()-8))
-	out = append(out, "", s.faint.Render("requests (last 24h)"), s.ok.Render(spark(u.Recent, width)))
-	if len(u.RecentVolume) > 0 {
-		out = append(out, s.faint.Render("tokens (last 24h)"), s.ok.Render(spark64(u.RecentVolume, width)))
-	}
-	return out
-}
-
-func (m Model) errorSummary(u *v1.AccountUsage) string {
-	s := m.st
-	var bad []string
-	if u.RateLimited > 0 {
-		bad = append(bad, s.warn.Render(fmt.Sprintf("%d rate limited", u.RateLimited)))
-	}
-	if u.ClientError > 0 {
-		bad = append(bad, s.warn.Render(fmt.Sprintf("%d client errors", u.ClientError)))
-	}
-	if u.ServerError > 0 {
-		bad = append(bad, s.bad.Render(fmt.Sprintf("%d server errors", u.ServerError)))
-	}
-	return strings.Join(bad, s.faint.Render("  ·  "))
-}
-
-func (m Model) tokenLines(u *v1.AccountUsage) []string {
-	if u.Total == 0 && u.Input == 0 && u.Output == 0 {
-		return nil
-	}
-	s := m.st
-	out := []string{fmt.Sprintf("%s %s   %s %s   %s %s",
-		s.faint.Render("In"), s.text.Render(compactCount(u.Input)),
-		s.faint.Render("Out"), s.text.Render(compactCount(u.Output)),
-		s.faint.Render("Total"), s.title.Render(compactCount(u.Total)))}
-	var extra []string
-	if u.CacheRead > 0 || u.CacheWrite > 0 {
-		cache := fmt.Sprintf("Cache %s read · %s write", compactCount(u.CacheRead), compactCount(u.CacheWrite))
-		if u.CacheHitPercent > 0 {
-			cache += fmt.Sprintf(" (%.1f%% hit)", u.CacheHitPercent)
-		}
-		extra = append(extra, cache)
-	}
-	if u.Reasoning > 0 {
-		extra = append(extra, "Reasoning "+compactCount(u.Reasoning))
-	}
-	if len(extra) > 0 {
-		out = append(out, s.faint.Render(strings.Join(extra, "  ·  ")))
-	}
-	return out
-}
-
-func (m Model) modelLines(u *v1.AccountUsage) []string {
-	if len(u.ByModel) == 0 {
-		return nil
-	}
-	type pair struct {
-		name string
-		u    v1.ModelUsage
-	}
-	list := make([]pair, 0, len(u.ByModel))
-	for k, v := range u.ByModel {
-		list = append(list, pair{name: k, u: v})
-	}
-	sort.Slice(list, func(i, j int) bool {
-		if list[i].u.Total != list[j].u.Total {
-			return list[i].u.Total > list[j].u.Total
-		}
-		return list[i].name < list[j].name
-	})
-	limit := min(4, len(list))
-	out := make([]string, 0, limit+1)
-	out = append(out, m.st.faint.Render("models"))
-	for i := 0; i < limit; i++ {
-		p := list[i]
-		out = append(out, fmt.Sprintf("  %s  %s",
-			m.st.text.Render(pad(p.name, 26)),
-			m.st.faint.Render(fmt.Sprintf("%d req · %s in · %s out · %s cache",
-				p.u.Requests, compactCount(p.u.Input), compactCount(p.u.Output), compactCount(p.u.CacheRead)))))
-	}
-	return out
-}
-
-func (m Model) stateHint(a v1.Account) string {
-	switch {
-	case a.Disabled:
-		return m.st.faint.Render("d enables it again, x removes it")
-	case a.Priority > 1:
-		return m.st.faint.Render("enter makes it primary · K/J reorders the fallback chain")
-	case !a.Active:
-		return m.st.faint.Render("enter makes sandboxes use this account")
-	default:
-		return m.st.faint.Render("primary account · K/J reorders the fallback chain")
-	}
+	style := m.severity(peak)
+	return m.meter(peak, 6, on(style), -1) + on(style).Render(fmt.Sprintf(" %3.0f%%", peak)) + on(m.st.faint).Render("  ")
 }
 
 func (m Model) modalBox() string {
@@ -732,9 +489,12 @@ func (m Model) helpBox() string {
 		row("r", "refresh the account's token now"),
 		row("p", "publish to sandboxes now instead of within five minutes"),
 		row("R", "read everything again"),
-		row("j/k, g/G", "move"), "",
+		row("j/k, g/G", "move"),
+		row("ctrl+d/u", "scroll the account's details (or the wheel, pgdn/pgup)"),
+		row("v", "calendar of this account, or of all accounts"), "",
 		s.faint.Render("Usage counts requests through the egress proxy and starts over"),
-		s.faint.Render("when the proxy restarts. On 429/401/403/529 the proxy fails over"),
-		s.faint.Render("down the fallback chain automatically without restarting pods."),
+		s.faint.Render("when the proxy restarts; the calendar's days (UTC) are kept."),
+		s.faint.Render("On 429/401/403/529 the proxy fails over down the fallback chain"),
+		s.faint.Render("automatically without restarting pods."),
 	})
 }

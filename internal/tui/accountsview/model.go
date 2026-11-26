@@ -76,6 +76,9 @@ type Model struct {
 	cursor int
 	top    int // first list line in view
 
+	scroll      int  // first line of the detail pane's body in view
+	allAccounts bool // the calendar adds up every account
+
 	hidden bool
 	gen    int // bumped when polling restarts, so a stale tick is ignored
 	width  int
@@ -252,6 +255,8 @@ func (m *Model) setSnapshot(s v1.Accounts) {
 	if a, ok := m.selected(); ok {
 		selected = a.Name
 	}
+	scroll := m.scroll
+	m.scroll = 0
 	m.snap = s
 	m.flat = m.flat[:0]
 	for _, p := range m.snap.Providers {
@@ -260,7 +265,7 @@ func (m *Model) setSnapshot(s v1.Accounts) {
 	m.cursor = 0
 	for i := range m.flat {
 		if m.flat[i].Name == selected {
-			m.cursor = i
+			m.cursor, m.scroll = i, scroll
 		}
 	}
 	m.keepCursorInView()
@@ -277,7 +282,17 @@ func (m *Model) move(delta int) {
 	if len(m.flat) == 0 {
 		return
 	}
-	m.cursor = max(0, min(len(m.flat)-1, m.cursor+delta))
+	m.jump(m.cursor + delta)
+}
+
+// jump selects the account at i, or the nearest one, from the top of its
+// details.
+func (m *Model) jump(i int) {
+	was := m.cursor
+	m.cursor = max(0, min(len(m.flat)-1, i))
+	if m.cursor != was {
+		m.scroll = 0
+	}
 	m.keepCursorInView()
 }
 
@@ -311,11 +326,15 @@ func (m *Model) navKey(k string) bool {
 	case "k", "up":
 		m.move(-1)
 	case "g", "home":
-		m.cursor = 0
-		m.keepCursorInView()
+		m.jump(0)
 	case "G", "end":
-		m.cursor = max(0, len(m.flat)-1)
-		m.keepCursorInView()
+		m.jump(len(m.flat) - 1)
+	case "ctrl+d", "pgdown":
+		m.scrollDetail(m.bodyHeight() / 2)
+	case "ctrl+u", "pgup":
+		m.scrollDetail(-m.bodyHeight() / 2)
+	case "v":
+		m.allAccounts = !m.allAccounts
 	default:
 		return false
 	}
