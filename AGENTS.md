@@ -88,7 +88,7 @@ Prune rules that no longer apply. Past about 200 lines, move older detail into
   - **Enforced by**: `gocritic` `evalOrder`.
 - **Rule**: Build render output in one `strings.Builder` pass, never by repeated joins.
   - **Why**: An O(N^2) join made the commits tab lag (`4b3e2f4`).
-  - **Enforced by**: `BenchmarkPRCommitsTab`.
+  - **Enforced by**: `perfsprint`, `BenchmarkPRCommitsTab`.
 - **Rule**: Send all input to the shell while it holds focus.
   - **Why**: Wheel and click events leaked past the focused shell (`28619be`).
   - **Enforced by**: `TestNoInputLeaksFromShell`.

@@ -1,7 +1,6 @@
-# Quality gate lint rules. These catch bugs, swallowed errors, leaks, unsafe
-# code, and broken layering. Style and complexity limits are left to review, so
-# an agent works without fighting the linter. Existing debt is ratcheted in
-# docs/quality-baseline.json.
+# Quality gate lint rules. Thresholds come from docs/quality-discovery.md,
+# measured on first-party production code. Changing this file needs CODEOWNERS
+# approval. Existing debt is ratcheted in docs/quality-baseline.json.
 version: "2"
 
 run:
@@ -28,19 +27,38 @@ linters:
     - copyloopvar # removes pre-1.22 loop variable copies
     - exhaustive # enum switches drive TUI focus state (28619be)
     # Error and context hygiene
+    - wrapcheck # errors crossing packages need context for the status bar
     - contextcheck # keeps the caller's deadline on the call chain
     - noctx # an exec with no deadline stalled clones forever (82ea704)
     - bodyclose # the egress proxy must not leak upstream responses
     # Workaround detectors
     - nolintlint # every suppression must be specific and explained
+    - godox # first-party code has zero TODOs; keep it that way
     - forbidigo # bans stdout writes, sleeps, and panics in a TUI
+    - gochecknoglobals # shared mutable state breaks concurrent refresh
     - gochecknoinits # hidden startup order
+    - nakedret # naked returns obscure values in long update functions
+    # Complexity and duplication
+    - gocognit # update loops are the main complexity risk
+    - cyclop # second view of branching, per function
+    - funlen # long functions hide state transitions
+    - nestif # deep conditionals caused focus-state bugs
+    - dupl # first-party production code has no dupl hits today
+    - goconst # repeated literals drift apart
+    - revive # only for parameter count and nesting depth limits
     # Dead code
     - unused # unreferenced identifiers
-    # Diagnostics and performance
+    - unparam # parameters that never vary
+    # Performance: render latency is the top fix class in history
+    - prealloc # avoids regrowth on render paths
+    - perfsprint # cheaper conversions on render paths
     - gocritic # diagnostics, performance, and evaluation order
     # Security
     - gosec # the egress proxy handles credentials
+    # Tests
+    - testifylint # vendored tests use testify
+    - thelper # failures point at the caller
+    - tparallel # keeps t.Parallel use consistent
     # Architecture
     - depguard # encodes the import layering
 
@@ -55,6 +73,8 @@ linters:
       require-explanation: true
       require-specific: true
       allow-unused: false
+    godox:
+      keywords: [TODO, FIXME, HACK, XXX, WORKAROUND]
     forbidigo:
       forbid:
         - pattern: '^time\.Sleep$'
@@ -65,8 +85,31 @@ linters:
           msg: Return an error so the UI can show it.
         - pattern: '^context\.TODO$'
           msg: Pass the caller's context, or use context.WithTimeout.
+    funlen:
+      lines: 60 # p90 is 55
+      statements: 35 # p90 is 32
+      ignore-comments: true
+    cyclop:
+      max-complexity: 12 # p90 is 12
+    gocognit:
+      min-complexity: 15 # p90 is 14
+    nestif:
+      min-complexity: 4 # p95 is 3
+    nakedret:
+      max-func-lines: 0 # first-party code has no naked returns
+    dupl:
+      threshold: 150 # zero first-party hits at this size
+    goconst:
+      min-len: 3
+      min-occurrences: 3
+    revive:
+      rules:
+        - name: argument-limit
+          arguments: [5] # p99 is 5
+        - name: max-control-nesting
+          arguments: [5] # p99 is 5
     gocritic:
-      enabled-tags: [diagnostic, performance]
+      enabled-tags: [diagnostic, performance, style]
       disabled-checks:
         # Bubble Tea models are value receivers by design (202 hits).
         - hugeParam
@@ -147,3 +190,7 @@ linters:
 
   exclusions:
     generated: strict
+    rules:
+      # Table-driven tests are long and repetitive by design.
+      - path: _test\.go
+        linters: [funlen, gocognit, cyclop, dupl, goconst, wrapcheck]

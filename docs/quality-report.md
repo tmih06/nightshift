@@ -137,10 +137,8 @@ each moved check was rerun on its own except the vendored race tests.
 - Nothing in the gate stops a change from editing the gate's own config, scripts,
   or debt baseline. The `diff/protected-path` rule and its owner-approval step were
   removed, so only human review of those files stands in for them.
-- Style and complexity linters (`funlen`, `cyclop`, `gocognit`, `nestif`, `dupl`,
-  `goconst`, `revive`, `wrapcheck`, `gochecknoglobals`, `prealloc`, `perfsprint`, and
-  similar) were dropped so agents work without fighting the linter. Review catches
-  long or tangled functions now.
+- Function-level limits apply when the signature line changes. Growing an existing
+  long function is not flagged by `funlen`, `cyclop`, or `gocognit`.
 - `AGENTS.md` learned rules marked by tests only protect the behavior those tests
   cover.
 
