@@ -68,13 +68,16 @@ func problemOf(err error) v1.Problem {
 func classify(err error) *apiError {
 	var ae *apiError
 	var inv *checkout.InvalidError
+	var conflict *checkout.ConflictError
 	msg := err.Error()
 	switch {
 	case errors.As(err, &ae):
 		return ae
 	case errors.As(err, &inv):
 		return &apiError{status: http.StatusUnprocessableEntity, code: v1.CodeInvalid, detail: msg}
-	case errors.Is(err, checkout.ErrNotFound), strings.Contains(msg, "(NotFound)"):
+	case errors.As(err, &conflict):
+		return &apiError{status: http.StatusConflict, code: v1.CodeConflict, detail: msg}
+	case errors.Is(err, checkout.ErrNotFound), errors.Is(err, checkout.ErrNoRun), strings.Contains(msg, "(NotFound)"):
 		return &apiError{status: http.StatusNotFound, code: v1.CodeNotFound, detail: msg}
 	case strings.Contains(msg, "(AlreadyExists)"), strings.Contains(msg, "(Conflict)"):
 		return &apiError{status: http.StatusConflict, code: v1.CodeConflict, detail: msg}

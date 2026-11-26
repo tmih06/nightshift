@@ -11,9 +11,10 @@ import (
 	"github.com/tmih06/nightshift/internal/services/session"
 )
 
+// How long a clone Job and a sandbox's pod are given.
 const (
-	cloneTimeout = 10 * time.Minute
-	podTimeout   = 3 * time.Minute
+	CloneTimeout = 10 * time.Minute
+	PodTimeout   = 3 * time.Minute
 )
 
 // Ops is what the pipeline does to the cluster. Live is the real thing; tests
@@ -128,7 +129,7 @@ func (p *pipeline) clone(cloned bool) (pod map[string]any, ok bool) {
 		return pod, true
 	}
 	p.say(v1.CheckoutEvent{Step: v1.StepClone, Detail: "starting the clone pod"})
-	err = p.ops.Clone(p.spec.Volume(), image, p.spec.CloneScript(), cloneTimeout, func(line string) {
+	err = p.ops.Clone(p.spec.Volume(), image, p.spec.CloneScript(), CloneTimeout, func(line string) {
 		p.say(v1.CheckoutEvent{Step: v1.StepClone, Detail: cloneDetail(line)})
 	})
 	if err != nil {
@@ -148,7 +149,7 @@ func (p *pipeline) sandbox(pod map[string]any) (name string, ok bool) {
 		return "", false
 	}
 	p.say(v1.CheckoutEvent{Step: v1.StepSandbox, Sandbox: name, Detail: "waiting for " + name})
-	err = p.ops.WaitPod(name, podTimeout, func(state string) {
+	err = p.ops.WaitPod(name, PodTimeout, func(state string) {
 		p.say(v1.CheckoutEvent{Step: v1.StepSandbox, Sandbox: name, Detail: podDetail(state)})
 	})
 	if err != nil {
@@ -202,9 +203,9 @@ func podDetail(state string) string {
 
 var shellSafe = regexp.MustCompile(`^[A-Za-z0-9_./:@%+=,-]+$`)
 
-// shellQuote leaves plain words bare, so the typed line stays readable, and
+// Quote leaves plain words bare, so the typed line stays readable, and
 // single-quotes the rest: branch names may hold $, ;, or quotes.
-func shellQuote(s string) string {
+func Quote(s string) string {
 	if shellSafe.MatchString(s) && !strings.HasPrefix(s, "-") {
 		return s
 	}

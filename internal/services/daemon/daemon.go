@@ -77,7 +77,7 @@ func Start(cfg Config) (*Daemon, error) {
 		Token: token, Hosts: cfg.Hosts, AnyHost: cfg.AnyHost, Version: cfg.Version,
 		Cluster: v1.ClusterInfo{Context: cluster.ContextLabel(), Namespace: cluster.Namespace},
 		Fleet:   backend.Fleet, Claims: backend.Claims, Checkouts: backend.Checkouts, Volumes: backend.Volumes,
-		Terminals: backend.Terminals, Accounts: accountsOf(backend),
+		Terminals: backend.Terminals, Accounts: accountsOf(backend), Runs: backend.Runs,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("start the server: %w", err)
@@ -157,6 +157,11 @@ func loopback(host string) bool {
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
 }
+
+// ResumeRuns takes up the runs the cluster remembers, so their results are
+// read without a request having to ask first. The program calls it, not Start,
+// as it changes the records in whatever cluster kubectl points at.
+func (d *Daemon) ResumeRuns() { d.backend.Runs.Resume() }
 
 // URL is where the daemon can be reached.
 func (d *Daemon) URL() string { return d.url }

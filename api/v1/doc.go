@@ -35,4 +35,7 @@ const (
 	CapCheckouts = "checkouts"
 	// CapTerminals means terminals inside claimed sandboxes can be driven.
 	CapTerminals = "terminals"
+	// CapRuns means a task can be handed to a coding agent and followed to its
+	// result.
+	CapRuns = "runs"
 )

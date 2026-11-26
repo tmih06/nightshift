@@ -145,6 +145,7 @@ func newTestServer(t *testing.T, f *fake, mutate ...func(*Config)) *httptest.Ser
 		Token: token, Version: "test", WatchInterval: 10 * time.Millisecond,
 		Cluster: v1.ClusterInfo{Context: "kind-test", Namespace: "nightshift"},
 		Fleet:   f, Claims: f, Checkouts: f, Volumes: f, Terminals: f, Accounts: f,
+		Runs: &fakeRuns{},
 	}
 	for _, m := range mutate {
 		m(&cfg)

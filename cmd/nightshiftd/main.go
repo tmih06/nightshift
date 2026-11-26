@@ -73,9 +73,9 @@ func run() error {
 	if cfg.Token, err = loadToken(*tokenFile); err != nil {
 		return err
 	}
-	d, err := daemon.Start(cfg)
+	d, err := start(cfg)
 	if err != nil {
-		return fmt.Errorf("run: %w", err)
+		return err
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -91,6 +91,16 @@ func run() error {
 		return fmt.Errorf("serve: %w", err)
 	}
 	return nil
+}
+
+// start serves the API and takes up the runs the cluster remembers.
+func start(cfg daemon.Config) (*daemon.Daemon, error) {
+	d, err := daemon.Start(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("run: %w", err)
+	}
+	d.ResumeRuns()
+	return d, nil
 }
 
 func defaultTokenFile() string {

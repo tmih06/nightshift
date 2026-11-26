@@ -46,6 +46,7 @@ type Config struct {
 	Volumes   Volumes
 	Terminals Terminals
 	Accounts  Accounts
+	Runs      Runs
 }
 
 // Server serves the API.
@@ -96,7 +97,7 @@ func (s *Server) Routes() []string {
 
 func (s *Server) routes() []route {
 	var rs []route
-	for _, group := range [][]route{s.metaRoutes(), s.fleetRoutes(), s.claimRoutes(), s.checkoutRoutes(), s.terminalRoutes(), s.accountRoutes()} {
+	for _, group := range [][]route{s.metaRoutes(), s.fleetRoutes(), s.claimRoutes(), s.checkoutRoutes(), s.runRoutes(), s.terminalRoutes(), s.accountRoutes()} {
 		rs = append(rs, group...)
 	}
 	return rs
@@ -206,6 +207,7 @@ func (s *Server) info(w http.ResponseWriter, _ *http.Request) error {
 		{v1.CapAccounts, s.cfg.Accounts != nil},
 		{v1.CapCheckouts, s.cfg.Checkouts != nil},
 		{v1.CapTerminals, s.cfg.Terminals != nil},
+		{v1.CapRuns, s.cfg.Runs != nil},
 	} {
 		if c.has {
 			caps = append(caps, c.name)

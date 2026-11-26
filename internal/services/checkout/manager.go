@@ -19,6 +19,9 @@ const keepFinished = 30 * time.Minute
 // forgotten.
 var ErrNotFound = errors.New("no such checkout")
 
+// ErrNoRun is ErrNotFound for a run.
+var ErrNoRun = errors.New("no such run")
+
 // Manager runs checkouts in the background and lets any number of frontends
 // follow them. It owns every goroutine it starts: Close waits for them.
 type Manager struct {
@@ -120,6 +123,11 @@ func (m *Manager) reopened(req v1.CheckoutRequest, volume, sandbox string) v1.Ch
 type InvalidError struct{ Reason string }
 
 func (e *InvalidError) Error() string { return e.Reason }
+
+// ConflictError is a request that what exists already forbids.
+type ConflictError struct{ Reason string }
+
+func (e *ConflictError) Error() string { return e.Reason }
 
 // record adds an event to a run and wakes everyone following it.
 func (m *Manager) record(r *run, ev v1.CheckoutEvent) {

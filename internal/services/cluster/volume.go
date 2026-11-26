@@ -27,6 +27,9 @@ const (
 
 	volumeSize = "2Gi"
 
+	// labelsKey is the manifest field every object here is found by.
+	labelsKey = "labels"
+
 	// VolumeRepoDir is the clone's directory on the volume, and what the
 	// sandbox mounts. The volume's root belongs to root, where git, run as
 	// the sandbox's user, refuses to work; a directory that user made is its
@@ -88,13 +91,19 @@ func volumeManifest(name string, target VolumeFor) []byte {
 	case VolumeRepo:
 		// Repo volumes only carry repo and branch annotations.
 	}
+	return pvcManifest(name, map[string]string{VolumeLabel: name}, annotations)
+}
+
+// pvcManifest is a volume of Nightshift's size with these labels and
+// annotations.
+func pvcManifest(name string, labels, annotations map[string]string) []byte {
 	return mustJSON(map[string]any{
 		"apiVersion": "v1",
 		"kind":       "PersistentVolumeClaim",
 		"metadata": map[string]any{
 			"name":        name,
 			"namespace":   Namespace,
-			"labels":      map[string]string{VolumeLabel: name},
+			labelsKey:     labels,
 			"annotations": annotations,
 		},
 		"spec": map[string]any{
@@ -222,13 +231,13 @@ func cloneJobManifestWithEgress(volume, image, script, proxyURL string) []byte {
 		"metadata": map[string]any{
 			"generateName": "clone-" + prefix + "-",
 			"namespace":    Namespace,
-			"labels":       map[string]string{VolumeLabel: volume},
+			labelsKey:      map[string]string{VolumeLabel: volume},
 		},
 		"spec": map[string]any{
 			"backoffLimit":            0,
 			"ttlSecondsAfterFinished": 600,
 			"template": map[string]any{
-				"metadata": map[string]any{"labels": map[string]string{VolumeLabel: volume}},
+				"metadata": map[string]any{labelsKey: map[string]string{VolumeLabel: volume}},
 				"spec":     podSpec,
 			},
 		},
@@ -289,7 +298,7 @@ func volumeSandboxManifestWithEgress(template string, podTemplate map[string]any
 		"metadata": map[string]any{
 			"generateName": agent + "-" + volume[:min(len(volume), 26)] + "-",
 			"namespace":    Namespace,
-			"labels":       map[string]string{VolumeLabel: volume},
+			labelsKey:      map[string]string{VolumeLabel: volume},
 			"annotations":  map[string]string{templateRefKey: template},
 		},
 		"spec": map[string]any{"podTemplate": pod},

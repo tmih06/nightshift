@@ -34,7 +34,7 @@ flowchart LR
 api/            the contract: openapi.yaml, v1 (types), client (Go SDK)
 cmd/nightshiftd the services as a daemon
 cmd/nightshift  the terminal UI: a client, it runs nothing else
-internal/services/{cluster,session,accounts,checkout,server,live,daemon,egress}
+internal/services/{cluster,session,accounts,checkout,runs,server,live,daemon,egress}
 internal/tui/{app,dashboard,accountsview,repoview,dialog,fleet}
 ```
 
@@ -285,6 +285,30 @@ pods retain direct internet access — credential safety rests on placeholders
 being worthless off the proxy path, not on network restriction. Tightening
 templates to proxy-only egress is possible through the template
 `networkPolicy` field but will break any tool the proxy rules do not cover.
+
+## Runs
+
+A run is a task given to a coding agent through `/v1/runs`. It is how work from
+outside, such as an issue tracker's tickets, reaches the fleet: an adapter per
+tracker calls the API, and the services never learn which tracker it is.
+
+```mermaid
+flowchart LR
+  Adapter[Adapter] -->|POST /v1/runs| Runs[internal/services/runs]
+  Runs --> PVC[Volume run-..., holding the run's record]
+  Job[Clone Job] -->|any https git host the proxy allows| PVC
+  Runs --> Sandbox[Sandbox from the pool's template]
+  PVC --> Sandbox
+  Sandbox -->|exit status and output| Runs
+```
+
+It reuses the checkout's clone Job and volume sandbox. The agent runs in its
+non-interactive mode from a script that `hc run` starts in a new terminal, so it
+shows in the Pods tab like any other, and the services keep no connection to the
+sandbox open. The script leaves the exit status in a file,
+which the services poll with `kubectl exec`. The run's record is an annotation
+on its volume, so a restarted server finds it again and needs no new
+permission. See `docs/api.md` for the contract and its limits.
 
 ## Operating the cluster
 
