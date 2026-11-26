@@ -31,6 +31,18 @@ type KeptVolume struct {
 	Created time.Time
 }
 
+// pvcList is what Nightshift reads of `kubectl get pvc -o json`.
+type pvcList struct {
+	Items []struct {
+		Metadata struct {
+			Name              string            `json:"name"`
+			CreationTimestamp string            `json:"creationTimestamp"`
+			DeletionTimestamp string            `json:"deletionTimestamp"`
+			Annotations       map[string]string `json:"annotations"`
+		} `json:"metadata"`
+	} `json:"items"`
+}
+
 // ListVolumes reads every volume Nightshift keeps.
 func ListVolumes() ([]KeptVolume, error) {
 	out, err := runKubectl(nil, "get", "pvc", "-l", VolumeLabel, "-o", "json")
@@ -41,15 +53,7 @@ func ListVolumes() ([]KeptVolume, error) {
 }
 
 func parseVolumes(raw []byte) ([]KeptVolume, error) {
-	var list struct {
-		Items []struct {
-			Metadata struct {
-				Name              string            `json:"name"`
-				CreationTimestamp string            `json:"creationTimestamp"`
-				Annotations       map[string]string `json:"annotations"`
-			} `json:"metadata"`
-		} `json:"items"`
-	}
+	var list pvcList
 	if err := json.Unmarshal(raw, &list); err != nil {
 		return nil, fmt.Errorf("parse volumes: %w", err)
 	}

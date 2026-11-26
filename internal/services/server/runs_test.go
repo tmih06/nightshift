@@ -45,16 +45,11 @@ func (f *fakeRuns) List(ref string) ([]v1.Run, error) {
 	return nil, nil
 }
 
-func (f *fakeRuns) Get(id string) (v1.Run, error) {
-	run, _, err := f.Watch(id)
-	return run, err
-}
-
 func (f *fakeRuns) Watch(id string) (v1.Run, <-chan struct{}, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if id != "run-1" {
-		return v1.Run{}, nil, checkout.ErrNotFound
+		return v1.Run{}, nil, checkout.ErrNoRun
 	}
 	f.watched++
 	changed := make(chan struct{})

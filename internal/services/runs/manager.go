@@ -13,7 +13,9 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"charm.land/log/v2"
@@ -50,10 +52,9 @@ type entry struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	// step keeps a deletion from missing the sandbox being created.
-	step sync.Mutex
-	// saving keeps records written in the order the changes were made.
-	saving sync.Mutex
+	// mu keeps records written in the order the changes were made, and a
+	// deletion from missing a record or sandbox on its way.
+	mu sync.Mutex
 }
 
 // Manager holds every run, drives the new ones, and watches the working ones.
@@ -68,12 +69,12 @@ type Manager struct {
 	setup  chan struct{}
 	look   chan struct{}
 
-	// admit serializes loading and creating.
-	admit sync.Mutex
+	// admit serializes loading and creating; loaded is set once, under it.
+	admit  sync.Mutex
+	loaded atomic.Bool
 
-	mu     sync.Mutex
-	loaded bool
-	runs   map[string]*entry
+	mu   sync.Mutex
+	runs map[string]*entry
 }
 
 // NewManager returns a Manager that acts through ops. It reads nothing until
@@ -97,16 +98,19 @@ func (m *Manager) Resume() {
 				return
 			}
 			log.Warn("could not read the runs yet", "err", err)
-			if !m.pause(m.ctx, retryEvery) {
+			if !pause(m.ctx, retryEvery) {
 				return
 			}
 		}
 	})
 }
 
-// load reads the records once. A run cut off before its agent started cannot go
-// on, as its prompt was only held in memory.
+// load reads the records once. It takes no lock once they are read, so a
+// creation in progress holds up nobody who only looks.
 func (m *Manager) load() error {
+	if m.loaded.Load() && m.ctx.Err() == nil {
+		return nil
+	}
 	m.admit.Lock()
 	defer m.admit.Unlock()
 	return m.loadLocked()
@@ -116,38 +120,45 @@ func (m *Manager) loadLocked() error {
 	if m.ctx.Err() != nil {
 		return errClosed
 	}
-	m.mu.Lock()
-	loaded := m.loaded
-	m.mu.Unlock()
-	if loaded {
+	if m.loaded.Load() {
 		return nil
 	}
 	records, err := m.ops.Records()
 	if err != nil {
 		return fmt.Errorf("read the runs: %w", err)
 	}
+	var cutOff []*entry
 	for name, raw := range records {
 		var rec record
 		if err := json.Unmarshal(raw, &rec); err != nil || rec.Run.ID != name {
 			log.Warn("skipping a run record that cannot be read", "volume", name, "err", err)
 			continue
 		}
-		m.takeUp(m.hold(rec))
+		switch e := m.hold(rec); rec.Run.State {
+		case v1.RunDone, v1.RunFailed:
+		case v1.RunWorking:
+			m.wg.Go(func() { m.watch(e) })
+		default:
+			cutOff = append(cutOff, e)
+		}
 	}
-	m.mu.Lock()
-	m.loaded = true
-	m.mu.Unlock()
+	m.failCutOff(cutOff)
+	m.loaded.Store(true)
 	return nil
 }
 
-func (m *Manager) takeUp(e *entry) {
-	switch e.rec.Run.State {
-	case v1.RunDone, v1.RunFailed:
-	case v1.RunWorking:
-		m.wg.Go(func() { m.watch(e) })
-	default:
-		m.wg.Go(func() { m.fail(e, "the server restarted before the agent started; delete the run and create it again") })
+// failCutOff fails the runs a restart cut off before their agent started, which
+// cannot go on as their prompt was only held in memory. One at a time: each
+// writes its record with a kubectl of its own.
+func (m *Manager) failCutOff(cutOff []*entry) {
+	if len(cutOff) == 0 {
+		return
 	}
+	m.wg.Go(func() {
+		for _, e := range cutOff {
+			m.fail(e, "the server restarted before the agent started; delete the run and create it again")
+		}
+	})
 }
 
 func (m *Manager) hold(rec record) *entry {
@@ -165,15 +176,6 @@ func (m *Manager) Create(req v1.RunRequest) (v1.Run, error) {
 	if why := req.Problem(); why != "" {
 		return v1.Run{}, &checkout.InvalidError{Reason: why}
 	}
-	template, agent, err := m.agentOf(req.Pool)
-	if err != nil {
-		return v1.Run{}, err
-	}
-	command, ok := agentCommand(agent, req.Model)
-	if !ok {
-		return v1.Run{}, &checkout.InvalidError{Reason: "pool " + req.Pool + " has no coding agent that can run a task"}
-	}
-
 	m.admit.Lock()
 	defer m.admit.Unlock()
 	if err := m.loadLocked(); err != nil {
@@ -186,12 +188,34 @@ func (m *Manager) Create(req v1.RunRequest) (v1.Run, error) {
 	if run, found, err := m.existing(rec); found {
 		return run, err
 	}
+	t, err := m.taskFor(req)
+	if err != nil {
+		return v1.Run{}, err
+	}
+	return m.admitRun(rec, t)
+}
+
+// taskFor finds the template and agent command req's pool runs it with.
+func (m *Manager) taskFor(req v1.RunRequest) (task, error) {
+	template, err := m.ops.PoolTemplate(req.Pool)
+	if err != nil {
+		return task{}, fmt.Errorf("pool %s: %w", req.Pool, err)
+	}
+	command, ok := checkout.TaskCommand(checkout.ForPool(req.Pool, template, "").Command, req.Model)
+	if !ok {
+		return task{}, &checkout.InvalidError{Reason: "pool " + req.Pool + " has no coding agent that can run a task"}
+	}
+	return task{template: template, command: command, prompt: req.Prompt}, nil
+}
+
+// admitRun makes the run's volume and starts driving it.
+func (m *Manager) admitRun(rec record, t task) (v1.Run, error) {
 	raw, err := json.Marshal(rec)
 	if err != nil {
 		return v1.Run{}, fmt.Errorf("record the run: %w", err)
 	}
-	id := rec.Run.ID
-	created, err := m.ops.CreateVolume(id, repoPath(req.Source), branchOf(id, req.Source), raw)
+	id, source := rec.Run.ID, rec.Run.Source
+	created, err := m.ops.CreateRunVolume(id, source.RepoPath(), branchOf(id, source), raw)
 	if err != nil {
 		return v1.Run{}, fmt.Errorf("keep the run: %w", err)
 	}
@@ -199,17 +223,8 @@ func (m *Manager) Create(req v1.RunRequest) (v1.Run, error) {
 		return v1.Run{}, &checkout.ConflictError{Reason: "run " + id + " is still being deleted; try again"}
 	}
 	e := m.hold(rec)
-	task := task{template: template, command: command, request: req}
-	m.wg.Go(func() { m.drive(e, task) })
+	m.wg.Go(func() { m.drive(e, t) })
 	return rec.Run, nil
-}
-
-func (m *Manager) agentOf(pool string) (template, agent string, err error) {
-	template, err = m.ops.PoolTemplate(pool)
-	if err != nil {
-		return "", "", fmt.Errorf("pool %s: %w", pool, err)
-	}
-	return template, checkout.ForPool(pool, template, "").Command, nil
 }
 
 func (m *Manager) existing(rec record) (v1.Run, bool, error) {
@@ -252,12 +267,6 @@ func newRecord(req v1.RunRequest) (record, error) {
 	}, nil
 }
 
-// Get is where a run stands.
-func (m *Manager) Get(id string) (v1.Run, error) {
-	run, _, err := m.Watch(id)
-	return run, err
-}
-
 // Watch is where a run stands, and a channel that closes when that changes.
 func (m *Manager) Watch(id string) (v1.Run, <-chan struct{}, error) {
 	if err := m.load(); err != nil {
@@ -267,7 +276,7 @@ func (m *Manager) Watch(id string) (v1.Run, <-chan struct{}, error) {
 	defer m.mu.Unlock()
 	e, ok := m.runs[id]
 	if !ok {
-		return v1.Run{}, nil, checkout.ErrNotFound
+		return v1.Run{}, nil, checkout.ErrNoRun
 	}
 	return e.rec.Run, e.changed, nil
 }
@@ -304,13 +313,10 @@ func (m *Manager) Delete(id string) error {
 	e, ok := m.runs[id]
 	m.mu.Unlock()
 	if !ok {
-		return checkout.ErrNotFound
+		return checkout.ErrNoRun
 	}
-	e.step.Lock()
-	defer e.step.Unlock()
-	// A record being written would otherwise land after the volume is deleted.
-	e.saving.Lock()
-	defer e.saving.Unlock()
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	if err := m.destroy(id); err != nil {
 		return err
 	}
@@ -334,7 +340,8 @@ func (m *Manager) destroy(id string) error {
 			return fmt.Errorf("delete the sandbox of %s: %w", id, err)
 		}
 	}
-	if err := m.ops.DeleteVolume(id); err != nil {
+	// A volume somebody else deleted must not keep its run listed.
+	if err := m.ops.DeleteVolume(id); err != nil && !strings.Contains(err.Error(), "(NotFound)") {
 		return fmt.Errorf("delete the volume of %s: %w", id, err)
 	}
 	return nil
@@ -343,8 +350,13 @@ func (m *Manager) destroy(id string) error {
 // update changes a run, tells its followers, and writes its record. A run that
 // has been deleted, or a manager that is closing, takes no more changes.
 func (m *Manager) update(e *entry, change func(*v1.Run)) {
-	e.saving.Lock()
-	defer e.saving.Unlock()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	m.updateLocked(e, change)
+}
+
+// updateLocked is update for a caller that holds e.mu.
+func (m *Manager) updateLocked(e *entry, change func(*v1.Run)) {
 	m.mu.Lock()
 	if e.ctx.Err() != nil {
 		m.mu.Unlock()
@@ -371,7 +383,7 @@ func (m *Manager) fail(e *entry, why string) {
 }
 
 // pause waits d, and says whether ctx is still live.
-func (m *Manager) pause(ctx context.Context, d time.Duration) bool {
+func pause(ctx context.Context, d time.Duration) bool {
 	t := time.NewTimer(d)
 	defer t.Stop()
 	select {

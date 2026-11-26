@@ -77,7 +77,7 @@ func classify(err error) *apiError {
 		return &apiError{status: http.StatusUnprocessableEntity, code: v1.CodeInvalid, detail: msg}
 	case errors.As(err, &conflict):
 		return &apiError{status: http.StatusConflict, code: v1.CodeConflict, detail: msg}
-	case errors.Is(err, checkout.ErrNotFound), strings.Contains(msg, "(NotFound)"):
+	case errors.Is(err, checkout.ErrNotFound), errors.Is(err, checkout.ErrNoRun), strings.Contains(msg, "(NotFound)"):
 		return &apiError{status: http.StatusNotFound, code: v1.CodeNotFound, detail: msg}
 	case strings.Contains(msg, "(AlreadyExists)"), strings.Contains(msg, "(Conflict)"):
 		return &apiError{status: http.StatusConflict, code: v1.CodeConflict, detail: msg}

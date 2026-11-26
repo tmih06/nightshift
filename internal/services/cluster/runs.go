@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -16,8 +15,17 @@ const (
 	RunLabel      = "nightshift.dev/run"
 	runAnnotation = "nightshift.dev/run-record"
 
-	execTimeout = 30 * time.Second
+	// runCallTimeout bounds what a run asks of kubectl.
+	runCallTimeout = 30 * time.Second
 )
+
+// bounded runs kubectl on Nightshift's namespace, giving up after
+// runCallTimeout.
+func bounded(stdin []byte, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), runCallTimeout)
+	defer cancel()
+	return kubectlIn(ctx, Namespace, stdin, args)
+}
 
 // CreateRunVolume creates the volume of a run with its record on it. created is
 // false when a volume of that name exists already.
@@ -25,7 +33,7 @@ func CreateRunVolume(name, repo, branch string, record []byte) (created bool, er
 	manifest := pvcManifest(name,
 		map[string]string{VolumeLabel: name, RunLabel: name},
 		map[string]string{repoAnnotation: repo, branchAnnotation: branch, runAnnotation: string(record)})
-	if _, err := runKubectl(manifest, "create", "-f", "-"); err != nil {
+	if _, err := bounded(manifest, "create", "-f", "-"); err != nil {
 		if strings.Contains(err.Error(), "(AlreadyExists)") {
 			return false, nil
 		}
@@ -37,7 +45,7 @@ func CreateRunVolume(name, repo, branch string, record []byte) (created bool, er
 // RunRecords is the record on each run's volume, by volume name. Volumes being
 // deleted are left out.
 func RunRecords() (map[string][]byte, error) {
-	out, err := runKubectl(nil, "get", "pvc", "-l", RunLabel, "-o", "json")
+	out, err := bounded(nil, "get", "pvc", "-l", RunLabel, "-o", "json")
 	if err != nil {
 		return nil, err
 	}
@@ -45,15 +53,7 @@ func RunRecords() (map[string][]byte, error) {
 }
 
 func parseRunRecords(raw []byte) (map[string][]byte, error) {
-	var list struct {
-		Items []struct {
-			Metadata struct {
-				Name              string            `json:"name"`
-				DeletionTimestamp string            `json:"deletionTimestamp"`
-				Annotations       map[string]string `json:"annotations"`
-			} `json:"metadata"`
-		} `json:"items"`
-	}
+	var list pvcList
 	if err := json.Unmarshal(raw, &list); err != nil {
 		return nil, fmt.Errorf("parse run volumes: %w", err)
 	}
@@ -77,21 +77,12 @@ type annotationPatch struct {
 func SaveRunRecord(name string, record []byte) error {
 	var patch annotationPatch
 	patch.Metadata.Annotations = map[string]string{runAnnotation: string(record)}
-	_, err := runKubectl(mustJSON(patch), "patch", "pvc", name, "--type=merge", "--patch-file=/dev/stdin")
+	_, err := bounded(mustJSON(patch), "patch", "pvc", name, "--type=merge", "--patch-file=/dev/stdin")
 	return err
 }
 
 // ExecInPod runs a command in a pod's first container, feeding it stdin, and
-// returns what it printed. It gives up after execTimeout.
+// returns what it printed. It gives up after runCallTimeout.
 func ExecInPod(pod string, stdin []byte, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), execTimeout)
-	defer cancel()
-	cmd := command(ctx, Namespace, append([]string{"exec", "-i", pod, "--"}, args...))
-	cmd.Stdin = bytes.NewReader(stdin)
-	var out, errOut bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errOut
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("kubectl exec %s: %w: %s", pod, err, strings.TrimSpace(errOut.String()))
-	}
-	return out.Bytes(), nil
+	return bounded(stdin, append([]string{"exec", "-i", pod, "--"}, args...)...)
 }

@@ -101,10 +101,20 @@ var (
 	repoDir   = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]*$`)
 )
 
+// RepoPath is the repository's path on its host, such as group/project, or ""
+// when the address has none.
+func (s RunSource) RepoPath() string {
+	u, err := url.Parse(s.CloneURL)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSuffix(strings.Trim(u.Path, "/"), ".git")
+}
+
 // RepoName is the repository's directory name, as git clone would pick it, or
 // "" when the address has none that is safe to use.
 func (s RunSource) RepoName() string {
-	path := strings.TrimSuffix(strings.TrimRight(s.CloneURL, "/"), ".git")
+	path := s.RepoPath()
 	name := path[strings.LastIndex(path, "/")+1:]
 	if !repoDir.MatchString(name) {
 		return ""
@@ -134,7 +144,7 @@ func (s RunSource) addressProblem() string {
 		return "source.cloneUrl must carry no credentials, query, or fragment"
 	case strings.ContainsFunc(s.CloneURL, func(r rune) bool { return r <= 0x20 || r == 0x7f }):
 		return "source.cloneUrl must hold no spaces or control characters"
-	case strings.Trim(u.Path, "/") == "" || s.RepoName() == "":
+	case s.RepoName() == "":
 		return "source.cloneUrl must name a repository"
 	}
 	return ""

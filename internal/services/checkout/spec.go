@@ -6,15 +6,16 @@ package checkout
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 
 	v1 "github.com/tmih06/nightshift/api/v1"
 	"github.com/tmih06/nightshift/internal/services/cluster"
 )
 
-// WorkspaceDir is the sandbox images' working directory (images/base), where a
+// workspaceDir is the sandbox images' working directory (images/base), where a
 // volume is mounted under the repository's name.
-const WorkspaceDir = "/home/node/workspace"
+const workspaceDir = "/home/node/workspace"
 
 // Spec is a target to keep on its own volume, and the agent to start on it.
 type Spec struct {
@@ -55,8 +56,11 @@ func (s Spec) volumeKind() cluster.VolumeKind {
 
 // MountPath is where the volume sits in the sandbox.
 func (s Spec) MountPath() string {
-	return WorkspaceDir + "/" + s.Target.Repo[strings.LastIndex(s.Target.Repo, "/")+1:]
+	return MountPath(s.Target.Repo[strings.LastIndex(s.Target.Repo, "/")+1:])
 }
+
+// MountPath is where the clone of the repository called name sits in a sandbox.
+func MountPath(name string) string { return workspaceDir + "/" + name }
 
 func (s Spec) branch() string {
 	if s.Target.Branch != "" {
@@ -91,7 +95,7 @@ func (s Spec) String() string {
 // carriage returns on one line, which the container log would hold back until
 // the line ends, so it is turned into lines, unbuffered, to follow.
 func (s Spec) CloneScript() string {
-	lines := CloneLines("https://github.com/"+s.Target.Repo+".git", true)
+	lines := CloneLines("https://github.com/" + s.Target.Repo + ".git")
 	if s.Target.Kind == v1.TargetIssue || s.Target.Kind == v1.TargetBranch {
 		b := Quote(s.branch())
 		ref := Quote("refs/remotes/origin/" + s.branch())
@@ -99,20 +103,15 @@ func (s Spec) CloneScript() string {
 			"if git show-ref --verify --quiet "+ref+"; then git checkout -B "+b+" --track "+ref+"; else git checkout -B "+b+"; fi",
 		)
 	} else {
-		lines = append(lines, RetryLines(
-			"fetch",
-			"",
-			fmt.Sprintf("git fetch --progress origin pull/%d/head 2>&1 | lines", s.Target.Number),
-		)...)
-		lines = append(lines, "git checkout -B "+Quote(s.branch())+" FETCH_HEAD")
+		lines = append(lines, FetchLines(fmt.Sprintf("pull/%d/head", s.Target.Number), s.branch())...)
 	}
 	return strings.Join(lines, "\n")
 }
 
 // CloneLines starts a clone script: it drops what an unfinished clone left,
-// clones url into cluster.VolumeRepoDir, and moves into it. githubToken offers
-// git the GITHUB_TOKEN placeholder, which only GitHub is to be given.
-func CloneLines(url string, githubToken bool) []string {
+// clones address into cluster.VolumeRepoDir, and moves into it. Only GitHub is
+// offered the GITHUB_TOKEN placeholder.
+func CloneLines(address string) []string {
 	dir := cluster.VolumeRepoDir
 	lines := []string{
 		"set -euo pipefail",
@@ -122,19 +121,26 @@ func CloneLines(url string, githubToken bool) []string {
 		"export GIT_CONFIG_KEY_1=http.lowSpeedLimit GIT_CONFIG_VALUE_1=1024",
 		"export GIT_CONFIG_KEY_2=http.lowSpeedTime GIT_CONFIG_VALUE_2=20",
 	}
-	if githubToken {
+	if u, err := url.Parse(address); err == nil && strings.EqualFold(u.Hostname(), "github.com") {
 		lines = append(lines, `if [ -n "${GITHUB_TOKEN:-}" ]; then export GIT_ASKPASS=/tmp/git-askpass.sh GIT_TERMINAL_PROMPT=0; printf '#!/bin/sh\ncase "$1" in *Username*) echo x-access-token;; *) echo "$GITHUB_TOKEN";; esac\n' > "$GIT_ASKPASS"; chmod 700 "$GIT_ASKPASS"; fi`)
 	}
-	lines = append(lines, RetryLines(
+	lines = append(lines, retryLines(
 		"clone",
 		"rm -rf "+dir,
-		"git clone --progress "+Quote(url)+" "+dir+" 2>&1 | lines",
+		"git clone --progress "+Quote(address)+" "+dir+" 2>&1 | lines",
 	)...)
 	return append(lines, "cd "+dir)
 }
 
-// RetryLines runs cmd up to three times, after setup each time.
-func RetryLines(label, setup, cmd string) []string {
+// FetchLines follows CloneLines: it fetches ref from origin and checks it out
+// as branch.
+func FetchLines(ref, branch string) []string {
+	lines := retryLines("fetch", "", "git fetch --progress origin "+Quote(ref)+" 2>&1 | lines")
+	return append(lines, "git checkout -B "+Quote(branch)+" FETCH_HEAD")
+}
+
+// retryLines runs cmd up to three times, after setup each time.
+func retryLines(label, setup, cmd string) []string {
 	out := []string{"for i in 1 2 3; do"}
 	if setup != "" {
 		out = append(out, "  "+setup)

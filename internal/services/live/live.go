@@ -6,6 +6,7 @@ package live
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/tmih06/nightshift/internal/services/accounts"
@@ -52,8 +53,11 @@ func New(opts Options) *Backend {
 
 // Close stops what the backend runs, waiting for it until ctx ends.
 func (b *Backend) Close(ctx context.Context) {
-	b.Checkouts.Close(ctx)
-	b.Runs.Close(ctx)
+	// Together, so that neither spends the other's share of ctx.
+	var wg sync.WaitGroup
+	wg.Go(func() { b.Checkouts.Close(ctx) })
+	wg.Go(func() { b.Runs.Close(ctx) })
+	wg.Wait()
 	b.Terminals.Close()
 	if b.Accounts != nil {
 		b.Accounts.svc.Close()

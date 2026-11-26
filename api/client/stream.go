@@ -111,16 +111,32 @@ func (c *Client) WatchFleet(ctx context.Context, fn func(v1.Fleet) error, includ
 // one, which has Done or Error set, has been delivered. A client that joins a
 // checkout late is caught up first.
 func (c *Client) FollowCheckout(ctx context.Context, id string, fn func(v1.CheckoutEvent) error) error {
-	err := c.stream(ctx, request{method: http.MethodGet, path: "/v1/checkouts/" + url.PathEscape(id) + "/events"}, func(ev event) error {
-		var e v1.CheckoutEvent
-		ok, err := decodeEvent(ev, "checkout", &e)
+	return follow(ctx, c, followed[v1.CheckoutEvent]{
+		path:  "/v1/checkouts/" + url.PathEscape(id) + "/events",
+		event: "checkout",
+		last:  func(e v1.CheckoutEvent) bool { return e.Done || e.Error != "" },
+	}, fn)
+}
+
+// followed is a stream that ends itself: where it is, what its events are
+// called, and which one is the last.
+type followed[T any] struct {
+	path, event string
+	last        func(T) bool
+}
+
+// follow calls fn with each event of s, and returns after the last one.
+func follow[T any](ctx context.Context, c *Client, s followed[T], fn func(T) error) error {
+	err := c.stream(ctx, request{method: http.MethodGet, path: s.path}, func(ev event) error {
+		var e T
+		ok, err := decodeEvent(ev, s.event, &e)
 		if err != nil || !ok {
 			return err
 		}
 		if err := fn(e); err != nil {
 			return err
 		}
-		if e.Done || e.Error != "" {
+		if s.last(e) {
 			return errEnd
 		}
 		return nil

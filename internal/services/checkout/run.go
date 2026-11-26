@@ -11,9 +11,10 @@ import (
 	"github.com/tmih06/nightshift/internal/services/session"
 )
 
+// How long a clone Job and a sandbox's pod are given.
 const (
-	cloneTimeout = 10 * time.Minute
-	podTimeout   = 3 * time.Minute
+	CloneTimeout = 10 * time.Minute
+	PodTimeout   = 3 * time.Minute
 )
 
 // Ops is what the pipeline does to the cluster. Live is the real thing; tests
@@ -45,6 +46,17 @@ func Live() Ops {
 		Ensure:        session.Ensure,
 		Send:          func(pod string, keys []session.Key) error { return session.SendBatch(pod, "", keys) },
 	}
+}
+
+// TypeLine brings up the sandbox's bash and enters line in it.
+func (o Ops) TypeLine(pod, line string) error {
+	if err := o.Ensure(pod); err != nil {
+		return fmt.Errorf("start bash: %w", err)
+	}
+	if err := o.Send(pod, []session.Key{{Text: line}, {Name: "Enter"}}); err != nil {
+		return fmt.Errorf("could not type into bash: %w", err)
+	}
+	return nil
 }
 
 // Run puts s on its volume, cloning it the first time, starts a sandbox from
@@ -128,7 +140,7 @@ func (p *pipeline) clone(cloned bool) (pod map[string]any, ok bool) {
 		return pod, true
 	}
 	p.say(v1.CheckoutEvent{Step: v1.StepClone, Detail: "starting the clone pod"})
-	err = p.ops.Clone(p.spec.Volume(), image, p.spec.CloneScript(), cloneTimeout, func(line string) {
+	err = p.ops.Clone(p.spec.Volume(), image, p.spec.CloneScript(), CloneTimeout, func(line string) {
 		p.say(v1.CheckoutEvent{Step: v1.StepClone, Detail: cloneDetail(line)})
 	})
 	if err != nil {
@@ -148,7 +160,7 @@ func (p *pipeline) sandbox(pod map[string]any) (name string, ok bool) {
 		return "", false
 	}
 	p.say(v1.CheckoutEvent{Step: v1.StepSandbox, Sandbox: name, Detail: "waiting for " + name})
-	err = p.ops.WaitPod(name, podTimeout, func(state string) {
+	err = p.ops.WaitPod(name, PodTimeout, func(state string) {
 		p.say(v1.CheckoutEvent{Step: v1.StepSandbox, Sandbox: name, Detail: podDetail(state)})
 	})
 	if err != nil {
@@ -166,12 +178,8 @@ func (p *pipeline) shell(name string, cloned bool) {
 		detail = "starting " + summary
 	}
 	p.say(v1.CheckoutEvent{Step: v1.StepShell, Sandbox: name, Detail: detail})
-	if err := p.ops.Ensure(name); err != nil {
+	if err := p.ops.TypeLine(name, p.spec.shellLine(cloned)); err != nil {
 		p.fail(v1.StepShell, err)
-		return
-	}
-	if err := p.ops.Send(name, []session.Key{{Text: p.spec.shellLine(cloned)}, {Name: "Enter"}}); err != nil {
-		p.fail(v1.StepShell, fmt.Errorf("could not type into bash: %w", err))
 		return
 	}
 	p.emit(v1.CheckoutEvent{Step: v1.StepShell, Sandbox: name, Done: true, At: time.Now().UTC()})

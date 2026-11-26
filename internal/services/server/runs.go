@@ -65,7 +65,7 @@ func (s *Server) getRun(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	run, err := runs.Get(r.PathValue("id"))
+	run, _, err := runs.Watch(r.PathValue("id"))
 	if err != nil {
 		return fmt.Errorf("get run: %w", err)
 	}

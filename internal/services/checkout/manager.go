@@ -19,6 +19,9 @@ const keepFinished = 30 * time.Minute
 // forgotten.
 var ErrNotFound = errors.New("no such checkout")
 
+// ErrNoRun is ErrNotFound for a run.
+var ErrNoRun = errors.New("no such run")
+
 // Manager runs checkouts in the background and lets any number of frontends
 // follow them. It owns every goroutine it starts: Close waits for them.
 type Manager struct {

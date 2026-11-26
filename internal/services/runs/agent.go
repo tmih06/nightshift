@@ -2,7 +2,6 @@ package runs
 
 import (
 	"fmt"
-	"net/url"
 	"strconv"
 	"strings"
 
@@ -16,27 +15,6 @@ const (
 	scriptFile = "run.sh"
 	stateDir   = `"$HOME/.nightshift"`
 )
-
-// agentCommand is how each coding agent runs one prompt and exits. It reads the
-// prompt from $p. Approvals are off: nobody is there to answer them, and the
-// sandbox is what contains the agent. model is "" or a flag and its value.
-func agentCommand(agent, model string) (string, bool) {
-	format, ok := map[string]string{
-		"claude":     `claude --dangerously-skip-permissions%s --print -- "$p"`,
-		"codex":      `codex exec --dangerously-bypass-approvals-and-sandbox%s -- "$p"`,
-		"opencode":   `opencode run --auto%s -- "$p"`,
-		"agy":        `agy --dangerously-skip-permissions%s --print="$p"`,
-		"pi":         `pi%s --print -- "$p"`,
-		"ompig-slim": `ompig-slim%s --print -- "$p"`,
-	}[agent]
-	if !ok {
-		return "", false
-	}
-	if model != "" {
-		model = " --model " + checkout.Quote(model)
-	}
-	return fmt.Sprintf(format, model), true
-}
 
 // agentScript runs the agent in dir, shows what it prints, and leaves its exit
 // status in a file however it ends, so the services can read the result after a
@@ -64,9 +42,11 @@ func agentScript(command, dir string, seconds int) string {
 	}, "\n")
 }
 
-// writeCommand stores its stdin as name in the run's directory.
-func writeCommand(name string) []string {
-	return []string{"sh", "-c", "mkdir -p " + stateDir + " && cat > " + stateDir + "/" + name}
+// writeCommand stores script as the run's script and its stdin as the prompt,
+// in one exec.
+func writeCommand(script string) []string {
+	write := "mkdir -p " + stateDir + ` && printf %s "$1" > ` + stateDir + "/" + scriptFile + " && cat > " + stateDir + "/" + promptFile
+	return []string{"sh", "-c", write, "sh", script}
 }
 
 // statusScript prints how the agent stands: "exit N" and the end of its output,
@@ -111,22 +91,9 @@ func branchOf(id string, s v1.RunSource) string {
 // cloneScript runs at the volume's root in the clone Job. Only https is
 // allowed, redirects included.
 func cloneScript(id string, s v1.RunSource) string {
-	u, err := url.Parse(s.CloneURL)
-	github := err == nil && strings.EqualFold(u.Host, "github.com")
-	lines := append([]string{"export GIT_ALLOW_PROTOCOL=https"}, checkout.CloneLines(s.CloneURL, github)...)
-	branch := checkout.Quote(branchOf(id, s))
+	lines := append([]string{"export GIT_ALLOW_PROTOCOL=https"}, checkout.CloneLines(s.CloneURL)...)
 	if s.Ref == "" {
-		return strings.Join(append(lines, "git checkout -B "+branch), "\n")
+		return strings.Join(append(lines, "git checkout -B "+checkout.Quote(branchOf(id, s))), "\n")
 	}
-	lines = append(lines, checkout.RetryLines("fetch", "", "git fetch --progress origin "+checkout.Quote(s.Ref)+" 2>&1 | lines")...)
-	return strings.Join(append(lines, "git checkout -B "+branch+" FETCH_HEAD"), "\n")
-}
-
-// repoPath names the repository for the volume listing: the address's path.
-func repoPath(s v1.RunSource) string {
-	u, err := url.Parse(s.CloneURL)
-	if err != nil {
-		return s.RepoName()
-	}
-	return strings.TrimSuffix(strings.Trim(u.Path, "/"), ".git")
+	return strings.Join(append(lines, checkout.FetchLines(s.Ref, branchOf(id, s))...), "\n")
 }

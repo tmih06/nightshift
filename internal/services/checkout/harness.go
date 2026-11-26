@@ -1,6 +1,7 @@
 package checkout
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 
@@ -26,11 +27,32 @@ func LaunchCommand(command, model string) string {
 	if command == "" {
 		return ""
 	}
-	model = strings.TrimSpace(model)
+	return Quote(command) + modelFlag(strings.TrimSpace(model))
+}
+
+func modelFlag(model string) string {
 	if model == "" {
-		return Quote(command)
+		return ""
 	}
-	return Quote(command) + " --model " + Quote(model)
+	return " --model " + Quote(model)
+}
+
+// TaskCommand is the shell command that has an agent run the prompt in $p and
+// exit, and whether the agent has such a mode. Approvals are off: nobody is
+// there to answer them, and the sandbox is what contains the agent.
+func TaskCommand(agent, model string) (string, bool) {
+	format, ok := map[string]string{
+		harnessClaudeCode().Command: `claude --dangerously-skip-permissions%s --print -- "$p"`,
+		harnessCodex().Command:      `codex exec --dangerously-bypass-approvals-and-sandbox%s -- "$p"`,
+		harnessOpencode().Command:   `opencode run --auto%s -- "$p"`,
+		harnessAgy().Command:        `agy --dangerously-skip-permissions%s --print="$p"`,
+		harnessPi().Command:         `pi%s --print -- "$p"`,
+		harnessOmpigSlim().Command:  `ompig-slim%s --print -- "$p"`,
+	}[agent]
+	if !ok {
+		return "", false
+	}
+	return fmt.Sprintf(format, modelFlag(model)), true
 }
 
 // ForPool resolves the coding agent harness and selectable models of a pool, from

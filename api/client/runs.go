@@ -2,7 +2,6 @@ package client
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/url"
 
@@ -38,22 +37,5 @@ func (c *Client) DeleteRun(ctx context.Context, id string) error {
 // FollowRun calls fn with the run now and each time it changes, and returns
 // once it has finished.
 func (c *Client) FollowRun(ctx context.Context, id string, fn func(v1.Run) error) error {
-	err := c.stream(ctx, request{method: http.MethodGet, path: "/v1/runs/" + url.PathEscape(id) + "/events"}, func(ev event) error {
-		var r v1.Run
-		ok, err := decodeEvent(ev, "run", &r)
-		if err != nil || !ok {
-			return err
-		}
-		if err := fn(r); err != nil {
-			return err
-		}
-		if r.Finished() {
-			return errEnd
-		}
-		return nil
-	})
-	if errors.Is(err, errEnd) {
-		return nil
-	}
-	return err
+	return follow(ctx, c, followed[v1.Run]{path: "/v1/runs/" + esc(id) + "/events", event: "run", last: v1.Run.Finished}, fn)
 }

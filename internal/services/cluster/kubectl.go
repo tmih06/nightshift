@@ -22,7 +22,15 @@ func command(ctx context.Context, ns string, args []string) *exec.Cmd {
 // Kubectl runs kubectl in namespace ns and returns what it printed. The
 // error carries kubectl's own message.
 func Kubectl(ctx context.Context, ns string, args ...string) ([]byte, error) {
+	return kubectlIn(ctx, ns, nil, args)
+}
+
+// kubectlIn is Kubectl with something to feed it.
+func kubectlIn(ctx context.Context, ns string, stdin []byte, args []string) ([]byte, error) {
 	cmd := command(ctx, ns, args)
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 	var out, errOut bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errOut
 	if err := cmd.Run(); err != nil {

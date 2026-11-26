@@ -45,8 +45,7 @@ type Checkouts interface {
 type Runs interface {
 	Create(req v1.RunRequest) (v1.Run, error)
 	List(externalRef string) ([]v1.Run, error)
-	Get(id string) (v1.Run, error)
-	// Watch is Get, with a channel that closes when the run changes.
+	// Watch is where a run stands, and a channel that closes when that changes.
 	Watch(id string) (v1.Run, <-chan struct{}, error)
 	Delete(id string) error
 }

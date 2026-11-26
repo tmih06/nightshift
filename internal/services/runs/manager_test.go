@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,19 +21,21 @@ import (
 
 // fakeCluster is the cluster a manager acts on.
 type fakeCluster struct {
-	mu       sync.Mutex
-	records  map[string][]byte
-	sandbox  string
-	files    map[string]string
-	typed    string
-	answer   string // what the status script prints
-	cloneErr error
-	hold     chan struct{} // when set, Clone waits for it
-	deleted  []string
+	mu        sync.Mutex
+	records   map[string][]byte
+	sandbox   string
+	prompt    string
+	script    string
+	typed     string
+	answer    string // what the status script prints
+	cloneErr  error
+	volumeErr error
+	hold      chan struct{} // when set, Clone waits for it
+	deleted   []string
 }
 
 func newFakeCluster() *fakeCluster {
-	return &fakeCluster{records: map[string][]byte{}, files: map[string]string{}, answer: "running\n"}
+	return &fakeCluster{records: map[string][]byte{}, answer: "running\n"}
 }
 
 func (f *fakeCluster) locked(fn func()) {
@@ -42,30 +46,33 @@ func (f *fakeCluster) locked(fn func()) {
 
 func (f *fakeCluster) ops() Ops {
 	return Ops{
-		PoolTemplate: func(string) (string, error) { return "claude-code-template", nil },
-		TemplatePod:  func(string) (map[string]any, string, error) { return map[string]any{}, "img", nil },
-		CreateVolume: func(name, _, _ string, record []byte) (bool, error) {
-			f.mu.Lock()
-			defer f.mu.Unlock()
-			if _, ok := f.records[name]; ok {
-				return false, nil
-			}
-			f.records[name] = record
-			return true, nil
-		},
-		Records: func() (map[string][]byte, error) {
-			f.mu.Lock()
-			defer f.mu.Unlock()
-			out := map[string][]byte{}
-			for k, v := range f.records {
-				out[k] = v
-			}
-			return out, nil
-		},
+		Ops:             f.pipelineOps(),
+		CreateRunVolume: f.createVolume,
+		Records:         f.listRecords,
 		Save: func(name string, record []byte) error {
 			f.locked(func() { f.records[name] = record })
 			return nil
 		},
+		Exec: f.exec,
+		DeleteSandbox: func(name string) error {
+			f.locked(func() { f.sandbox, f.deleted = "", append(f.deleted, name) })
+			return nil
+		},
+		DeleteVolume: func(name string) (err error) {
+			f.locked(func() {
+				delete(f.records, name)
+				f.deleted, err = append(f.deleted, name), f.volumeErr
+			})
+			return err
+		},
+	}
+}
+
+// pipelineOps is what a run shares with a checkout.
+func (f *fakeCluster) pipelineOps() checkout.Ops {
+	return checkout.Ops{
+		PoolTemplate: func(string) (string, error) { return "claude-code-template", nil },
+		TemplatePod:  func(string) (map[string]any, string, error) { return map[string]any{}, "img", nil },
 		Clone: func(string, string, string, time.Duration, func(string)) error {
 			if f.hold != nil {
 				<-f.hold
@@ -81,31 +88,40 @@ func (f *fakeCluster) ops() Ops {
 			f.locked(func() { name = f.sandbox })
 			return name, nil
 		},
-		Exec: func(_ string, stdin []byte, args ...string) (out []byte, err error) {
-			f.locked(func() {
-				cmd := args[len(args)-1]
-				if cmd == statusScript {
-					out = []byte(f.answer)
-					return
-				}
-				f.files[cmd[strings.LastIndex(cmd, "/")+1:]] = string(stdin)
-			})
-			return out, nil
-		},
 		Ensure: func(string) error { return nil },
 		Send: func(_ string, keys []session.Key) error {
 			f.locked(func() { f.typed = keys[0].Text })
 			return nil
 		},
-		DeleteSandbox: func(name string) error {
-			f.locked(func() { f.sandbox, f.deleted = "", append(f.deleted, name) })
-			return nil
-		},
-		DeleteVolume: func(name string) error {
-			f.locked(func() { delete(f.records, name); f.deleted = append(f.deleted, name) })
-			return nil
-		},
 	}
+}
+
+func (f *fakeCluster) createVolume(name, _, _ string, record []byte) (created bool, err error) {
+	f.locked(func() {
+		if _, ok := f.records[name]; ok {
+			return
+		}
+		f.records[name], created = record, true
+	})
+	return created, nil
+}
+
+func (f *fakeCluster) listRecords() (map[string][]byte, error) {
+	out := map[string][]byte{}
+	f.locked(func() { maps.Copy(out, f.records) })
+	return out, nil
+}
+
+// exec answers the status script, and keeps what the write command was given.
+func (f *fakeCluster) exec(_ string, stdin []byte, args ...string) (out []byte, err error) {
+	f.locked(func() {
+		if args[len(args)-1] == statusScript {
+			out = []byte(f.answer)
+			return
+		}
+		f.prompt, f.script = string(stdin), args[len(args)-1]
+	})
+	return out, nil
 }
 
 func newManager(t *testing.T, f *fakeCluster) *Manager {
@@ -161,8 +177,8 @@ func TestARunGoesFromRequestToResult(t *testing.T) {
 	}
 	until(t, m, run.ID, inState(v1.RunWorking))
 	f.locked(func() {
-		if f.files[promptFile] != "fix the 'bug'" || !strings.Contains(f.files[scriptFile], "claude --dangerously-skip-permissions --print") {
-			t.Errorf("the sandbox got %q", f.files)
+		if f.prompt != "fix the 'bug'" || !strings.Contains(f.script, "claude --dangerously-skip-permissions --print") {
+			t.Errorf("the sandbox got prompt %q and script %q", f.prompt, f.script)
 		}
 		if !strings.HasPrefix(f.typed, "bash ") {
 			t.Errorf("typed %q", f.typed)
@@ -279,6 +295,7 @@ func TestARestartTakesUpWorkingRunsAndFailsTheRest(t *testing.T) {
 func TestOnlyGitHubIsOfferedTheGitHubToken(t *testing.T) {
 	for url, want := range map[string]bool{
 		"https://github.com/a/b":              true,
+		"https://github.com:443/a/b":          true,
 		"https://gitlab.com/a/b":              false,
 		"https://github.com.evil.example/a/b": false,
 		"https://evil.example/github.com/a/b": false,
@@ -291,9 +308,52 @@ func TestOnlyGitHubIsOfferedTheGitHubToken(t *testing.T) {
 
 func TestEveryPoolAgentCanRunATask(t *testing.T) {
 	for _, pool := range []string{"pi-pool", "codex-pool", "claude-code-pool", "agy-pool", "ompig-slim-pool", "opencode-pool"} {
-		if _, ok := agentCommand(checkout.ForPool(pool, "", "").Command, ""); !ok {
+		if _, ok := checkout.TaskCommand(checkout.ForPool(pool, "", "").Command, ""); !ok {
 			t.Errorf("%s has no command", pool)
 		}
+	}
+}
+
+// TestTheScriptAndPromptAreStoredByOneCommand runs the write command in a real
+// shell, as the sandbox would.
+func TestTheScriptAndPromptAreStoredByOneCommand(t *testing.T) {
+	home := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	args := writeCommand("echo '$HOME' %s")
+	cmd := exec.CommandContext(ctx, "sh")
+	cmd.Args = append(cmd.Args, args[1:]...)
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	cmd.Stdin = strings.NewReader("say 'hi'")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	dir := os.DirFS(filepath.Join(home, ".nightshift"))
+	for name, want := range map[string]string{scriptFile: "echo '$HOME' %s", promptFile: "say 'hi'"} {
+		got, err := fs.ReadFile(dir, name)
+		if err != nil || string(got) != want {
+			t.Errorf("%s = %q, %v, want %q", name, got, err, want)
+		}
+	}
+}
+
+// A volume deleted behind the manager's back, say from the TUI, once left its
+// run listed until a restart, as deleting it failed on the missing volume.
+func TestARunWhoseVolumeIsGoneCanStillBeDeleted(t *testing.T) {
+	f := newFakeCluster()
+	f.answer = "exit 0\n"
+	m := newManager(t, f)
+	run, err := m.Create(request())
+	if err != nil {
+		t.Fatal(err)
+	}
+	until(t, m, run.ID, v1.Run.Finished)
+	f.locked(func() { f.volumeErr = errors.New("Error from server (NotFound): persistentvolumeclaims not found") })
+	if err := m.Delete(run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := m.Watch(run.ID); !errors.Is(err, checkout.ErrNoRun) {
+		t.Errorf("Watch after Delete: %v, want no such run", err)
 	}
 }
 
