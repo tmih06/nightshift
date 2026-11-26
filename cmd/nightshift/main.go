@@ -11,7 +11,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -162,7 +161,7 @@ func newRoot(svc app.Services, start *zgh.PRRef, startRepos bool) (app.Model, er
 	theme := ghtheme.ParseTheme(&cfg)
 	dash := ghtui.NewModel(location, ghtui.Repositories{GitRepo: gitRepo, GHRepo: &ghRepo})
 
-	root := app.New(theme, app.NewGhDash(&dash), nil, svc)
+	root := app.New(theme, &dash, nil, svc)
 	if ghRepo.Owner != "" && ghRepo.Name != "" {
 		root = root.WithCurrentRepo(ghRepo.Owner + "/" + ghRepo.Name)
 	}
@@ -189,8 +188,7 @@ func currentRepos() (*gitm.Repository, repository.Repository) {
 		}
 	})
 	wg.Go(func() {
-		r, err := repository.Current()
-		if err == nil || !errors.Is(err, context.Canceled) {
+		if r, err := repository.Current(); err == nil {
 			ghRepo = r
 		}
 	})

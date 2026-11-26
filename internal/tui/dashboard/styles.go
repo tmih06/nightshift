@@ -3,7 +3,6 @@ package dashboard
 import (
 	"image/color"
 
-	"charm.land/bubbles/v2/help"
 	"charm.land/lipgloss/v2"
 
 	"github.com/tmih06/nightshift/internal/ghdash/tui/context"
@@ -20,12 +19,9 @@ var (
 	warmColor     color.Color
 	midGreenColor color.Color
 	claimColor    color.Color
-	accent        color.Color
 	warnColor     color.Color
 	badColor      color.Color
-	dimColor      color.Color
 
-	titleStyle    lipgloss.Style
 	dimStyle      lipgloss.Style
 	warmStyle     lipgloss.Style
 	midGreenStyle lipgloss.Style
@@ -54,8 +50,6 @@ var (
 	winInactiveStyle lipgloss.Style
 	winActionStyle   lipgloss.Style
 	winCloseStyle    lipgloss.Style
-
-	helpStyles help.Styles
 )
 
 func init() { useTheme(*ghtheme.DefaultTheme) }
@@ -68,12 +62,9 @@ func useTheme(t ghtheme.Theme) {
 	warmColor = t.SuccessText
 	midGreenColor = t.SuccessText
 	claimColor = styles.Colors.OpenPR
-	accent = styles.Colors.OpenPR
 	warnColor = t.WarningText
 	badColor = t.ErrorText
-	dimColor = t.FaintText
 
-	titleStyle = styles.Common.MainTextStyle
 	dimStyle = styles.Common.FaintTextStyle
 	warmStyle = lipgloss.NewStyle().Foreground(warmColor)
 	midGreenStyle = lipgloss.NewStyle().Foreground(midGreenColor)
@@ -101,8 +92,6 @@ func useTheme(t ghtheme.Theme) {
 	winInactiveStyle = lipgloss.NewStyle().Foreground(t.SecondaryText)
 	winActionStyle = lipgloss.NewStyle().Foreground(t.PrimaryText).Bold(true)
 	winCloseStyle = lipgloss.NewStyle().Foreground(t.FaintText)
-
-	helpStyles = styles.Help.BubbleStyles
 }
 
 func dim(s string) string { return dimStyle.Render(s) }

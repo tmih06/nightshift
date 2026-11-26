@@ -668,8 +668,7 @@ func fitParts(parts []string, room int) string {
 
 func (m model) docLines(l layout) []string {
 	if m.showingDocPane() {
-		lines, _ := m.docInspectView(l)
-		return lines
+		return m.docInspectView(l)
 	}
 	return m.shellLinesView(l)
 }
@@ -768,21 +767,20 @@ func renderHints(hints []key.Binding, room int) string {
 	keyS := lipgloss.NewStyle().Background(bgc).Foreground(th.PrimaryText)
 	descS := lipgloss.NewStyle().Background(bgc).Foreground(th.FaintText)
 	sepS := lipgloss.NewStyle().Background(bgc).Foreground(th.SecondaryBorder)
-	render := func(hs []key.Binding) string {
-		parts := make([]string, len(hs))
-		for i, h := range hs {
-			parts[i] = keyS.Render(h.Help().Key) + descS.Render(" "+h.Help().Desc)
-		}
-		return strings.Join(parts, sepS.Render(" • "))
+	sep := sepS.Render(" • ")
+	sepW := lipgloss.Width(sep)
+	parts := make([]string, len(hints))
+	width := -sepW
+	for i, h := range hints {
+		parts[i] = keyS.Render(h.Help().Key) + descS.Render(" "+h.Help().Desc)
+		width += sepW + lipgloss.Width(parts[i])
 	}
-	for len(hints) > 1 {
-		if line := render(hints); lipgloss.Width(line) <= room {
-			return line
-		}
-		last := len(hints) - 1
-		hints = append(hints[:last-1:last-1], hints[last])
+	for len(parts) > 1 && width > room {
+		last := len(parts) - 1
+		width -= sepW + lipgloss.Width(parts[last-1])
+		parts = append(parts[:last-1], parts[last])
 	}
-	return render(hints)
+	return strings.Join(parts, sep)
 }
 
 func (m model) statusMessage() string {
@@ -805,8 +803,10 @@ func (m model) statusMessage() string {
 func (m model) pagerText() string {
 	order := m.navigationIndices()
 	pos := 0
-	if len(order) > 0 {
-		pos = m.selectedIndex() + 1
+	for i, index := range order {
+		if i == 0 || m.boxes[index].Name == m.selected {
+			pos = i + 1
+		}
 	}
 	updated := "never"
 	if !m.updatedAt.IsZero() {
@@ -844,13 +844,6 @@ func (m model) statusLine() string {
 }
 
 // ---- frame --------------------------------------------------------------
-
-func sandboxCount(n int) string {
-	if n == 1 {
-		return "1 sandbox"
-	}
-	return fmt.Sprintf("%d sandboxes", n)
-}
 
 // Count is the number of sandboxes, for the tab bar.
 func (m model) Count() int { return len(m.boxes) }

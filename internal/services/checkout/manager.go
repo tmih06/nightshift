@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"sort"
 	"sync"
 	"time"
 
@@ -66,7 +65,9 @@ func (m *Manager) Start(req v1.CheckoutRequest) (v1.Checkout, error) {
 	}
 	spec := SpecOf(req)
 	vol := spec.Volume()
-	if open, err := m.sandboxOn(vol); err != nil {
+	// A volume holds one sandbox at a time, so a checkout of its target goes
+	// back to the one working on it.
+	if open, err := m.ops.SandboxOn(vol); err != nil {
 		return v1.Checkout{}, err
 	} else if open != "" {
 		return m.reopened(req, vol, open), nil
@@ -95,15 +96,6 @@ func (m *Manager) Start(req v1.CheckoutRequest) (v1.Checkout, error) {
 		Run(m.ops, spec, template, func(ev v1.CheckoutEvent) { m.record(r, ev) })
 	})
 	return r.info, nil
-}
-
-// sandboxOn is the sandbox already working on the volume, if any. A volume
-// holds one sandbox at a time, so a checkout of its target goes back to that one.
-func (m *Manager) sandboxOn(volume string) (string, error) {
-	if m.ops.SandboxOn == nil {
-		return "", nil
-	}
-	return m.ops.SandboxOn(volume)
 }
 
 // reopened is a checkout that is done before it begins: the target is already
@@ -211,15 +203,10 @@ func (m *Manager) Follow(ctx context.Context, id string, fn func(v1.CheckoutEven
 // prune forgets finished checkouts that have been readable long enough. The
 // caller holds mu.
 func (m *Manager) prune(now time.Time) {
-	var done []string
 	for id, r := range m.runs {
 		if !r.ended.IsZero() && now.Sub(r.ended) > keepFinished {
-			done = append(done, id)
+			delete(m.runs, id)
 		}
-	}
-	sort.Strings(done)
-	for _, id := range done {
-		delete(m.runs, id)
 	}
 }
 

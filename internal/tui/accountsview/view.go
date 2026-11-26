@@ -319,18 +319,7 @@ func (m Model) accountRow(a v1.Account, selected bool, width int) string {
 	if a.Active {
 		mark = s.ok.Render("●")
 	}
-	state := a.State
-	stateText := s.faint.Render(stateName(state))
-	switch state {
-	case v1.AccountOK:
-		stateText = s.ok.Render("ok")
-	case v1.AccountExpiring:
-		stateText = s.warn.Render("expiring")
-	case v1.AccountFailing, v1.AccountSignIn:
-		stateText = s.bad.Render(stateName(state))
-	case v1.AccountDisabled:
-		stateText = s.faint.Render("disabled")
-	}
+	stateText := m.stateText(a.State)
 	req := ""
 	if a.Usage != nil {
 		req = fmt.Sprintf("%d req", a.Usage.Requests)
@@ -374,22 +363,24 @@ func (m Model) detail(a v1.Account) []string {
 	return append(out, "", m.stateHint(a))
 }
 
+// stateText is a's state by name, in the color that says how it is doing.
+func (m Model) stateText(state string) string {
+	style := m.st.faint
+	switch state {
+	case v1.AccountOK:
+		style = m.st.ok
+	case v1.AccountExpiring:
+		style = m.st.warn
+	case v1.AccountFailing, v1.AccountSignIn:
+		style = m.st.bad
+	}
+	return style.Render(stateName(state))
+}
+
 // statusRows are the detail pane's rows about the account's health.
 func (m Model) statusRows(a v1.Account, p v1.Provider) [][2]string {
 	s := m.st
-	state := a.State
-	text := stateName(state)
-	switch state {
-	case v1.AccountOK:
-		text = s.ok.Render(text)
-	case v1.AccountExpiring:
-		text = s.warn.Render(text)
-	case v1.AccountDisabled:
-		text = s.faint.Render(text)
-	case v1.AccountFailing, v1.AccountSignIn:
-		text = s.bad.Render(text)
-	}
-	rows := [][2]string{{"Status", text}}
+	rows := [][2]string{{"Status", m.stateText(a.State)}}
 	if a.StatusNote != "" {
 		rows = append(rows, [2]string{"", s.faint.Render(a.StatusNote)})
 	}

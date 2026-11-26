@@ -262,18 +262,6 @@ func (m *Model) selectRepoInNav(fullName string) {
 	}
 }
 
-func (m *Model) selectRepoScopeInNav(fullName string, sc Scope) {
-	rows := m.navRows()
-	for i, r := range rows {
-		if r.kind == navScope && strings.EqualFold(r.repoFullName, fullName) && r.scope == sc {
-			m.navCursor = i
-			m.selectedRepo = r.repoFullName
-			m.activeScope = sc
-			return
-		}
-	}
-}
-
 func (m *Model) isPinned(fullName string) bool {
 	for _, p := range m.pins {
 		if strings.EqualFold(p, fullName) {

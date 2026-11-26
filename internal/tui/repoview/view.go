@@ -275,10 +275,6 @@ func padLine(s string, width int) string {
 	return s
 }
 
-func clampLine(s string, width int) string {
-	return padLine(s, width)
-}
-
 func lineOrBlank(lines []string, idx, width int) string {
 	if idx >= 0 && idx < len(lines) {
 		return padLine(lines[idx], width)

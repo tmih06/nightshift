@@ -30,20 +30,21 @@ func ReadCgroup(pod string) (CgroupSample, error) {
 }
 
 // ReadCgroups reads every pod in parallel, leaving out the ones that fail.
-func ReadCgroups(pods []string) map[string]CgroupSample {
-	out := make(map[string]CgroupSample, len(pods))
+func ReadCgroups(pods []string) map[string]CgroupSample { return perPod(pods, ReadCgroup) }
+
+// perPod runs read for every pod in parallel, leaving out the ones that fail.
+func perPod[T any](pods []string, read func(pod string) (T, error)) map[string]T {
+	out := make(map[string]T, len(pods))
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	for _, pod := range pods {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if s, err := ReadCgroup(pod); err == nil {
+		wg.Go(func() {
+			if v, err := read(pod); err == nil {
 				mu.Lock()
-				out[pod] = s
+				out[pod] = v
 				mu.Unlock()
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	return out

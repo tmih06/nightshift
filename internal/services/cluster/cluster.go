@@ -22,7 +22,6 @@ const (
 	// ContextEnv names the kubeconfig context to use on any other cluster.
 	ContextEnv = "NIGHTSHIFT_CONTEXT"
 	Namespace  = "nightshift"
-	WarmPool   = "pi-pool"
 )
 
 // InCluster is the NIGHTSHIFT_CONTEXT that means "the cluster this process runs
@@ -425,22 +424,7 @@ func buildSandboxes(sb sandboxList, pl podList, ml *podMetricsList) ([]Sandbox, 
 func (b Sandbox) Claimed() bool { return b.OwnerKind == ownerKindClaim || b.Volume != "" }
 
 // OwnerRank orders warm sandboxes, then claimed, then egress, system, jobs, and other.
-func OwnerRank(b Sandbox) int {
-	switch b.PodRole() {
-	case RoleWarm:
-		return 0
-	case RoleClaimed:
-		return 1
-	case RoleEgress:
-		return 2
-	case RoleSystem:
-		return 3
-	case RoleJob:
-		return 4
-	default:
-		return 5
-	}
-}
+func OwnerRank(b Sandbox) int { return int(b.PodRole()) }
 
 // parseClusterList splits a combined kubectl List into sandboxes, pods,
 // and the warm pools plus their referenced templates.
@@ -619,21 +603,6 @@ func Claim(pool string) (string, error) {
 		return "", err
 	}
 	return name, nil
-}
-
-func WaitForClaim(name string, timeout time.Duration) (string, error) {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		out, err := runKubectl(nil, "get", "sandboxclaim", name,
-			"-o", "jsonpath={.status.sandbox.name}")
-		if err == nil {
-			if pod := strings.TrimSpace(string(out)); pod != "" {
-				return pod, nil
-			}
-		}
-		time.Sleep(300 * time.Millisecond)
-	}
-	return "", fmt.Errorf("claim %s adopted no sandbox within %s", name, timeout)
 }
 
 func DeleteClaim(name string) error {

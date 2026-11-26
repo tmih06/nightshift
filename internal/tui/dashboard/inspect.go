@@ -14,14 +14,6 @@ func (m model) inspectPageSize() int {
 	return max(m.layout().docH, 1)
 }
 
-func (m *model) refreshInspectCache() {
-	if !m.showingDocPane() {
-		m.inspect = nil
-		return
-	}
-	m.inspect = m.cachedInspectLines(max(m.layout().docW, 1))
-}
-
 // cachedInspectLines reuses documents until their content, width, or theme
 // changes. Fleet refreshes and other pods' log replies do not invalidate them.
 func (m model) cachedInspectLines(innerW int) []string {
@@ -68,8 +60,11 @@ func (m model) cachedInspectLines(innerW int) []string {
 }
 
 func (m *model) scrollInspect(delta int) {
-	m.refreshInspectCache()
-	maxOffset := max(len(m.inspect)-m.inspectPageSize(), 0)
+	var total int
+	if m.showingDocPane() {
+		total = len(m.cachedInspectLines(max(m.layout().docW, 1)))
+	}
+	maxOffset := max(total-m.inspectPageSize(), 0)
 	if m.effectivePane() == paneLogs {
 		if m.logFollow && delta < 0 {
 			m.inspectScroll = maxOffset
@@ -84,35 +79,20 @@ func (m *model) scrollInspect(delta int) {
 	m.inspectScroll = clamp(m.inspectScroll+delta, 0, maxOffset)
 }
 
-// docInspectView returns the visible page of the pod's Configs or Logs view
-// and the pane footer naming the position and how to focus it.
-func (m model) docInspectView(l layout) (lines []string, footerText string) {
-	innerW := max(l.docW, 1)
+// docInspectView returns the visible page of the pod's Configs or Logs view.
+func (m model) docInspectView(l layout) []string {
 	pageH := max(l.docH, 1)
-
-	doc := m.cachedInspectLines(innerW)
+	doc := m.cachedInspectLines(max(l.docW, 1))
 	total := len(doc)
 	maxOffset := max(total-pageH, 0)
 	offset := clamp(m.inspectScroll, 0, maxOffset)
 	if m.effectivePane() == paneLogs && m.logFollow {
 		offset = maxOffset
 	}
-	end := min(offset+pageH, total)
-
-	var footer []string
-	if total > pageH {
-		footer = append(footer, fmt.Sprintf("%d-%d/%d", offset+1, end, total))
-	}
-	if m.focus == focusInspect {
-		footer = append(footer, "esc leaves")
-	} else {
-		footer = append(footer, "scroll or click to focus")
-	}
-
 	if offset >= total {
-		return nil, strings.Join(footer, " · ")
+		return nil
 	}
-	return doc[offset:end], strings.Join(footer, " · ")
+	return doc[offset:min(offset+pageH, total)]
 }
 
 func buildPodMarkdown(p fleet.Pool, b *fleet.Sandbox) string {
@@ -137,7 +117,7 @@ func appendYAMLSection(sections *[]string, kind, name, body string) {
 }
 
 func buildWarmMarkdown(p fleet.Pool, b *fleet.Sandbox) string {
-	var sections []string
+	sections := make([]string, 0, 5)
 
 	var intro strings.Builder
 	if p.Name != "" {
@@ -162,7 +142,7 @@ func buildWarmMarkdown(p fleet.Pool, b *fleet.Sandbox) string {
 }
 
 func buildEgressMarkdown(b *fleet.Sandbox) string {
-	var sections []string
+	sections := make([]string, 0, 3)
 	var intro strings.Builder
 	fmt.Fprintf(&intro, "# %s · egress proxy\n", b.Name)
 	fmt.Fprintf(&intro, "- **namespace** `%s`\n", b.EffectiveNamespace())

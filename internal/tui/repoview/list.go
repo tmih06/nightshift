@@ -343,14 +343,6 @@ func (m *Model) currentListRow() (listRow, bool) {
 	return rows[m.listCursor], true
 }
 
-func (m *Model) listItemCount() int {
-	if m.selectedRepo == "" {
-		return 0
-	}
-	_ = m.listRows()
-	return m.cachedListItemCount
-}
-
 func (m *Model) listHeaderRows() int {
 	// Row 0: pane title bar
 	// Row 1: scope tab strip

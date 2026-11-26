@@ -146,7 +146,6 @@ cpa_home() {
   use_target "${TARGETS[0]}"
   active=$("${K[@]}" get configmap nightshift-accounts -o jsonpath='{.data.active}' 2>/dev/null || true)
   jq -e type >/dev/null 2>&1 <<<"$active" || active='{}'
-  : > "$work/selected.jsonl"
   while IFS= read -r entry; do
     type=$(jq -r '.cpa.type // empty' <<<"$entry")
     [ -n "$type" ] || continue

@@ -86,7 +86,6 @@ type model struct {
 	inspectScroll  int
 	logFollow      bool
 	dataRev        int
-	inspect        []string
 	inspectDocs    map[inspectKey]inspectCache // shared by every copy of the model
 	logs           map[string]string           // pod name -> raw container logs
 	logErr         map[string]string           // pod name -> last log fetch error
@@ -474,11 +473,6 @@ func (m model) selectedIndex() int {
 	return 0
 }
 
-func (m model) isWarmSelected() bool {
-	b := m.selectedBox()
-	return b != nil && b.Warm()
-}
-
 func (m model) effectivePane() sidebarMode {
 	b := m.selectedBox()
 	if b == nil {
@@ -530,7 +524,6 @@ func (m model) canFocusShell() bool {
 
 func (m *model) focusDocPane() {
 	m.focus = focusInspect
-	m.refreshInspectCache()
 }
 
 func (m *model) syncFocusForMode(mode sidebarMode) {
@@ -558,7 +551,6 @@ func (m *model) setSidebarMode(mode sidebarMode) tea.Cmd {
 	m.inspectScroll = 0
 	m.logFollow = true
 	m.syncFocusForMode(mode)
-	m.refreshInspectCache()
 	if mode == paneLogs {
 		return m.maybeFetchLogs()
 	}
@@ -612,7 +604,6 @@ func (m *model) selectPod(name string) {
 	if m.focus == focusInspect && !m.showingDocPane() {
 		m.focus = focusNav
 	}
-	m.refreshInspectCache()
 }
 
 // setSection shows section, keeping the selection when it is in it.

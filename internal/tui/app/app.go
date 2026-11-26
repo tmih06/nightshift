@@ -130,9 +130,6 @@ func New(theme ghtheme.Theme, gh GitHub, ghErr error, svc Services) Model {
 	}
 }
 
-// NewGhDash wraps gh-dash's root model for the GitHub tab.
-func NewGhDash(m *ghtui.Model) GitHub { return m }
-
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{m.sandboxes.Init()}
 	if m.gh != nil {
@@ -162,9 +159,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.capturing() {
 			switch msg.String() {
 			case "tab":
-				return m.switchTo((m.active + 1) % Tab(len(tabLabels)))
+				return m.goTo((m.active + 1) % Tab(len(tabLabels)))
 			case "shift+tab":
-				return m.switchTo((m.active + Tab(len(tabLabels)) - 1) % Tab(len(tabLabels)))
+				return m.goTo((m.active + Tab(len(tabLabels)) - 1) % Tab(len(tabLabels)))
 			}
 		}
 		return m.toActive(msg)
@@ -253,7 +250,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if click, ok := msg.(tea.MouseClickMsg); ok && click.Button == tea.MouseLeft {
 				if tab, hit := m.tabAt(mouse.X); hit {
-					return m.switchTo(tab)
+					return m.goTo(tab)
 				}
 			}
 			return m, nil
@@ -295,11 +292,6 @@ func (m Model) goTo(tab Tab) (Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.accounts, cmd = m.accounts.SetHidden(tab != TabAccounts)
 	return m, cmd
-}
-
-func (m Model) switchTo(tab Tab) (tea.Model, tea.Cmd) {
-	next, cmd := m.goTo(tab)
-	return next, cmd
 }
 
 func (m Model) toActive(msg tea.Msg) (tea.Model, tea.Cmd) {

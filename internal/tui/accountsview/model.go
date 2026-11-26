@@ -6,6 +6,7 @@ package accountsview
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -459,14 +460,9 @@ func (m Model) keyRemove(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "y", "Y":
 		name, label, svc := m.modal.name, m.modal.label, m.svc
 		m.modal = modal{}
-		return m, func() tea.Msg {
-			ctx, cancel := context.WithTimeout(context.Background(), fetchWindow)
-			defer cancel()
-			if err := svc.RemoveAccount(ctx, name); err != nil {
-				return doneMsg{err: err}
-			}
-			return doneMsg{text: "Removed " + label, refetch: true}
-		}
+		return m, act(fetchWindow, "Removed "+label, func(ctx context.Context) error {
+			return svc.RemoveAccount(ctx, name)
+		})
 	case "n", "N", keyEsc, "q", keyCtrlC:
 		m.modal = modal{}
 	}
@@ -509,14 +505,9 @@ func (m Model) toggleSelected() (Model, tea.Cmd) {
 	if !disable {
 		verb = "Enabled "
 	}
-	return m, func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), fetchWindow)
-		defer cancel()
-		if err := svc.SetDisabled(ctx, a.Name, disable); err != nil {
-			return doneMsg{err: err}
-		}
-		return doneMsg{text: verb + label(a) + ". Press p to publish the change.", refetch: true}
-	}
+	return m, act(fetchWindow, verb+label(a)+". Press p to publish the change.", func(ctx context.Context) error {
+		return svc.SetDisabled(ctx, a.Name, disable)
+	})
 }
 
 func (m Model) refreshSelected() (Model, tea.Cmd) {
@@ -525,14 +516,9 @@ func (m Model) refreshSelected() (Model, tea.Cmd) {
 		return m, nil
 	}
 	svc := m.svc
-	return m, func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), fetchWindow)
-		defer cancel()
-		if err := svc.RefreshAccount(ctx, a.Name); err != nil {
-			return doneMsg{err: err}
-		}
-		return doneMsg{text: "Refreshed " + label(a), refetch: true}
-	}
+	return m, act(fetchWindow, "Refreshed "+label(a), func(ctx context.Context) error {
+		return svc.RefreshAccount(ctx, a.Name)
+	})
 }
 
 func (m Model) publishNow(label string) (Model, tea.Cmd) {
@@ -548,11 +534,20 @@ func (m Model) publishNow(label string) (Model, tea.Cmd) {
 	}
 }
 
-var errBrowser = errString("could not open a browser here; copy the link with ctrl+y instead")
+// act runs one change to the accounts, then says ok and reads them again, or
+// says what went wrong.
+func act(timeout time.Duration, ok string, change func(ctx context.Context) error) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		if err := change(ctx); err != nil {
+			return doneMsg{err: err}
+		}
+		return doneMsg{text: ok, refetch: true}
+	}
+}
 
-type errString string
-
-func (e errString) Error() string { return string(e) }
+var errBrowser = errors.New("could not open a browser here; copy the link with ctrl+y instead")
 
 // openBrowser asks the desktop to open url. It is best effort: on a machine
 // with no browser the link is still on screen to copy.

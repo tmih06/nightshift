@@ -15,7 +15,6 @@ func benchBase() model {
 	p := m.pools["agent-pool"]
 	p.TemplateYAML = strings.Repeat("apiVersion: v1\nkind: Pod\nspec:\n  replicas: 2\n", 80)
 	m.pools["agent-pool"] = p
-	m.refreshInspectCache()
 	return m
 }
 

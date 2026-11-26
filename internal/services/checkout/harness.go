@@ -1,6 +1,7 @@
 package checkout
 
 import (
+	"slices"
 	"strings"
 
 	v1 "github.com/tmih06/nightshift/api/v1"
@@ -172,26 +173,7 @@ func harnessPi() v1.Harness {
 // delimited by non-alphanumeric boundaries (so "pi-pool" matches "pi" while
 // "api-pool" does not).
 func hasToken(s, tok string) bool {
-	if tok == "" {
-		return false
-	}
-	for i := 0; i <= len(s)-len(tok); {
-		idx := strings.Index(s[i:], tok)
-		if idx < 0 {
-			return false
-		}
-		start := i + idx
-		end := start + len(tok)
-		leftOK := start == 0 || !isAlphaNum(s[start-1])
-		rightOK := end == len(s) || !isAlphaNum(s[end])
-		if leftOK && rightOK {
-			return true
-		}
-		i = start + 1
-	}
-	return false
-}
-
-func isAlphaNum(b byte) bool {
-	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
+	return slices.Contains(strings.FieldsFunc(s, func(r rune) bool {
+		return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9')
+	}), tok)
 }

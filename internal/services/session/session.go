@@ -765,10 +765,6 @@ func resolveTerm(pod, term string) string {
 	return term
 }
 
-func getViewer(pod, term string, w, h int) (*viewer, error) {
-	return getViewerAs(pod, term, "", w, h)
-}
-
 // getViewerAs is the viewer who looks at term. Each who has a viewer of their
 // own, so two frontends watching one terminal do not take each other's
 // "something changed" signal; "" is the shared viewer that input goes through.

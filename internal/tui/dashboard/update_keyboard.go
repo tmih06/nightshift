@@ -47,15 +47,11 @@ func (m model) updateKeyboard(msg tea.KeyPressMsg) (model, tea.Cmd) {
 		return m, cmd
 	case "r":
 		m.status, m.statusTTL = "", 0
-		cmds := []tea.Cmd{fetchCmd(m.api)}
-		if logCmd := m.maybeFetchLogs(); logCmd != nil {
-			cmds = append(cmds, logCmd)
-		}
-		return m, tea.Batch(cmds...)
+		cmd := m.refresh()
+		return m, cmd
 	case "c":
-		pool := m.claimPool()
-		m.flash("claiming from " + pool + "…")
-		return m, claimCmd(m.api, pool)
+		cmd := m.claim()
+		return m, cmd
 	case "enter":
 		if m.showingDocPane() {
 			m.focusDocPane()
@@ -152,16 +148,23 @@ func (m model) updateInspectKeys(msg tea.KeyPressMsg) (model, tea.Cmd) {
 		return m, cmd
 	case "c":
 		m.focus = focusNav
-		pool := m.claimPool()
-		m.flash("claiming from " + pool + "…")
-		return m, claimCmd(m.api, pool)
+		cmd := m.claim()
+		return m, cmd
 	case "r":
 		m.status, m.statusTTL = "", 0
-		cmds := []tea.Cmd{fetchCmd(m.api)}
-		if logCmd := m.maybeFetchLogs(); logCmd != nil {
-			cmds = append(cmds, logCmd)
-		}
-		return m, tea.Batch(cmds...)
+		cmd := m.refresh()
+		return m, cmd
 	}
 	return m, nil
+}
+
+// refresh reloads the fleet, and the logs when they are shown.
+func (m *model) refresh() tea.Cmd {
+	return tea.Batch(fetchCmd(m.api), m.maybeFetchLogs())
+}
+
+func (m *model) claim() tea.Cmd {
+	pool := m.claimPool()
+	m.flash("claiming from " + pool + "…")
+	return claimCmd(m.api, pool)
 }

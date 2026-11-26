@@ -16,7 +16,6 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		if m.showingDocPane() {
-			m.refreshInspectCache()
 			m.scrollInspect(0)
 		}
 	case tea.PasteMsg:
@@ -44,11 +43,8 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 		}
 		return m.updateMouse(msg)
 	case tickMsg:
-		cmds := []tea.Cmd{fetchCmd(m.api), tickCmd()}
-		if logCmd := m.maybeFetchLogs(); logCmd != nil {
-			cmds = append(cmds, logCmd)
-		}
-		return m, tea.Batch(cmds...)
+		cmd := tea.Batch(m.refresh(), tickCmd())
+		return m, cmd
 	case logsMsg:
 		if m.loadingLogs == msg.pod {
 			m.loadingLogs = ""
@@ -64,9 +60,6 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 		} else {
 			delete(m.logErr, msg.pod)
 			m.logs[msg.pod] = msg.out
-		}
-		if m.selected == msg.pod && m.effectivePane() == paneLogs {
-			m.refreshInspectCache()
 		}
 		return m, nil
 	case shellTickMsg:

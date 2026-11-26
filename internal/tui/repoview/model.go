@@ -354,14 +354,14 @@ func New(th ghtheme.Theme, styles ghctx.Styles, opts Options) *Model {
 		activeScope:     ScopeBranches,
 		navFrac:         defaultNavFrac,
 		listFrac:        defaultListFrac,
-		navSearchInput:  newStyledInput(th, "/ ", "Filter repos…", 100),
-		listSearchInput: newStyledInput(th, "/ ", "Filter…", 100),
-		paletteInput:    newStyledInput(th, ": ", "Type a command…", 100),
-		addRepoInput:    newStyledInput(th, "▸ ", "owner/repo or search query…", 140),
-		branchInput:     newStyledInput(th, "▸ ", "feature/my-branch", 120),
-		issueTitleInput: newStyledInput(th, "▸ ", "Issue title…", 200),
-		issueBodyInput:  newStyledInput(th, "▸ ", "Description…", 500),
-		commentInput:    newStyledInput(th, "▸ ", "Write a comment…", 500),
+		navSearchInput:  dialog.TextInput(th, "/ ", "Filter repos…", 100),
+		listSearchInput: dialog.TextInput(th, "/ ", "Filter…", 100),
+		paletteInput:    dialog.TextInput(th, ": ", "Type a command…", 100),
+		addRepoInput:    dialog.TextInput(th, "▸ ", "owner/repo or search query…", 140),
+		branchInput:     dialog.TextInput(th, "▸ ", "feature/my-branch", 120),
+		issueTitleInput: dialog.TextInput(th, "▸ ", "Issue title…", 200),
+		issueBodyInput:  dialog.TextInput(th, "▸ ", "Description…", 500),
+		commentInput:    dialog.TextInput(th, "▸ ", "Write a comment…", 500),
 		openBrowser:     defaultOpenBrowser,
 		copyClipboard:   clipboard.WriteAll,
 		now:             time.Now,
@@ -385,10 +385,6 @@ func New(th ghtheme.Theme, styles ghctx.Styles, opts Options) *Model {
 	}
 
 	return m
-}
-
-func newStyledInput(th ghtheme.Theme, prompt, placeholder string, charLimit int) textinput.Model {
-	return dialog.TextInput(th, prompt, placeholder, charLimit)
 }
 
 // Init returns no initial command so repo loading happens lazily via EnsureLoaded.
@@ -633,12 +629,6 @@ func (m *Model) setNotice(text string, isErr bool) tea.Cmd {
 func defaultOpenBrowser(targetURL string) error {
 	if targetURL == "" {
 		return errors.New("nothing to open")
-	}
-	if _, err := exec.LookPath("gh"); err == nil {
-		// Use gh browse only when no full URL; for full URLs use platform opener.
-		if !strings.HasPrefix(targetURL, "http://") && !strings.HasPrefix(targetURL, "https://") {
-			return exec.Command("gh", "browse", "-R", targetURL).Start()
-		}
 	}
 	var cmd *exec.Cmd
 	switch runtime.GOOS {

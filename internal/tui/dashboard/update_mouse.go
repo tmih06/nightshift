@@ -159,7 +159,6 @@ func (m model) applyDrag(x, y int) model {
 		m.sideWidth = m.width - x
 	}
 	m.shellW, m.shellH = 0, 0
-	m.refreshInspectCache()
 	return m
 }
 

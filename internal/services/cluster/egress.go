@@ -24,9 +24,6 @@ const (
 // environment variables injected into sandboxes when the egress proxy is
 // enabled. Real credentials never enter the sandbox.
 func EgressSandboxEnv(proxyURL string) []map[string]any {
-	if proxyURL == "" {
-		proxyURL = EgressServiceURL
-	}
 	pairs := [][2]string{
 		{"HTTP_PROXY", proxyURL},
 		{"HTTPS_PROXY", proxyURL},

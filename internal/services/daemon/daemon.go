@@ -1,7 +1,6 @@
 // Package daemon runs the Nightshift services: the API server over the
 // cluster-backed backend, on a listener of its own. cmd/nightshiftd is a thin
-// shell around it, and the terminal UI starts one in-process when it is not
-// given a server to talk to.
+// shell around it.
 package daemon
 
 import (
@@ -74,14 +73,14 @@ func Start(cfg Config) (*Daemon, error) {
 		}
 	}
 	backend := live.New(live.Options{Accounts: cfg.accounts()})
-	s, err := newServer(server.Config{
+	s, err := server.New(server.Config{
 		Token: token, Hosts: cfg.Hosts, AnyHost: cfg.AnyHost, Version: cfg.Version,
 		Cluster: v1.ClusterInfo{Context: cluster.ContextLabel(), Namespace: cluster.Namespace},
 		Fleet:   backend.Fleet, Claims: backend.Claims, Checkouts: backend.Checkouts, Volumes: backend.Volumes,
 		Terminals: backend.Terminals, Accounts: accountsOf(backend),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("start: %w", err)
+		return nil, fmt.Errorf("start the server: %w", err)
 	}
 	var lc net.ListenConfig
 	ln, err := lc.Listen(context.Background(), "tcp", cfg.Listen)
@@ -110,15 +109,6 @@ func Start(cfg Config) (*Daemon, error) {
 	}()
 	log.Info("nightshiftd is serving", "url", d.url, "cluster", cluster.ContextLabel())
 	return d, nil
-}
-
-// newServer is server.New, with its error said as the daemon's.
-func newServer(cfg server.Config) (*server.Server, error) {
-	s, err := server.New(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("start the server: %w", err)
-	}
-	return s, nil
 }
 
 // accountsOf is the backend's accounts, or nil when it has none, so that the

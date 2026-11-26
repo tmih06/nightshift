@@ -391,20 +391,13 @@ func (m model) checkoutCard(now time.Time) string {
 					tail += " · " + rest
 				}
 				lines = append(lines, strings.Repeat(" ", label+2)+warmStyle.Render(bar)+
-					faint.Render(ansiCut(tail, inner-label-2-20)))
+					faint.Render(truncateANSI(tail, inner-label-2-20)))
 			}
 		default:
 			lines = append(lines, dialog.Line(faint, "○ "+name, inner))
 		}
 	}
 	return dialog.Box(th, lines)
-}
-
-func ansiCut(s string, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	return truncateANSI(s, width)
 }
 
 func progressBar(pct, width int) string {

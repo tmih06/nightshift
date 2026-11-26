@@ -165,7 +165,3 @@ func (b Sandbox) PodRole() PodRole {
 	}
 	return RoleOther
 }
-
-// OwnerRank orders warm sandboxes, then claimed, then egress, system, jobs,
-// and other.
-func OwnerRank(b Sandbox) int { return int(b.PodRole()) }

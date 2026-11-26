@@ -1,7 +1,7 @@
 {
   "rules": {
     "deadcode/unreachable-func": {
-      "first": 4,
+      "first": 3,
       "vendored": 113
     },
     "golangci/contextcheck": {
@@ -9,7 +9,7 @@
       "vendored": 0
     },
     "golangci/cyclop": {
-      "first": 59,
+      "first": 57,
       "vendored": 78
     },
     "golangci/dupl": {
@@ -17,7 +17,7 @@
       "vendored": 8
     },
     "golangci/errcheck": {
-      "first": 199,
+      "first": 192,
       "vendored": 86
     },
     "golangci/errorlint": {
@@ -29,15 +29,15 @@
       "vendored": 57
     },
     "golangci/forbidigo": {
-      "first": 13,
+      "first": 11,
       "vendored": 19
     },
     "golangci/funlen": {
-      "first": 57,
+      "first": 54,
       "vendored": 71
     },
     "golangci/gochecknoglobals": {
-      "first": 74,
+      "first": 65,
       "vendored": 122
     },
     "golangci/gochecknoinits": {
@@ -45,15 +45,15 @@
       "vendored": 2
     },
     "golangci/gocognit": {
-      "first": 55,
+      "first": 52,
       "vendored": 56
     },
     "golangci/goconst": {
-      "first": 100,
+      "first": 82,
       "vendored": 66
     },
     "golangci/gocritic": {
-      "first": 190,
+      "first": 187,
       "vendored": 326
     },
     "golangci/godox": {
@@ -61,15 +61,15 @@
       "vendored": 6
     },
     "golangci/gosec": {
-      "first": 30,
+      "first": 27,
       "vendored": 72
     },
     "golangci/ineffassign": {
-      "first": 1,
+      "first": 0,
       "vendored": 0
     },
     "golangci/nestif": {
-      "first": 19,
+      "first": 18,
       "vendored": 26
     },
     "golangci/nilerr": {
@@ -77,7 +77,7 @@
       "vendored": 1
     },
     "golangci/noctx": {
-      "first": 17,
+      "first": 16,
       "vendored": 16
     },
     "golangci/nolintlint": {
@@ -93,11 +93,11 @@
       "vendored": 31
     },
     "golangci/revive": {
-      "first": 4,
+      "first": 3,
       "vendored": 45
     },
     "golangci/staticcheck": {
-      "first": 10,
+      "first": 8,
       "vendored": 2
     },
     "golangci/testifylint": {
@@ -109,15 +109,15 @@
       "vendored": 3
     },
     "golangci/unparam": {
-      "first": 5,
+      "first": 4,
       "vendored": 36
     },
     "golangci/unused": {
-      "first": 9,
+      "first": 0,
       "vendored": 69
     },
     "golangci/wrapcheck": {
-      "first": 49,
+      "first": 45,
       "vendored": 82
     },
     "jscpd/duplicated-lines": {

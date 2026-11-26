@@ -72,9 +72,6 @@ func (s Spec) branch() string {
 	}
 }
 
-// Branch is the branch the clone ends up on.
-func (s Spec) Branch() string { return s.branch() }
-
 // String names the target the way people write it: owner/name#7, or
 // owner/name@branch.
 func (s Spec) String() string {

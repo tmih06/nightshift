@@ -146,23 +146,6 @@ type Snapshot struct {
 	UsageErr error
 }
 
-// ByProvider returns one agent's accounts, active first and then by name.
-func (s Snapshot) ByProvider(id string) []Account {
-	var out []Account
-	for i := range s.Accounts {
-		if s.Accounts[i].Provider == id {
-			out = append(out, s.Accounts[i])
-		}
-	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Active != out[j].Active {
-			return out[i].Active
-		}
-		return out[i].Name < out[j].Name
-	})
-	return out
-}
-
 // Chosen is the credential an agent's sandboxes get: the one picked as active
 // if it is still enabled, else the first enabled one by name. k8s/creds-publish.sh
 // applies the same rule, so the tab shows what will be published.

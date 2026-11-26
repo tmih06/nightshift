@@ -3,6 +3,7 @@ package dashboard
 import (
 	"fmt"
 	"image/color"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -69,19 +70,10 @@ func infraRoleGroups() []roleGroup {
 	}
 }
 
-func matchesRoles(role fleet.PodRole, allowed []fleet.PodRole) bool {
-	for _, r := range allowed {
-		if role == r {
-			return true
-		}
-	}
-	return false
-}
-
 func (m model) sortedIndicesForRoles(roles []fleet.PodRole) []int {
 	var indices []int
 	for i := range m.boxes {
-		if matchesRoles(m.boxes[i].PodRole(), roles) {
+		if slices.Contains(roles, m.boxes[i].PodRole()) {
 			indices = append(indices, i)
 		}
 	}
