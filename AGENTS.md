@@ -32,7 +32,7 @@ builds, lints changed packages, and runs the diff rules in seconds. CI runs
 and vulnerability scans.
 
 - Build and test: `go build ./...`, `go test ./...`.
-- One linter: `.tools/bin/golangci-lint run --enable-only errcheck ./internal/app/...`.
+- One linter: `.tools/bin/golangci-lint run --enable-only errcheck ./internal/tui/app/...`.
 - Semgrep rules: `semgrep scan --metrics=off --config .semgrep/slop.yml internal`.
 - Debt fell: `make quality-baseline`, then commit the lower counts.
 
@@ -40,20 +40,22 @@ A human's explicit instruction takes priority over every rule in this file, incl
 
 ## Go conventions
 
-- Wrap errors with `%w` and surface them as UI status (`internal/cluster/volume.go`).
+- Wrap errors with `%w` and surface them as UI status (`internal/services/cluster/volume.go`).
 - Keep stdout clear: it belongs to the TUI. Log through `log`, which
   `cmd/nightshift/main.go` discards unless `NIGHTSHIFT_DEBUG` names a file.
 - Take `ctx` first. Commands with no parent start from `context.WithTimeout`
-  (`internal/repoview/model.go`).
-- Respect the layers: `cluster`, `egress`, and `manifest` are leaves, `session`
-  imports only `cluster`, tabs talk through `internal/app`, and vendored code
-  imports nothing first-party. `depguard` enforces this.
+  (`internal/tui/repoview/model.go`).
+- Respect the layers: `internal/services` owns the cluster and `internal/tui` reaches
+  it only through `api/v1` and `api/client`. Inside the services, `cluster`,
+  `egress`, and `manifest` are leaves and `session` imports only `cluster`. Tabs
+  talk through `internal/tui/app`, and vendored code imports nothing
+  first-party. `depguard` and `internal/architecture_test.go` enforce this.
 - Give every goroutine an owner: a `sync.WaitGroup`, done channel, or context
-  (`internal/dashboard/model.go`).
+  (`internal/tui/dashboard/model.go`).
 - Write first-party tests with the standard library and plain `t.Errorf`
-  (`internal/dashboard/dashboard_test.go`).
-- Reuse `internal/cluster` for `kubectl`, `internal/session` for Herdr,
-  `internal/dialog` for dialogs, and gh-dash's `tui/theme` for styling.
+  (`internal/tui/dashboard/dashboard_test.go`).
+- Reuse `internal/services/cluster` for `kubectl`, `internal/services/session`
+  for Herdr, `internal/tui/dialog` for dialogs, and gh-dash's `tui/theme` for styling.
 
 ## Guardrails
 
