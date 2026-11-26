@@ -49,9 +49,10 @@ func (k Kube) ManagementKey(ctx context.Context) (string, error) {
 }
 
 // accountsData is what the refresher and the tab keep in the nightshift-accounts
-// ConfigMap: the chosen account per agent, and what was last published.
+// ConfigMap: the chosen account/chain per agent, and what was last published.
 type accountsData struct {
 	Active      map[string]string
+	Chains      map[string][]string
 	PublishedAt time.Time
 	Published   map[string]Published
 }
@@ -62,7 +63,11 @@ func (k Kube) ReadAccounts(ctx context.Context) (accountsData, error) {
 	if err != nil {
 		return accountsData{}, err
 	}
-	d := accountsData{Active: map[string]string{}, Published: map[string]Published{}}
+	d := accountsData{
+		Active:    map[string]string{},
+		Chains:    map[string][]string{},
+		Published: map[string]Published{},
+	}
 	if len(bytes.TrimSpace(out)) == 0 {
 		return d, nil
 	}
@@ -75,6 +80,11 @@ func (k Kube) ReadAccounts(ctx context.Context) (accountsData, error) {
 	if raw := cm.Data["active"]; raw != "" {
 		if err := json.Unmarshal([]byte(raw), &d.Active); err != nil {
 			return d, fmt.Errorf("parse active accounts: %w", err)
+		}
+	}
+	if raw := cm.Data["chains"]; raw != "" {
+		if err := json.Unmarshal([]byte(raw), &d.Chains); err != nil {
+			return d, fmt.Errorf("parse account chains: %w", err)
 		}
 	}
 	if raw := cm.Data["status"]; raw != "" {
@@ -97,19 +107,62 @@ func (k Kube) ReadAccounts(ctx context.Context) (accountsData, error) {
 	return d, nil
 }
 
-// SetActive records which account an agent's sandboxes should get, keeping the
-// choices for the other agents.
+// SetActive promotes name to the head of provider's fallback chain and records
+// it as active, keeping the choices for the other agents.
 func (k Kube) SetActive(ctx context.Context, provider, name string) error {
 	d, err := k.ReadAccounts(ctx)
 	if err != nil {
 		return err
 	}
 	d.Active[provider] = name
-	raw, err := json.Marshal(d.Active)
+	chain := []string{name}
+	for _, existing := range d.Chains[provider] {
+		if existing != "" && existing != name {
+			chain = append(chain, existing)
+		}
+	}
+	d.Chains[provider] = chain
+	return k.writeChoices(ctx, d.Active, d.Chains)
+}
+
+// SetChain records the ordered fallback chain for provider (and sets the first
+// entry as active), keeping the choices for the other agents.
+func (k Kube) SetChain(ctx context.Context, provider string, names []string) error {
+	clean := make([]string, 0, len(names))
+	seen := make(map[string]bool, len(names))
+	for _, n := range names {
+		n = strings.TrimSpace(n)
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		clean = append(clean, n)
+	}
+	if len(clean) == 0 {
+		return errors.New("chain must name at least one account")
+	}
+	d, err := k.ReadAccounts(ctx)
+	if err != nil {
+		return err
+	}
+	d.Chains[provider] = clean
+	d.Active[provider] = clean[0]
+	return k.writeChoices(ctx, d.Active, d.Chains)
+}
+
+func (k Kube) writeChoices(ctx context.Context, active map[string]string, chains map[string][]string) error {
+	rawActive, err := json.Marshal(active)
 	if err != nil {
 		return fmt.Errorf("encode active accounts: %w", err)
 	}
-	patch, err := json.Marshal(map[string]any{"data": map[string]string{"active": string(raw)}})
+	rawChains, err := json.Marshal(chains)
+	if err != nil {
+		return fmt.Errorf("encode account chains: %w", err)
+	}
+	patch, err := json.Marshal(map[string]any{"data": map[string]string{
+		"active": string(rawActive),
+		"chains": string(rawChains),
+	}})
 	if err != nil {
 		return fmt.Errorf("encode patch: %w", err)
 	}
@@ -118,7 +171,9 @@ func (k Kube) SetActive(ctx context.Context, provider, name string) error {
 		return err
 	}
 	if len(bytes.TrimSpace(exists)) == 0 {
-		_, err = k.run(ctx, "create", "configmap", accountsMap, "--from-literal=active="+string(raw))
+		_, err = k.run(ctx, "create", "configmap", accountsMap,
+			"--from-literal=active="+string(rawActive),
+			"--from-literal=chains="+string(rawChains))
 		return err
 	}
 	_, err = k.run(ctx, "patch", "configmap", accountsMap, "--type=merge", "-p", string(patch))

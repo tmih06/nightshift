@@ -76,6 +76,9 @@ type Model struct {
 	cursor int
 	top    int // first list line in view
 
+	scroll      int  // first line of the detail pane's body in view
+	allAccounts bool // the calendar adds up every account
+
 	hidden bool
 	gen    int // bumped when polling restarts, so a stale tick is ignored
 	width  int
@@ -252,6 +255,8 @@ func (m *Model) setSnapshot(s v1.Accounts) {
 	if a, ok := m.selected(); ok {
 		selected = a.Name
 	}
+	scroll := m.scroll
+	m.scroll = 0
 	m.snap = s
 	m.flat = m.flat[:0]
 	for _, p := range m.snap.Providers {
@@ -260,7 +265,7 @@ func (m *Model) setSnapshot(s v1.Accounts) {
 	m.cursor = 0
 	for i := range m.flat {
 		if m.flat[i].Name == selected {
-			m.cursor = i
+			m.cursor, m.scroll = i, scroll
 		}
 	}
 	m.keepCursorInView()
@@ -277,7 +282,17 @@ func (m *Model) move(delta int) {
 	if len(m.flat) == 0 {
 		return
 	}
-	m.cursor = max(0, min(len(m.flat)-1, m.cursor+delta))
+	m.jump(m.cursor + delta)
+}
+
+// jump selects the account at i, or the nearest one, from the top of its
+// details.
+func (m *Model) jump(i int) {
+	was := m.cursor
+	m.cursor = max(0, min(len(m.flat)-1, i))
+	if m.cursor != was {
+		m.scroll = 0
+	}
 	m.keepCursorInView()
 }
 
@@ -311,11 +326,15 @@ func (m *Model) navKey(k string) bool {
 	case "k", "up":
 		m.move(-1)
 	case "g", "home":
-		m.cursor = 0
-		m.keepCursorInView()
+		m.jump(0)
 	case "G", "end":
-		m.cursor = max(0, len(m.flat)-1)
-		m.keepCursorInView()
+		m.jump(len(m.flat) - 1)
+	case "ctrl+d", "pgdown":
+		m.scrollDetail(m.bodyHeight() / 2)
+	case "ctrl+u", "pgup":
+		m.scrollDetail(-m.bodyHeight() / 2)
+	case "v":
+		m.allAccounts = !m.allAccounts
 	default:
 		return false
 	}
@@ -335,6 +354,10 @@ func (m Model) actionKey(k string) (Model, tea.Cmd) {
 		return m.openProviderPicker(), nil
 	case keyEnter, "s":
 		return m.useSelected()
+	case "K", "[":
+		return m.moveInChain(-1)
+	case "J", "]":
+		return m.moveInChain(1)
 	case "d":
 		return m.toggleSelected()
 	case "x":
@@ -343,6 +366,8 @@ func (m Model) actionKey(k string) (Model, tea.Cmd) {
 		}
 	case "r":
 		return m.refreshSelected()
+	case "Q":
+		return m.refreshQuotas()
 	case "p":
 		return m.publishNow("Publishing…")
 	}
@@ -490,7 +515,49 @@ func (m Model) useSelected() (Model, tea.Cmd) {
 		if _, err := svc.Publish(ctx); err != nil {
 			return doneMsg{err: err, refetch: true}
 		}
-		return doneMsg{text: p.Name + " sandboxes now use " + label(a) + " (new sandboxes; running ones keep their login)", refetch: true}
+		return doneMsg{text: p.Name + " primary is now " + label(a) + " (fallback chain updated)", refetch: true}
+	}
+}
+
+func (m Model) moveInChain(delta int) (Model, tea.Cmd) {
+	a, ok := m.selected()
+	if !ok {
+		return m, nil
+	}
+	if a.Disabled {
+		cmd := m.say("That account is disabled; press d to enable it first.", true)
+		return m, cmd
+	}
+	accts := byProvider(m.snap, a.Provider)
+	enabled := make([]string, 0, len(accts))
+	idx := -1
+	for i := range accts {
+		if accts[i].Disabled {
+			continue
+		}
+		if accts[i].Name == a.Name {
+			idx = len(enabled)
+		}
+		enabled = append(enabled, accts[i].Name)
+	}
+	next := idx + delta
+	if idx < 0 || next < 0 || next >= len(enabled) {
+		return m, nil
+	}
+	enabled[idx], enabled[next] = enabled[next], enabled[idx]
+	p := providerByID(m.snap, a.Provider)
+	svc := m.svc
+	m.notice, m.noticeBad, m.noticeAt = "Updating "+p.Name+" fallback order…", false, m.now()
+	return m, func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if err := svc.SetChain(ctx, a.Provider, enabled); err != nil {
+			return doneMsg{err: err}
+		}
+		if _, err := svc.Publish(ctx); err != nil {
+			return doneMsg{err: err, refetch: true}
+		}
+		return doneMsg{text: p.Name + " fallback order updated", refetch: true}
 	}
 }
 
@@ -519,6 +586,19 @@ func (m Model) refreshSelected() (Model, tea.Cmd) {
 	return m, act(fetchWindow, "Refreshed "+label(a), func(ctx context.Context) error {
 		return svc.RefreshAccount(ctx, a.Name)
 	})
+}
+
+func (m Model) refreshQuotas() (Model, tea.Cmd) {
+	svc := m.svc
+	m.notice, m.noticeBad, m.noticeAt = "Fetching live quotas…", false, m.now()
+	return m, func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), fetchWindow)
+		defer cancel()
+		if err := svc.RefreshQuotas(ctx); err != nil {
+			return doneMsg{err: err}
+		}
+		return doneMsg{text: "Live quotas updated", refetch: true}
+	}
 }
 
 func (m Model) publishNow(label string) (Model, tea.Cmd) {

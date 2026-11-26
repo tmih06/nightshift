@@ -500,14 +500,26 @@ paths:
             application/json:
               schema: {$ref: "#/components/schemas/PublishReport"}
         default: {$ref: "#/components/responses/Problem"}
+  /v1/accounts/refresh-quotas:
+    post:
+      tags: [accounts]
+      operationId: refreshQuotas
+      summary: Actively fetch live provider quotas for every loaded account.
+      description: |
+        Asks the egress proxy to query each provider's quota endpoint for all
+        accounts currently loaded in its fallback pools.
+      responses:
+        "204": {description: Refreshed.}
+        default: {$ref: "#/components/responses/Problem"}
   /v1/accounts/active/{provider}:
     put:
       tags: [accounts]
       operationId: setActiveAccount
-      summary: Choose the account a provider's new sandboxes get.
+      summary: Choose the primary account at the head of a provider's fallback chain.
       description: |
-        Running sandboxes keep the login they booted with. Publishing then
-        makes the choice take effect (`POST /v1/accounts/publish`).
+        Promotes the chosen account to position 1 of the provider's fallback
+        chain. Publishing then makes the choice take effect
+        (`POST /v1/accounts/publish`).
       parameters:
         - {name: provider, in: path, required: true, schema: {type: string}}
       requestBody:
@@ -517,6 +529,25 @@ paths:
             schema: {$ref: "#/components/schemas/ActiveAccount"}
       responses:
         "204": {description: Chosen.}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/accounts/chain/{provider}:
+    put:
+      tags: [accounts]
+      operationId: setAccountChain
+      summary: Set the ordered fallback chain for a provider's accounts.
+      description: |
+        Records the priority order the egress proxy uses when failing over
+        across accounts on quota or auth errors. Publishing then makes the
+        order take effect (`POST /v1/accounts/publish`).
+      parameters:
+        - {name: provider, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AccountChain"}
+      responses:
+        "204": {description: Saved.}
         default: {$ref: "#/components/responses/Problem"}
   /v1/accounts/{name}:
     parameters:
@@ -894,10 +925,16 @@ components:
         accounts:
           type: array
           items: {$ref: "#/components/schemas/Account"}
+        chains:
+          type: object
+          additionalProperties:
+            type: array
+            items: {type: string}
         published:
           type: object
           additionalProperties: {$ref: "#/components/schemas/Published"}
         publishedAt: {type: string, format: date-time}
+        analytics: {$ref: "#/components/schemas/AnalyticsSummary"}
         usageError: {type: string}
     Account:
       type: object
@@ -910,6 +947,11 @@ components:
         state: {type: string, enum: [ok, expiring, failing, sign_in, disabled]}
         disabled: {type: boolean}
         active: {type: boolean}
+        priority: {type: integer}
+        activeNow: {type: boolean}
+        cooldownUntil: {type: string, format: date-time}
+        cooldownReason: {type: string}
+        failovers: {type: integer}
         expiresAt: {type: string, format: date-time}
         lastRefreshAt: {type: string, format: date-time}
         nextRefreshAt: {type: string, format: date-time}
@@ -920,6 +962,24 @@ components:
         quotaBlocked: {type: boolean}
         cooldowns: {type: integer}
         usage: {$ref: "#/components/schemas/AccountUsage"}
+        history:
+          type: array
+          description: >-
+            Daily usage for up to the last 53 weeks, oldest day first, without
+            days that saw no request. Survives an egress proxy restart.
+          items: {$ref: "#/components/schemas/DayUsage"}
+        quota: {$ref: "#/components/schemas/AccountQuota"}
+    ModelUsage:
+      type: object
+      required: [requests]
+      properties:
+        requests: {type: integer}
+        input: {type: integer, format: int64}
+        output: {type: integer, format: int64}
+        cacheRead: {type: integer, format: int64}
+        cacheWrite: {type: integer, format: int64}
+        reasoning: {type: integer, format: int64}
+        total: {type: integer, format: int64}
     AccountUsage:
       type: object
       required: [requests, ok, clientError, rateLimited, serverError]
@@ -929,10 +989,76 @@ components:
         clientError: {type: integer}
         rateLimited: {type: integer}
         serverError: {type: integer}
+        input: {type: integer, format: int64}
+        output: {type: integer, format: int64}
+        cacheRead: {type: integer, format: int64}
+        cacheWrite: {type: integer, format: int64}
+        reasoning: {type: integer, format: int64}
+        total: {type: integer, format: int64}
+        cacheHitPercent: {type: number}
+        avgLatencyMs: {type: integer, format: int64}
         lastAt: {type: string, format: date-time}
+        byModel:
+          type: object
+          additionalProperties: {$ref: "#/components/schemas/ModelUsage"}
         recent:
           type: array
           items: {type: integer}
+        recentVolume:
+          type: array
+          items: {type: integer, format: int64}
+    DayUsage:
+      type: object
+      required: [date, requests]
+      properties:
+        date: {type: string, format: date}
+        requests: {type: integer}
+        total: {type: integer, format: int64, description: Tokens used that day.}
+    QuotaWindow:
+      type: object
+      required: [name, label, usedPercent]
+      properties:
+        name: {type: string}
+        label: {type: string}
+        usedPercent: {type: number}
+        limit: {type: integer, format: int64}
+        used: {type: integer, format: int64}
+        remaining: {type: integer, format: int64}
+        resetsAt: {type: string, format: date-time}
+        windowMinutes: {type: integer}
+        status: {type: string}
+    AccountQuota:
+      type: object
+      properties:
+        plan: {type: string}
+        creditsBalance: {type: string}
+        source: {type: string}
+        fetchedAt: {type: string, format: date-time}
+        nextResetAt: {type: string, format: date-time}
+        windows:
+          type: array
+          items: {$ref: "#/components/schemas/QuotaWindow"}
+        error: {type: string}
+    AnalyticsSummary:
+      type: object
+      required: [requests, ok, clientError, rateLimited, serverError]
+      properties:
+        requests: {type: integer}
+        ok: {type: integer}
+        clientError: {type: integer}
+        rateLimited: {type: integer}
+        serverError: {type: integer}
+        input: {type: integer, format: int64}
+        output: {type: integer, format: int64}
+        cacheRead: {type: integer, format: int64}
+        cacheWrite: {type: integer, format: int64}
+        reasoning: {type: integer, format: int64}
+        total: {type: integer, format: int64}
+        cacheHitPercent: {type: number}
+        avgLatencyMs: {type: integer, format: int64}
+        byModel:
+          type: object
+          additionalProperties: {$ref: "#/components/schemas/ModelUsage"}
     Published:
       type: object
       required: [account]
@@ -967,6 +1093,13 @@ components:
       required: [account]
       properties:
         account: {type: string}
+    AccountChain:
+      type: object
+      required: [accounts]
+      properties:
+        accounts:
+          type: array
+          items: {type: string}
     PublishReport:
       type: object
       required: [report]

@@ -65,6 +65,15 @@ func (a *Accounts) Accounts(ctx context.Context) (v1.Accounts, error) {
 	if snap.UsageErr != nil {
 		out.UsageError = snap.UsageErr.Error()
 	}
+	if len(snap.Chains) > 0 {
+		out.Chains = make(map[string][]string, len(snap.Chains))
+		for id, ch := range snap.Chains {
+			out.Chains[id] = append([]string(nil), ch...)
+		}
+	}
+	if snap.Analytics != nil {
+		out.Analytics = analyticsOf(snap.Analytics)
+	}
 	if len(snap.Published) > 0 {
 		out.Published = make(map[string]v1.Published, len(snap.Published))
 		for id, p := range snap.Published {
@@ -82,16 +91,77 @@ func accountOf(a *accounts.Account, now time.Time) v1.Account {
 	out := v1.Account{
 		Name: a.Name, Provider: a.Provider, Email: a.Email,
 		State: accountState(a.State(now)), Disabled: a.Disabled, Active: a.Active,
+		Priority: a.Priority, ActiveNow: a.ActiveNow,
+		CooldownUntil: a.CooldownUntil.UTC(), CooldownReason: a.CooldownReason, Failovers: a.Failovers,
 		ExpiresAt: a.Expires.UTC(), LastRefreshAt: a.LastRefresh.UTC(), NextRefreshAt: a.NextRefresh.UTC(),
 		RefreshOK: a.Success, RefreshFailed: a.Failed, RefreshError: a.RefreshError,
 		StatusNote: a.StatusNote, QuotaBlocked: a.QuotaBlocked, Cooldowns: a.Cooldowns,
 	}
 	if u := a.Usage; u != nil {
-		out.Usage = &v1.AccountUsage{
-			Requests: u.Requests, OK: u.OK, ClientError: u.ClientError,
-			RateLimited: u.RateLimited, ServerError: u.ServerError,
-			LastAt: u.Last.UTC(), Recent: u.Recent,
+		out.Usage = usageOf(u)
+	}
+	for _, d := range a.History {
+		out.History = append(out.History, v1.DayUsage(d))
+	}
+	if q := a.Quota; q != nil {
+		out.Quota = quotaOf(q)
+	}
+	return out
+}
+
+func usageOf(u *accounts.Usage) *v1.AccountUsage {
+	out := &v1.AccountUsage{
+		Requests: u.Requests, OK: u.OK, ClientError: u.ClientError,
+		RateLimited: u.RateLimited, ServerError: u.ServerError,
+		Input: u.Input, Output: u.Output, CacheRead: u.CacheRead,
+		CacheWrite: u.CacheWrite, Reasoning: u.Reasoning, Total: u.Total,
+		CacheHitPercent: u.CacheHitPercent, AvgLatencyMS: u.AvgLatencyMS,
+		LastAt: u.Last.UTC(), Recent: u.Recent, RecentVolume: u.RecentVolume,
+	}
+	out.ByModel = modelsOf(u.ByModel)
+	return out
+}
+
+func quotaOf(q *accounts.Quota) *v1.AccountQuota {
+	out := &v1.AccountQuota{
+		Plan:           q.Plan,
+		CreditsBalance: q.CreditsBalance,
+		Source:         q.Source,
+		FetchedAt:      q.FetchedAt.UTC(),
+		NextResetAt:    q.NextResetAt.UTC(),
+		Error:          q.Error,
+	}
+	if len(q.Windows) > 0 {
+		out.Windows = make([]v1.QuotaWindow, len(q.Windows))
+		for i, w := range q.Windows {
+			out.Windows[i] = v1.QuotaWindow{
+				Name: w.Name, Label: w.Label, UsedPercent: w.UsedPercent,
+				Limit: w.Limit, Used: w.Used, Remaining: w.Remaining,
+				ResetsAt: w.ResetsAt.UTC(), WindowMinutes: w.WindowMinutes, Status: w.Status,
+			}
 		}
+	}
+	return out
+}
+
+func analyticsOf(a *accounts.Analytics) *v1.AnalyticsSummary {
+	return &v1.AnalyticsSummary{
+		Requests: a.Requests, OK: a.OK, ClientError: a.ClientError,
+		RateLimited: a.RateLimited, ServerError: a.ServerError,
+		Input: a.Input, Output: a.Output, CacheRead: a.CacheRead,
+		CacheWrite: a.CacheWrite, Reasoning: a.Reasoning, Total: a.Total,
+		CacheHitPercent: a.CacheHitPercent, AvgLatencyMS: a.AvgLatencyMS,
+		ByModel: modelsOf(a.ByModel),
+	}
+}
+
+func modelsOf(src map[string]accounts.ModelUsage) map[string]v1.ModelUsage {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[string]v1.ModelUsage, len(src))
+	for k, v := range src {
+		out[k] = v1.ModelUsage(v)
 	}
 	return out
 }
@@ -130,13 +200,23 @@ func (a *Accounts) Refresh(ctx context.Context, name string) error {
 	return wrapErr("refresh the account", a.svc.Refresh(ctx, name))
 }
 
-// SetActive picks the account a provider's new sandboxes get.
+// SetActive picks the primary account at the head of a provider's chain.
 func (a *Accounts) SetActive(ctx context.Context, provider, name string) error {
 	return wrapErr("choose the account", a.svc.SetActive(ctx, provider, name))
+}
+
+// SetChain sets the ordered fallback chain for a provider's accounts.
+func (a *Accounts) SetChain(ctx context.Context, provider string, names []string) error {
+	return wrapErr("set the fallback chain", a.svc.SetChain(ctx, provider, names))
 }
 
 // Publish puts the chosen accounts into the cluster now.
 func (a *Accounts) Publish(ctx context.Context) (string, error) {
 	report, err := a.svc.PublishNow(ctx)
 	return report, wrapErr("publish", err)
+}
+
+// RefreshQuotas triggers an active provider quota fetch on the egress proxy.
+func (a *Accounts) RefreshQuotas(ctx context.Context) error {
+	return wrapErr("refresh quotas", a.svc.RefreshQuotas(ctx))
 }

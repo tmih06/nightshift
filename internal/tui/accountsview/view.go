@@ -2,9 +2,7 @@ package accountsview
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -121,17 +119,35 @@ func (m Model) mouse(msg tea.MouseMsg) (Model, tea.Cmd) {
 	}
 	switch ev := msg.(type) {
 	case tea.MouseWheelMsg:
-		switch ev.Button {
-		case tea.MouseWheelUp:
-			m.move(-1)
-		case tea.MouseWheelDown:
-			m.move(1)
-		default:
-		}
+		m.wheel(ev)
 	case tea.MouseClickMsg:
 		m.click(ev)
 	}
 	return m, nil
+}
+
+// wheel scrolls the detail pane under the pointer, and moves through the list
+// anywhere else.
+func (m *Model) wheel(ev tea.MouseWheelMsg) {
+	delta := 0
+	switch ev.Button {
+	case tea.MouseWheelUp:
+		delta = -1
+	case tea.MouseWheelDown:
+		delta = 1
+	default:
+		return
+	}
+	overDetail := ev.X >= m.leftWidth()
+	if m.width < 90 {
+		_, height := m.detailSize()
+		overDetail = ev.Y >= m.height-1-height
+	}
+	if overDetail {
+		m.scrollDetail(3 * delta)
+		return
+	}
+	m.move(delta)
 }
 
 // click selects the account under a left click on the list.
@@ -142,7 +158,7 @@ func (m *Model) click(ev tea.MouseClickMsg) {
 	row := ev.Y - 1 + m.top
 	lines := m.listLines()
 	if row >= 0 && row < len(lines) && lines[row].acc >= 0 {
-		m.cursor = lines[row].acc
+		m.cursor, m.scroll = lines[row].acc, 0
 	}
 }
 
@@ -191,6 +207,17 @@ func (m Model) titleLine() string {
 		} else {
 			parts = append(parts, s.warn.Render("nothing published yet"))
 		}
+		if m.snap.Analytics != nil && m.snap.Analytics.Requests > 0 {
+			an := m.snap.Analytics
+			summary := fmt.Sprintf("%d req", an.Requests)
+			if an.Total > 0 {
+				summary += " · " + compactCount(an.Total) + " tok"
+			}
+			if an.CacheHitPercent > 0 {
+				summary += fmt.Sprintf(" · %.0f%% cache", an.CacheHitPercent)
+			}
+			parts = append(parts, s.faint.Render(summary))
+		}
 		if m.snap.UsageError != "" {
 			parts = append(parts, s.warn.Render("usage unavailable"))
 		}
@@ -206,7 +233,7 @@ func (m Model) titleLine() string {
 }
 
 func (m Model) helpLine() string {
-	keys := [][2]string{{"j/k", "move"}, {"a", "add"}, {"⏎", "use"}, {"d", "disable"}, {"x", "remove"}, {"r", "refresh"}, {"p", "publish"}, {"R", "reload"}, {"⇥", "tabs"}, {"q", "quit"}, {"?", "help"}}
+	keys := [][2]string{{"j/k", "move"}, {"v", "calendar"}, {"K/J", "order"}, {"a", "add"}, {"⏎", "primary"}, {"Q", "quota"}, {"d", "disable"}, {"x", "remove"}, {"r", "refresh"}, {"p", "publish"}, {"R", "reload"}, {"⇥", "tabs"}, {"q", "quit"}, {"?", "help"}}
 	var b strings.Builder
 	b.WriteString(" ")
 	for i, k := range keys {
@@ -226,7 +253,8 @@ func (m Model) body() []string {
 	left := m.listPane(m.leftWidth(), m.listHeight())
 	var right []string
 	if a, ok := m.selected(); ok {
-		right = m.detail(a)
+		width, height := m.detailSize()
+		right = m.detail(a, width, height)
 	} else {
 		right = m.noSelection()
 	}
@@ -296,14 +324,19 @@ func (m Model) listRow(l listLine, width int) string {
 	case l.header:
 		accts := byProvider(m.snap, l.provider.ID)
 		req := 0
+		var toks int64
 		for i := range accts {
 			if accts[i].Usage != nil {
 				req += accts[i].Usage.Requests
+				toks += accts[i].Usage.Total
 			}
 		}
 		head := s.head.Render(l.provider.Name) + s.faint.Render(fmt.Sprintf("  %d", len(accts)))
 		if req > 0 {
-			head += s.faint.Render(fmt.Sprintf("  ·  %d requests", req))
+			head += s.faint.Render(fmt.Sprintf("  ·  %d req", req))
+		}
+		if toks > 0 {
+			head += s.faint.Render(" · " + compactCount(toks) + " tok")
 		}
 		return pad(head, width)
 	case l.empty:
@@ -313,141 +346,62 @@ func (m Model) listRow(l listLine, width int) string {
 	return m.accountRow(a, l.acc == m.cursor, width)
 }
 
+// accountRow is one account in the list: its health, name, most used quota
+// window, state, and request count, as far as width allows.
 func (m Model) accountRow(a v1.Account, selected bool, width int) string {
 	s := m.st
-	mark := s.faint.Render("○")
-	if a.Active {
-		mark = s.ok.Render("●")
+	// Each part carries the selection's background itself: a style around the
+	// whole line would end at the first part's reset.
+	on := func(st lipgloss.Style) lipgloss.Style {
+		if selected {
+			return st.Background(m.theme.SelectedBackground)
+		}
+		return st
 	}
-	stateText := m.stateText(a.State)
-	req := ""
-	if a.Usage != nil {
-		req = fmt.Sprintf("%d req", a.Usage.Requests)
+	blank := func(n int) string { return on(s.text).Render(strings.Repeat(" ", max(0, n))) }
+	cooling := a.CooldownUntil.After(m.now())
+	mark, markStyle := "○", s.faint
+	switch {
+	case cooling:
+		mark, markStyle = "◔", s.warn
+	case a.ActiveNow || a.Active:
+		mark, markStyle = "●", s.ok
 	}
-	tail := lipgloss.NewStyle().Width(10).Render(stateText) + s.faint.Render(lipgloss.NewStyle().Width(9).Align(lipgloss.Right).Render(req))
+	state, stateStyle := stateName(a.State), m.stateStyle(a.State)
+	if cooling {
+		state, stateStyle = "cooldown", s.warn
+	}
+	tail := m.listQuota(a, width, on) + on(stateStyle).Render(pad(state, 10))
+	if width >= 70 {
+		req := ""
+		if a.Usage != nil {
+			req = fmt.Sprintf("%d req", a.Usage.Requests)
+		}
+		tail += on(s.faint).Render(lipgloss.NewStyle().Width(9).Align(lipgloss.Right).Render(req))
+	}
+	prefix := ""
+	if a.Priority > 0 {
+		prefix = fmt.Sprintf("#%d ", a.Priority)
+	}
 	room := max(8, width-3-lipgloss.Width(tail))
-	line := " " + mark + " " + pad(s.text.Render(label(a)), room) + tail
-	line = pad(line, width)
-	if selected {
-		line = s.selected.Render(line)
-	}
-	return line
+	name := ansi.Truncate(label(a), room-len(prefix), "…")
+	line := blank(1) + on(markStyle).Render(mark) + blank(1) + on(s.faint).Render(prefix) + on(s.text).Render(name) +
+		blank(room-len(prefix)-lipgloss.Width(name)) + tail
+	return pad(line+blank(width-lipgloss.Width(line)), width)
 }
 
-func (m Model) detail(a v1.Account) []string {
-	s := m.st
-	now := m.now()
-	p := providerByID(m.snap, a.Provider)
-	title := s.title.Render(label(a))
-	if a.Active {
-		title += "  " + s.ok.Render("in use by sandboxes")
-	}
-	rows := m.statusRows(a, p)
-	rows = append(rows,
-		[2]string{"Token", "expires " + until(now, a.ExpiresAt)},
-		[2]string{"Refreshed", ago(now, a.LastRefreshAt) + nextCheck(now, a)},
-	)
-	if pub, ok := m.snap.Published[a.Provider]; ok && a.Active {
-		rows = append(rows, [2]string{"Published", ago(now, m.snap.PublishedAt) + s.faint.Render(" as "+pub.Label)})
-	}
-	out := []string{title, s.faint.Render(p.Name + " · " + a.Name), ""}
-	w := 0
-	for _, r := range rows {
-		w = max(w, lipgloss.Width(r[0]))
-	}
-	for _, r := range rows {
-		out = append(out, s.faint.Render(pad(r[0], w))+"  "+r[1])
-	}
-	out = append(out, "")
-	out = append(out, m.usageBlock(a)...)
-	return append(out, "", m.stateHint(a))
-}
-
-// stateText is a's state by name, in the color that says how it is doing.
-func (m Model) stateText(state string) string {
-	style := m.st.faint
-	switch state {
-	case v1.AccountOK:
-		style = m.st.ok
-	case v1.AccountExpiring:
-		style = m.st.warn
-	case v1.AccountFailing, v1.AccountSignIn:
-		style = m.st.bad
-	}
-	return style.Render(stateName(state))
-}
-
-// statusRows are the detail pane's rows about the account's health.
-func (m Model) statusRows(a v1.Account, p v1.Provider) [][2]string {
-	s := m.st
-	rows := [][2]string{{"Status", m.stateText(a.State)}}
-	if a.StatusNote != "" {
-		rows = append(rows, [2]string{"", s.faint.Render(a.StatusNote)})
-	}
-	if a.RefreshError != "" {
-		rows = append(rows, [2]string{"Problem", s.bad.Render(a.RefreshError)})
-	}
-	if a.State == v1.AccountSignIn {
-		rows = append(rows, [2]string{"", s.warn.Render("Sign in again: press a, pick " + p.Name + ", then remove the old entry.")})
-	}
-	if a.QuotaBlocked {
-		rows = append(rows, [2]string{"Quota", s.warn.Render("blocked by the provider")})
-	}
-	return rows
-}
-
-// nextCheck says when CLIProxyAPI will next look at the account's token.
-func nextCheck(now time.Time, a v1.Account) string {
-	if a.NextRefreshAt.IsZero() || !a.NextRefreshAt.After(now) {
+// listQuota is the list's small meter of the account's most used window. A
+// narrow list leaves it out.
+func (m Model) listQuota(a v1.Account, width int, on func(lipgloss.Style) lipgloss.Style) string {
+	if width < 46 {
 		return ""
 	}
-	return "  ·  next check " + until(now, a.NextRefreshAt)
-}
-
-func (m Model) usageBlock(a v1.Account) []string {
-	s := m.st
-	if m.snap.UsageError != "" {
-		return []string{s.head.Render("Usage"), s.warn.Render("unavailable: " + m.snap.UsageError)}
+	peak, ok := peakQuota(a.Quota)
+	if !ok {
+		return on(m.st.faint).Render(pad("", 13))
 	}
-	u := a.Usage
-	if u == nil {
-		note := "No request has carried this account's token since the proxy last started."
-		if !a.Active {
-			note = "Not in use, so no requests. Press enter to use it for sandboxes."
-		}
-		return []string{s.head.Render("Usage"), s.faint.Render(note)}
-	}
-	now := m.now()
-	out := []string{s.head.Render("Usage") + s.faint.Render("  through the egress proxy, since it last started")}
-	out = append(out, fmt.Sprintf("%s requests   %s ok", s.title.Render(strconv.Itoa(u.Requests)), s.ok.Render(strconv.Itoa(u.OK))))
-	var bad []string
-	if u.RateLimited > 0 {
-		bad = append(bad, s.warn.Render(fmt.Sprintf("%d rate limited", u.RateLimited)))
-	}
-	if u.ClientError > 0 {
-		bad = append(bad, s.warn.Render(fmt.Sprintf("%d client errors", u.ClientError)))
-	}
-	if u.ServerError > 0 {
-		bad = append(bad, s.bad.Render(fmt.Sprintf("%d server errors", u.ServerError)))
-	}
-	if len(bad) > 0 {
-		out = append(out, strings.Join(bad, s.faint.Render("  ·  ")))
-	}
-	out = append(out, s.faint.Render("last request "+ago(now, u.LastAt)))
-	width := min(48, max(12, m.width-m.leftWidth()-8))
-	out = append(out, "", s.faint.Render("last 24 hours"), s.ok.Render(spark(u.Recent, width)))
-	return out
-}
-
-func (m Model) stateHint(a v1.Account) string {
-	switch {
-	case a.Disabled:
-		return m.st.faint.Render("d enables it again, x removes it")
-	case !a.Active:
-		return m.st.faint.Render("enter makes sandboxes use this account")
-	default:
-		return m.st.faint.Render("this account is published to new sandboxes")
-	}
+	style := m.severity(peak)
+	return m.meter(peak, 6, on(style), -1) + on(style).Render(fmt.Sprintf(" %3.0f%%", peak)) + on(m.st.faint).Render("  ")
 }
 
 func (m Model) modalBox() string {
@@ -527,15 +481,20 @@ func (m Model) helpBox() string {
 	return dialog.Box(m.theme, []string{
 		s.title.Render("Accounts"), "",
 		row("a", "sign an account in (opens a link, paste the address back)"),
-		row("enter, s", "use this account for its agent's new sandboxes"),
+		row("enter, s", "promote this account to #1 in its fallback chain"),
+		row("K/J, [/]", "move this account up or down in its fallback chain"),
+		row("Q", "fetch live provider quotas and reset times now"),
 		row("d", "disable or enable the account"),
 		row("x", "remove the account and its tokens"),
 		row("r", "refresh the account's token now"),
 		row("p", "publish to sandboxes now instead of within five minutes"),
 		row("R", "read everything again"),
-		row("j/k, g/G", "move"), "",
+		row("j/k, g/G", "move"),
+		row("ctrl+d/u", "scroll the account's details (or the wheel, pgdn/pgup)"),
+		row("v", "calendar of this account, or of all accounts"), "",
 		s.faint.Render("Usage counts requests through the egress proxy and starts over"),
-		s.faint.Render("when the proxy restarts. Running sandboxes keep the login they"),
-		s.faint.Render("booted with; new ones get the account in use."),
+		s.faint.Render("when the proxy restarts; the calendar's days (UTC) are kept."),
+		s.faint.Render("On 429/401/403/529 the proxy fails over down the fallback chain"),
+		s.faint.Render("automatically without restarting pods."),
 	})
 }

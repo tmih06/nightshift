@@ -19,10 +19,13 @@ type API interface {
 	RemoveAccount(ctx context.Context, name string) error
 	RefreshAccount(ctx context.Context, name string) error
 	SetActive(ctx context.Context, provider, name string) error
+	SetChain(ctx context.Context, provider string, names []string) error
 	Publish(ctx context.Context) (string, error)
+	RefreshQuotas(ctx context.Context) error
 }
 
-// byProvider is one agent's accounts, the active one first and then by name.
+// byProvider is one agent's accounts in fallback-chain priority order
+// (enabled first by Priority, then active, then by name).
 func byProvider(s v1.Accounts, id string) []v1.Account {
 	var out []v1.Account
 	for i := range s.Accounts {
@@ -31,6 +34,13 @@ func byProvider(s v1.Accounts, id string) []v1.Account {
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
+		pi, pj := out[i].Priority, out[j].Priority
+		if pi > 0 && pj > 0 && pi != pj {
+			return pi < pj
+		}
+		if (pi > 0) != (pj > 0) {
+			return pi > 0
+		}
 		if out[i].Active != out[j].Active {
 			return out[i].Active
 		}

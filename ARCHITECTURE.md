@@ -222,16 +222,38 @@ that they own and restart, and the egress proxy's admin port through another;
 in the cluster they use the Services' addresses instead, so on a laptop nothing
 is needed but the kubeconfig Nightshift already uses. It lists every signed-in account per agent, runs the
 sign-in (the link, then the pasted callback address), disables, removes, and
-refreshes accounts, and publishes on demand. Several accounts per agent are
-supported by choice, not by splitting traffic: the account picked with enter is
-recorded in the `nightshift-accounts` ConfigMap, `creds-publish.sh` publishes
-that one (or the first enabled one if it is gone), and only the sandboxes
-started afterwards get it. Usage comes from the proxy: it tags every request
-that carried a token with the account label published beside it
-(`LABEL_<secret>`), counts them in ten-minute windows, and serves the counts
-at `/usage` on its admin port, so a switch of account splits the history
-correctly. The counts live in the proxy's memory and start over when it
+refreshes accounts, and publishes on demand. Several accounts per agent form an ordered fallback chain: the order picked
+with `enter` or `K`/`J` is recorded in the `nightshift-accounts` ConfigMap
+(`chains` and `active`), and `creds-publish.sh` publishes the whole enabled
+chain as `POOL_<secret>` in `egress-secrets` (alongside companion placeholders
+such as Codex's `account_id`). The egress proxy tries the first non-cooled-down
+account (preserving prompt caches and starting rolling reset windows early) and
+fails over down the chain on `429`, `401`, `403`, or `529`, honoring
+`Retry-After` / rate-limit reset headers and clearing `401` cooldowns when a
+refreshed token reloads. Usage and quota analytics come from the proxy: it tags every attempted request
+with the account label that carried it, parses JSON and SSE responses for
+model, input, output, cache read/write, and reasoning tokens plus latency and
+rate-limit headers, counts them in ten-minute request and token windows at
+`/usage` and `/analytics`, exposes live chain and cooldown state at `/pools`,
+and actively fetches provider quota windows and next reset times from Claude,
+Codex, and Antigravity at `/quota` and `POST /quota/refresh` (triggered with
+`Q` in the Accounts tab or periodically in the background). The counts,
+cooldowns, and quota cache live in the proxy's memory and start over when it
 restarts.
+
+The one exception is the daily history behind the tab's calendar: requests and
+tokens per account and UTC day, 53 weeks of them, served at `/history`. The
+proxy saves it every 30 seconds and at shutdown to the file named by
+`EGRESS_USAGE_HISTORY`, which `egress.yaml` puts on the `egress-usage` volume
+(64Mi from the default StorageClass). That volume has one writer, so the
+deployment replaces the pod (`Recreate`) instead of rolling it. A file the
+proxy cannot read is left alone and nothing is saved over it.
+
+The tab draws each account's quota as meters grouped by model family (the
+account's own windows first), with a tick for how much of the window has
+passed, then the calendar (`v` switches between this account and all of them)
+and the usage counts. The details scroll with `ctrl+u`/`ctrl+d` or the
+wheel.
 
 One login can serve several clusters: `PUBLISH_CONTEXTS` lists the contexts to
 publish into (`-` is the cluster the refresher runs in), and

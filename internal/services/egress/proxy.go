@@ -2,6 +2,7 @@ package egress
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -33,6 +34,8 @@ type AuditEvent struct {
 	Rule            string    `json:"rule,omitempty"`
 	Status          int       `json:"status,omitempty"`
 	SecretsInjected []string  `json:"secrets_injected,omitempty"`
+	Account         string    `json:"account,omitempty"`
+	Failover        bool      `json:"failover,omitempty"`
 	Scrubbed        bool      `json:"scrubbed,omitempty"`
 	Reason          string    `json:"reason,omitempty"`
 	DurationMS      int64     `json:"duration_ms,omitempty"`
@@ -40,23 +43,31 @@ type AuditEvent struct {
 
 // Options tunes a Proxy instance (all fields optional).
 type Options struct {
-	CA           *CA
-	Getenv       func(string) string
-	UpstreamTLS  *tls.Config // optional custom upstream TLS config (used in tests)
-	AuditWriter  io.Writer   // optional JSONL audit sink
-	EventRingMax int
-	SkipAutoCA   bool
+	CA                *CA
+	Getenv            func(string) string
+	UpstreamTLS       *tls.Config // optional custom upstream TLS config (used in tests)
+	AuditWriter       io.Writer   // optional JSONL audit sink
+	EventRingMax      int
+	SkipAutoCA        bool
+	PlainHTTPDefault  bool
+	Now               func() time.Time // optional clock override (used in tests)
+	DefaultCooldown   time.Duration    // optional failover cooldown override
+	MaxRetryBodyBytes int64            // max request body buffered for failover retries
+	QuotaEndpoints    QuotaEndpoints   // optional provider quota URL overrides
 }
 
 // Proxy is the HTTP/HTTPS egress proxy handler.
 type Proxy struct {
-	cfg     Config
-	ca      *CA
-	dialer  *SafeDialer
-	secrets atomic.Pointer[SecretEngine]
-	getenv  func(string) string
-	usage   *usageStore
-	tr      *http.Transport
+	cfg               Config
+	ca                *CA
+	dialer            *SafeDialer
+	secrets           atomic.Pointer[SecretEngine]
+	getenv            func(string) string
+	usage             *usageStore
+	pool              *poolState
+	quota             *quotaStore
+	maxRetryBodyBytes int64
+	tr                *http.Transport
 
 	auditMu sync.Mutex
 	auditW  io.Writer
@@ -99,7 +110,6 @@ func NewProxy(cfg Config, opts Options) (*Proxy, error) {
 		TLSClientConfig:       tlsCfg,
 		ForceAttemptHTTP2:     false,
 		MaxIdleConns:          64,
-		MaxIdleConnsPerHost:   32, // every sandbox shares a few API hosts
 		IdleConnTimeout:       60 * time.Second,
 		TLSHandshakeTimeout:   15 * time.Second,
 		ExpectContinueTimeout: 2 * time.Second,
@@ -109,16 +119,27 @@ func NewProxy(cfg Config, opts Options) (*Proxy, error) {
 	if ringMax <= 0 {
 		ringMax = 200
 	}
+	maxBody := opts.MaxRetryBodyBytes
+	if maxBody <= 0 {
+		maxBody = defaultMaxRetryBodyBytes
+	}
+	usage := newUsageStore()
+	if opts.Now != nil {
+		usage.now = opts.Now
+	}
 
 	p := &Proxy{
-		cfg:     cfg,
-		ca:      ca,
-		dialer:  dialer,
-		getenv:  opts.Getenv,
-		usage:   newUsageStore(),
-		tr:      tr,
-		auditW:  opts.AuditWriter,
-		ringMax: ringMax,
+		cfg:               cfg,
+		ca:                ca,
+		dialer:            dialer,
+		getenv:            opts.Getenv,
+		usage:             usage,
+		pool:              newPoolState(opts.Now, opts.DefaultCooldown),
+		quota:             newQuotaStore(opts.Now, tr, opts.QuotaEndpoints),
+		maxRetryBodyBytes: maxBody,
+		tr:                tr,
+		auditW:            opts.AuditWriter,
+		ringMax:           ringMax,
 	}
 	p.secrets.Store(secrets)
 	return p, nil
@@ -136,6 +157,10 @@ func needsMITM(cfg Config) bool {
 // CA returns the proxy's MITM CA (nil when no MITM rules exist and none was set).
 func (p *Proxy) CA() *CA { return p.ca }
 
+// Pools returns the live fallback-chain and cooldown state of every loaded
+// secret's accounts.
+func (p *Proxy) Pools() []PoolAccountStatus { return p.pool.snapshot(p.secrets.Load()) }
+
 // Events returns a snapshot of the most recent audit events.
 func (p *Proxy) Events() []AuditEvent {
 	p.auditMu.Lock()
@@ -146,15 +171,37 @@ func (p *Proxy) Events() []AuditEvent {
 }
 
 func (p *Proxy) record(ev AuditEvent) {
+	p.recordTelemetry(ev, nil, TokenMetrics{})
+}
+
+func (p *Proxy) recordTelemetry(ev AuditEvent, bindings []injectedBinding, tok TokenMetrics) {
 	if ev.Time.IsZero() {
 		ev.Time = time.Now().UTC()
 	}
 	if ev.Action == auditAllow {
-		engine := p.secrets.Load()
-		for _, name := range ev.SecretsInjected {
-			p.usage.record(name, engine.Label(name), ev.Status)
-		}
+		p.recordUsage(ev, bindings, tok)
 	}
+	p.appendAudit(ev)
+}
+
+func (p *Proxy) recordUsage(ev AuditEvent, bindings []injectedBinding, tok TokenMetrics) {
+	if len(bindings) > 0 {
+		for _, b := range bindings {
+			p.usage.recordDetailed(b.secret, b.label, ev.Status, ev.DurationMS, tok)
+		}
+		return
+	}
+	engine := p.secrets.Load()
+	for _, name := range ev.SecretsInjected {
+		label := engine.Label(name)
+		if ev.Account != "" && len(ev.SecretsInjected) == 1 {
+			label = ev.Account
+		}
+		p.usage.recordDetailed(name, label, ev.Status, ev.DurationMS, tok)
+	}
+}
+
+func (p *Proxy) appendAudit(ev AuditEvent) {
 	p.auditMu.Lock()
 	p.ring = append(p.ring, ev)
 	if len(p.ring) > p.ringMax {
@@ -164,13 +211,16 @@ func (p *Proxy) record(ev AuditEvent) {
 	p.auditMu.Unlock()
 	if w != nil {
 		if b, err := json.Marshal(ev); err == nil {
-			_, _ = w.Write(append(b, '\n'))
+			if _, werr := w.Write(append(b, '\n')); werr != nil {
+				return
+			}
 		}
 	}
 }
 
-// AdminHandler exposes health, public CA cert, and recent audit events on a
-// separate admin port that sandbox pods cannot reach.
+// AdminHandler exposes health, public CA cert, usage, pool failover state,
+// live quotas, analytics, and recent audit events on a separate admin port
+// that sandbox pods cannot reach.
 func (p *Proxy) AdminHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -186,16 +236,38 @@ func (p *Proxy) AdminHandler() http.Handler {
 		_, _ = w.Write(p.ca.CertPEM())
 	})
 	mux.HandleFunc("/usage", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(p.Usage()); err != nil {
-			http.Error(w, "encode usage", http.StatusInternalServerError)
+		writeAdminJSON(w, p.Usage(), "encode usage")
+	})
+	mux.HandleFunc("/history", func(w http.ResponseWriter, _ *http.Request) {
+		writeAdminJSON(w, p.History(), "encode history")
+	})
+	mux.HandleFunc("/pools", func(w http.ResponseWriter, _ *http.Request) {
+		writeAdminJSON(w, p.Pools(), "encode pools")
+	})
+	mux.HandleFunc("/quota", func(w http.ResponseWriter, _ *http.Request) {
+		writeAdminJSON(w, p.Quota(), "encode quota")
+	})
+	mux.HandleFunc("/quota/refresh", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
 		}
+		writeAdminJSON(w, p.RefreshQuota(r.Context()), "encode quota")
+	})
+	mux.HandleFunc("/analytics", func(w http.ResponseWriter, _ *http.Request) {
+		writeAdminJSON(w, p.Analytics(), "encode analytics")
 	})
 	mux.HandleFunc("/events", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(p.Events())
+		writeAdminJSON(w, p.Events(), "encode events")
 	})
 	return mux
+}
+
+func writeAdminJSON(w http.ResponseWriter, v any, errMsg string) {
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		http.Error(w, errMsg, http.StatusInternalServerError)
+	}
 }
 
 // ServeHTTP handles both HTTP forward proxy requests and HTTPS CONNECT tunnels.
@@ -253,20 +325,17 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	outReq := r.Clone(r.Context())
-	outReq.RequestURI = ""
-	if outReq.URL.Scheme == "" {
-		outReq.URL.Scheme = "http"
+	scheme := r.URL.Scheme
+	if scheme == "" {
+		scheme = "http"
 	}
-	outReq.URL.Host = net.JoinHostPort(host, strconv.Itoa(port))
-	stripHopHeaders(outReq.Header)
-	injected := p.secrets.Load().InjectRequest(outReq, rule.Secrets)
-	if p.cfg.ShouldScrubResponses() {
-		// Prevent compressed reflections from bypassing plaintext scrubbing.
-		outReq.Header.Del("Accept-Encoding")
+	fr := forwardReq{
+		ctx: r.Context(), req: r, host: host, port: port,
+		hostPort: net.JoinHostPort(host, strconv.Itoa(port)),
+		scheme:   scheme, mode: "http", clientAddr: r.RemoteAddr,
+		rule: rule, started: started,
 	}
-
-	resp, err := p.tr.RoundTrip(outReq)
+	resp, bindings, err := p.roundTripWithFailover(fr)
 	if err != nil {
 		status := http.StatusBadGateway
 		if strings.Contains(err.Error(), "egress blocked:") {
@@ -283,26 +352,24 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	var scrubbed bool
-	if p.cfg.ShouldScrubResponses() {
-		scrubbed, err = p.secrets.Load().ScrubResponse(resp)
-		if err != nil {
-			http.Error(w, "failed reading upstream response", http.StatusBadGateway)
-			return
-		}
+	tok, scrubbed, err := p.inspectResponse(resp, bindings)
+	if err != nil {
+		http.Error(w, "failed reading upstream response", http.StatusBadGateway)
+		return
 	}
 
 	copyHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
 
-	p.record(AuditEvent{
+	p.recordTelemetry(AuditEvent{
 		Action: "ALLOW", Mode: "http", Client: r.RemoteAddr,
 		Method: r.Method, Host: host, Port: port, Path: r.URL.Path,
 		Rule: rule.Name, Status: resp.StatusCode,
-		SecretsInjected: injected, Scrubbed: scrubbed,
+		SecretsInjected: bindingSecrets(bindings), Account: primaryAccountLabel(bindings),
+		Scrubbed:   scrubbed,
 		DurationMS: time.Since(started).Milliseconds(),
-	})
+	}, bindings, tok)
 }
 
 func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
@@ -440,20 +507,12 @@ func (p *Proxy) handleMITM(w http.ResponseWriter, r *http.Request, host string, 
 			continue
 		}
 
-		outReq := req.Clone(context.Background())
-		outReq.RequestURI = ""
-		outReq.URL.Scheme = "https"
-		outReq.URL.Host = hostPort
-		if outReq.Host == "" {
-			outReq.Host = host
+		fr := forwardReq{
+			ctx: r.Context(), req: req, host: host, port: port,
+			hostPort: hostPort, scheme: "https", mode: "mitm",
+			clientAddr: r.RemoteAddr, rule: rule, started: started,
 		}
-		stripHopHeaders(outReq.Header)
-		injected := p.secrets.Load().InjectRequest(outReq, rule.Secrets)
-		if p.cfg.ShouldScrubResponses() {
-			outReq.Header.Del("Accept-Encoding")
-		}
-
-		resp, err := p.tr.RoundTrip(outReq)
+		resp, bindings, err := p.roundTripWithFailover(fr)
 		_ = req.Body.Close()
 		if err != nil {
 			status := http.StatusBadGateway
@@ -470,23 +529,23 @@ func (p *Proxy) handleMITM(w http.ResponseWriter, r *http.Request, host string, 
 			return
 		}
 
-		var scrubbed bool
-		if p.cfg.ShouldScrubResponses() {
-			scrubbed, err = p.secrets.Load().ScrubResponse(resp)
-			if err != nil {
-				_ = resp.Body.Close()
-				_ = writeSimpleResponse(tlsConn, req, http.StatusBadGateway, "failed reading upstream response\n")
+		tok, scrubbed, err := p.inspectResponse(resp, bindings)
+		if err != nil {
+			drainResponseBody(resp)
+			if werr := writeSimpleResponse(tlsConn, req, http.StatusBadGateway, "failed reading upstream response\n"); werr != nil {
 				return
 			}
+			return
 		}
 
-		p.record(AuditEvent{
+		p.recordTelemetry(AuditEvent{
 			Action: "ALLOW", Mode: "mitm", Client: r.RemoteAddr,
 			Method: req.Method, Host: host, Port: port, Path: req.URL.Path,
 			Rule: rule.Name, Status: resp.StatusCode,
-			SecretsInjected: injected, Scrubbed: scrubbed,
+			SecretsInjected: bindingSecrets(bindings), Account: primaryAccountLabel(bindings),
+			Scrubbed:   scrubbed,
 			DurationMS: time.Since(started).Milliseconds(),
-		})
+		}, bindings, tok)
 
 		err = resp.Write(tlsConn)
 		_ = resp.Body.Close()
@@ -494,6 +553,193 @@ func (p *Proxy) handleMITM(w http.ResponseWriter, r *http.Request, host string, 
 			return
 		}
 	}
+}
+
+type forwardReq struct {
+	ctx        context.Context
+	req        *http.Request
+	host       string
+	port       int
+	hostPort   string
+	scheme     string
+	mode       string
+	clientAddr string
+	rule       *Rule
+	started    time.Time
+}
+
+func (p *Proxy) inspectResponse(resp *http.Response, bindings []injectedBinding) (tok TokenMetrics, scrubbed bool, err error) {
+	for _, b := range bindings {
+		p.quota.observeHeaders(b.secret, b.account, b.label, resp.Header)
+	}
+	wantScrub := p.cfg.ShouldScrubResponses()
+	wantTokens := len(bindings) > 0 && resp.StatusCode < http.StatusBadRequest
+	if !wantScrub && !wantTokens {
+		return TokenMetrics{}, false, nil
+	}
+	body, scrubbed, err := p.secrets.Load().scrubAndCaptureResponse(resp, wantScrub)
+	if err != nil {
+		return TokenMetrics{}, scrubbed, err
+	}
+	if wantTokens && len(body) > 0 {
+		tok = extractTokenMetrics(resp.Header.Get("Content-Type"), body)
+	}
+	return tok, scrubbed, nil
+}
+
+func (p *Proxy) buildOutboundRequest(fr forwardReq) *http.Request {
+	outReq := fr.req.Clone(fr.ctx)
+	outReq.RequestURI = ""
+	outReq.URL.Scheme = fr.scheme
+	outReq.URL.Host = fr.hostPort
+	if outReq.Host == "" {
+		outReq.Host = fr.host
+	}
+	stripHopHeaders(outReq.Header)
+	if p.cfg.ShouldScrubResponses() {
+		// Prevent compressed reflections from bypassing plaintext scrubbing.
+		outReq.Header.Del("Accept-Encoding")
+	}
+	return outReq
+}
+
+func (p *Proxy) roundTripWithFailover(fr forwardReq) (*http.Response, []injectedBinding, error) {
+	engine := p.secrets.Load()
+	pooled, isPooled := engine.PooledSecretFor(fr.req, fr.rule.Secrets)
+	if !isPooled {
+		return p.roundTripSingle(fr, engine)
+	}
+	candidates := p.pool.candidates(pooled.name, pooled.accounts)
+	bodyBytes, overflow, rest, err := readBoundedBody(fr.req.Body, p.maxRetryBodyBytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read request body: %w", err)
+	}
+	if overflow {
+		return p.roundTripOverflow(fr, engine, pooled.name, candidates[0], io.MultiReader(bytes.NewReader(bodyBytes), rest))
+	}
+	return p.roundTripPool(fr, engine, pooled.name, candidates, bodyBytes)
+}
+
+func (p *Proxy) roundTripSingle(fr forwardReq, engine *SecretEngine) (*http.Response, []injectedBinding, error) {
+	outReq := p.buildOutboundRequest(fr)
+	bindings := engine.injectRequestSelected(outReq, fr.rule.Secrets, nil)
+	resp, err := p.tr.RoundTrip(outReq)
+	if err != nil {
+		return nil, bindings, fmt.Errorf("upstream round trip: %w", err)
+	}
+	return resp, bindings, nil
+}
+
+func (p *Proxy) roundTripOverflow(fr forwardReq, engine *SecretEngine, secretName string, cand resolvedAccount, body io.Reader) (*http.Response, []injectedBinding, error) {
+	outReq := p.buildOutboundRequest(fr)
+	outReq.Body = io.NopCloser(body)
+	bindings := engine.injectRequestSelected(outReq, fr.rule.Secrets, map[string]resolvedAccount{secretName: cand})
+	resp, err := p.tr.RoundTrip(outReq)
+	if err != nil {
+		return nil, bindings, fmt.Errorf("upstream round trip: %w", err)
+	}
+	p.updatePoolOutcome(secretName, cand, resp)
+	return resp, bindings, nil
+}
+
+func (p *Proxy) roundTripPool(fr forwardReq, engine *SecretEngine, secretName string, candidates []resolvedAccount, bodyBytes []byte) (*http.Response, []injectedBinding, error) {
+	for i, cand := range candidates {
+		outReq := p.buildOutboundRequest(fr)
+		setBufferedBody(outReq, bodyBytes)
+		bindings := engine.injectRequestSelected(outReq, fr.rule.Secrets, map[string]resolvedAccount{secretName: cand})
+		resp, err := p.tr.RoundTrip(outReq)
+		if err != nil {
+			return nil, bindings, fmt.Errorf("upstream round trip: %w", err)
+		}
+		p.updatePoolOutcome(secretName, cand, resp)
+		if !shouldFailover(resp.StatusCode) || i+1 >= len(candidates) {
+			return resp, bindings, nil
+		}
+		p.recordFailoverAttempt(fr, bindings, cand, resp)
+		drainResponseBody(resp)
+	}
+	return nil, nil, errors.New("no accounts available in pool")
+}
+
+func (p *Proxy) updatePoolOutcome(secretName string, cand resolvedAccount, resp *http.Response) {
+	if shouldFailover(resp.StatusCode) {
+		p.pool.markFailure(secretName, cand, resp.StatusCode, resp.Header)
+		return
+	}
+	if resp.StatusCode < http.StatusBadRequest {
+		p.pool.markSuccess(secretName, cand)
+	}
+}
+
+func (p *Proxy) recordFailoverAttempt(fr forwardReq, bindings []injectedBinding, cand resolvedAccount, resp *http.Response) {
+	for _, b := range bindings {
+		p.quota.observeHeaders(b.secret, b.account, b.label, resp.Header)
+	}
+	p.recordTelemetry(AuditEvent{
+		Action: "ALLOW", Mode: fr.mode, Client: fr.clientAddr,
+		Method: fr.req.Method, Host: fr.host, Port: fr.port, Path: fr.req.URL.Path,
+		Rule: fr.rule.Name, Status: resp.StatusCode,
+		SecretsInjected: bindingSecrets(bindings), Account: cand.label,
+		Failover:   true,
+		DurationMS: time.Since(fr.started).Milliseconds(),
+	}, bindings, TokenMetrics{})
+}
+
+func setBufferedBody(req *http.Request, bodyBytes []byte) {
+	if len(bodyBytes) > 0 {
+		req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		req.ContentLength = int64(len(bodyBytes))
+		return
+	}
+	req.Body = http.NoBody
+	req.ContentLength = 0
+}
+
+func drainResponseBody(resp *http.Response) {
+	if resp == nil || resp.Body == nil {
+		return
+	}
+	if _, err := io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10)); err != nil {
+		if cerr := resp.Body.Close(); cerr != nil {
+			return
+		}
+		return
+	}
+	if err := resp.Body.Close(); err != nil {
+		return
+	}
+}
+
+func readBoundedBody(body io.ReadCloser, limit int64) (buf []byte, overflow bool, rest io.Reader, err error) {
+	if body == nil || body == http.NoBody {
+		return nil, false, nil, nil
+	}
+	data, err := io.ReadAll(io.LimitReader(body, limit+1))
+	if err != nil {
+		return nil, false, nil, fmt.Errorf("read body: %w", err)
+	}
+	if int64(len(data)) > limit {
+		return data, true, body, nil
+	}
+	return data, false, nil, nil
+}
+
+func bindingSecrets(bindings []injectedBinding) []string {
+	if len(bindings) == 0 {
+		return nil
+	}
+	out := make([]string, len(bindings))
+	for i, b := range bindings {
+		out[i] = b.secret
+	}
+	return out
+}
+
+func primaryAccountLabel(bindings []injectedBinding) string {
+	if len(bindings) == 1 {
+		return bindings[0].label
+	}
+	return ""
 }
 
 func writeSimpleResponse(w io.Writer, req *http.Request, status int, msg string) error {

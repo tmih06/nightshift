@@ -125,6 +125,12 @@ func TestCredsStageSwapsEveryAgentLogin(t *testing.T) {
 	if codex["access_token"] != "nightshift:secret:CODEX_ACCESS_TOKEN" {
 		t.Errorf("codex access_token = %v", codex["access_token"])
 	}
+	if codex["account_id"] != "nightshift:secret:CODEX_ACCOUNT_ID" {
+		t.Errorf("codex account_id = %v, want placeholder so fallback swaps it with the token", codex["account_id"])
+	}
+	if got, err := tokens.ReadFile("CODEX_ACCESS_TOKEN.companions.json"); err != nil || !strings.Contains(string(got), `"CODEX_ACCOUNT_ID":"acct"`) {
+		t.Errorf("CODEX_ACCESS_TOKEN.companions.json = %q (%v)", got, err)
+	}
 	if codex["refresh_token"] == "" || codex["refresh_token"] == nil {
 		t.Error("codex needs a non-empty inert refresh_token")
 	}

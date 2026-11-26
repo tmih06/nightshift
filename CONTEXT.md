@@ -31,6 +31,7 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
   a symlink in `~/.local/bin`. `egress.yaml` and `egress-setup.sh` deploy the
   single-pod Go egress + credential-injection proxy in the separate
   `nightshift-egress` namespace with default-deny `NetworkPolicy` enforcement.
+  The proxy keeps a year of daily usage on the `egress-usage` volume.
   `creds-providers.json` lists the agents whose logins reach sandboxes;
   `creds-publish.sh` reads each master login, `creds-stage.sh` swaps its
   access token for a placeholder, and the real tokens go into the egress

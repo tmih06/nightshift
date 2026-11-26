@@ -132,10 +132,12 @@ func (f *fake) SetDisabled(_ context.Context, name string, _ bool) error {
 	f.patched = name
 	return f.err
 }
-func (f *fake) Remove(context.Context, string) error            { return f.err }
-func (f *fake) Refresh(context.Context, string) error           { return f.err }
-func (f *fake) SetActive(context.Context, string, string) error { return f.err }
-func (f *fake) Publish(context.Context) (string, error)         { return "published", f.err }
+func (f *fake) Remove(context.Context, string) error             { return f.err }
+func (f *fake) Refresh(context.Context, string) error            { return f.err }
+func (f *fake) SetActive(context.Context, string, string) error  { return f.err }
+func (f *fake) SetChain(context.Context, string, []string) error { return f.err }
+func (f *fake) Publish(context.Context) (string, error)          { return "published", f.err }
+func (f *fake) RefreshQuotas(context.Context) error              { return f.err }
 
 func newTestServer(t *testing.T, f *fake, mutate ...func(*Config)) *httptest.Server {
 	t.Helper()
@@ -540,6 +542,7 @@ func TestAccountsActionsAndTheirChecks(t *testing.T) {
 		{"DELETE", "/v1/accounts/logins/st1", ""},
 		{"PATCH", "/v1/accounts/a.json", `{}`},
 		{"PUT", "/v1/accounts/active/claude", `{}`},
+		{"PUT", "/v1/accounts/chain/claude", `{}`},
 	} {
 		resp, raw := call(t, ts, tc.method, tc.path, tc.body)
 		problem(t, resp, raw, 400, v1.CodeInvalid)
@@ -569,4 +572,28 @@ func TestAnUnknownPathIsAProblemNotAnHTMLPage(t *testing.T) {
 	ts := newTestServer(t, &fake{})
 	resp, raw := call(t, ts, "GET", "/v1/nope", "")
 	problem(t, resp, raw, 404, v1.CodeNotFound)
+}
+
+// A static action under /v1/accounts/ must never share the shape of
+// /v1/accounts/{name}/refresh, or an older server will treat the static
+// segment (e.g. "quota") as an account name and fail with 500 instead of 404.
+func TestNoStaticAccountRouteMatchesNameRefreshWildcard(t *testing.T) {
+	s, err := New(Config{Token: token})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rt := range s.Routes() {
+		method, path, _ := strings.Cut(rt, " ")
+		if method != http.MethodPost || path == "/v1/accounts/{name}/refresh" {
+			continue
+		}
+		rest, ok := strings.CutPrefix(path, "/v1/accounts/")
+		if !ok {
+			continue
+		}
+		seg, tail, hasSlash := strings.Cut(rest, "/")
+		if hasSlash && tail == "refresh" && !strings.HasPrefix(seg, "{") {
+			t.Errorf("static route %q shares the shape of /v1/accounts/{name}/refresh; use a two-segment path like /v1/accounts/refresh-quotas", rt)
+		}
+	}
 }

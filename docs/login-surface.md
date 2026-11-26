@@ -55,9 +55,11 @@ project's README, docs, and source on GitHub.
   sandboxes do run the vendor's own CLI, but the sign-in is performed by
   CLIProxyAPI, which reuses the CLIs' public OAuth client identifiers. Read
   Anthropic's, OpenAI's, and Google's terms for your plan before relying on it.
-- **One account per agent.** The refresher publishes the first enabled account
-  of each provider, by name. Round-robin across accounts is CLIProxyAPI's
-  feature, not Nightshift's.
+- **Fallback chain across accounts.** The refresher publishes every enabled
+  account of each provider in the order set in the Accounts tab
+  (`POOL_<secret>`). The egress proxy sends requests to the first healthy
+  account and transparently fails over down the chain on `429`/`401`/`403`/`529`
+  with per-account cooldowns.
 - **Claude's plan.** CLIProxyAPI does not record the subscription tier, so the
   rebuilt Claude login says `pro`. A Max plan may need that field corrected.
 - **Single writer.** CLIProxyAPI runs as one replica on a ReadWriteOnce volume.

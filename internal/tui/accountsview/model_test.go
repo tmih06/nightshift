@@ -73,7 +73,12 @@ func (f *fakeService) SetActive(_ context.Context, p, n string) error {
 	f.note("active " + p + " " + n)
 	return nil
 }
+func (f *fakeService) SetChain(_ context.Context, p string, names []string) error {
+	f.note("chain " + p + " " + strings.Join(names, ","))
+	return nil
+}
 func (f *fakeService) Publish(context.Context) (string, error) { f.note("publish"); return "", nil }
+func (f *fakeService) RefreshQuotas(context.Context) error     { f.note("refresh-quotas"); return nil }
 
 func sampleSnapshot() v1.Accounts {
 	return v1.Accounts{
@@ -388,4 +393,77 @@ func TestClickSelectsAnAccount(t *testing.T) {
 	if m.cursor != 2 {
 		t.Errorf("cursor = %d after clicking the third account, want 2", m.cursor)
 	}
+}
+
+func TestReorderChainMovesAccountAndPublishes(t *testing.T) {
+	snap := sampleSnapshot()
+	snap.Accounts[0].Priority = 1
+	snap.Accounts[1].Priority = 2
+	snap.Accounts[0].CooldownUntil = testNow().Add(4 * time.Minute)
+	snap.Accounts[0].CooldownReason = "rate limited (429)"
+	snap.Accounts[0].Failovers = 2
+	snap.Accounts[1].ActiveNow = true
+
+	svc := &fakeService{snap: snap}
+	m := shown(t, svc)
+	view := plain(m)
+	for _, want := range []string{"#1", "#2", "cooldown", "rate limited (429)", "Failovers"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view lacks %q:\n%s", want, view)
+		}
+	}
+	// Move down to claude-b (#2) and press K to move it above claude-a.
+	m = press(t, m, "j", "K")
+	got := svc.log()
+	if !strings.Contains(got, "chain claude claude-b.json,claude-a.json|publish") {
+		t.Errorf("K must reorder the fallback chain and publish, calls: %s", got)
+	}
+	_ = m
+}
+
+func TestQuotaAndTokenAnalyticsRenderAndRefreshWithQ(t *testing.T) {
+	snap := sampleSnapshot()
+	snap.Analytics = &v1.AnalyticsSummary{
+		Requests: 120, OK: 115, RateLimited: 5,
+		Input: 120000, Output: 45000, CacheRead: 1150000, CacheWrite: 110000,
+		Total: 1425000, CacheHitPercent: 83.3, AvgLatencyMS: 640,
+	}
+	snap.Accounts[0].Usage.Input = 120000
+	snap.Accounts[0].Usage.Output = 45000
+	snap.Accounts[0].Usage.CacheRead = 1150000
+	snap.Accounts[0].Usage.CacheWrite = 110000
+	snap.Accounts[0].Usage.Reasoning = 12000
+	snap.Accounts[0].Usage.Total = 1437000
+	snap.Accounts[0].Usage.CacheHitPercent = 83.3
+	snap.Accounts[0].Usage.AvgLatencyMS = 640
+	snap.Accounts[0].Usage.ByModel = map[string]v1.ModelUsage{
+		"claude-sonnet-4-6": {Requests: 120, Input: 120000, Output: 45000, CacheRead: 1150000, Total: 1437000},
+	}
+	snap.Accounts[0].Quota = &v1.AccountQuota{
+		Plan: "max", Source: "fetch",
+		FetchedAt:   testNow().Add(-1 * time.Minute),
+		NextResetAt: testNow().Add(2*time.Hour + 15*time.Minute),
+		Windows: []v1.QuotaWindow{
+			{Name: "5h", Label: "5-hour window", UsedPercent: 42, ResetsAt: testNow().Add(2*time.Hour + 15*time.Minute)},
+		},
+	}
+
+	svc := &fakeService{snap: snap}
+	m := shown(t, svc)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 130, Height: 45})
+	view := plain(m)
+	for _, want := range []string{
+		"Quota", "5-hour window", "42%", "next reset in 2h15m",
+		"120.0K", "45.0K", "1.44M", "Cache 1.15M read", "83.3% hit", "Reasoning 12.0K",
+		"claude-sonnet-4-6", "avg 640ms",
+	} {
+		if !strings.Contains(view, want) {
+			t.Errorf("detail pane lacks %q:\n%s", want, view)
+		}
+	}
+	m = press(t, m, "Q")
+	if !strings.Contains(svc.log(), "refresh-quotas|fetch") {
+		t.Errorf("Q must refresh live quotas and refetch, calls: %s", svc.log())
+	}
+	_ = m
 }

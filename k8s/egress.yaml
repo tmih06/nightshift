@@ -91,14 +91,17 @@ data:
         placeholder: "nightshift:secret:CLAUDE_ACCESS_TOKEN"
         file: "/etc/egress-secrets/REAL_CLAUDE_ACCESS_TOKEN"
         label_file: "/etc/egress-secrets/LABEL_CLAUDE_ACCESS_TOKEN"
+        pool_file: "/etc/egress-secrets/POOL_CLAUDE_ACCESS_TOKEN"
       CODEX_ACCESS_TOKEN:
         placeholder: "nightshift:secret:CODEX_ACCESS_TOKEN"
         file: "/etc/egress-secrets/REAL_CODEX_ACCESS_TOKEN"
         label_file: "/etc/egress-secrets/LABEL_CODEX_ACCESS_TOKEN"
+        pool_file: "/etc/egress-secrets/POOL_CODEX_ACCESS_TOKEN"
       AGY_ACCESS_TOKEN:
         placeholder: "nightshift:secret:AGY_ACCESS_TOKEN"
         file: "/etc/egress-secrets/REAL_AGY_ACCESS_TOKEN"
         label_file: "/etc/egress-secrets/LABEL_AGY_ACCESS_TOKEN"
+        pool_file: "/etc/egress-secrets/POOL_AGY_ACCESS_TOKEN"
 ---
 ---
 # Static egress environment shared by every sandbox template through
@@ -128,6 +131,19 @@ data:
   GITHUB_TOKEN: nightshift:secret:GITHUB_TOKEN
   CLAUDE_CODE_OAUTH_TOKEN: nightshift:secret:CLAUDE_ACCESS_TOKEN
 ---
+# Daily usage per account, behind the Accounts tab's calendar. The proxy counts
+# everything else in memory.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: egress-usage
+  namespace: nightshift-egress
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 64Mi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -135,6 +151,12 @@ metadata:
   namespace: nightshift-egress
 spec:
   replicas: 1
+  # The usage volume is ReadWriteOnce and has one writer, so the old pod has to
+  # go before the new one starts. rollingUpdate is cleared for clusters that
+  # already hold the defaulted one.
+  strategy:
+    type: Recreate
+    rollingUpdate: null
   selector:
     matchLabels:
       app: egress-proxy
@@ -148,6 +170,7 @@ spec:
         runAsNonRoot: true
         runAsUser: 65532
         runAsGroup: 65532
+        fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -159,6 +182,9 @@ spec:
           containerPort: 8080
         - name: admin
           containerPort: 9090
+        env:
+        - name: EGRESS_USAGE_HISTORY
+          value: /var/lib/egress/usage-history.json
         envFrom:
         - secretRef:
             name: egress-secrets
@@ -197,7 +223,12 @@ spec:
         - name: secrets
           mountPath: /etc/egress-secrets
           readOnly: true
+        - name: usage
+          mountPath: /var/lib/egress
       volumes:
+      - name: usage
+        persistentVolumeClaim:
+          claimName: egress-usage
       - name: policy
         configMap:
           name: egress-policy

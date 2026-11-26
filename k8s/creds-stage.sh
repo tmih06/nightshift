@@ -34,6 +34,17 @@ stage_provider() {
   [ -n "$value" ] || return 0
   mkdir -p "$(dirname "$out")"
   (umask 077; printf '%s' "$value" > "$tokens/$secret")
+  comp_json='{}'
+  for ckey in $(printf '%s' "$entry" | jq -r '(.companions // {}) | keys[]'); do
+    cpath=$(printf '%s' "$entry" | jq -r --arg k "$ckey" '.companions[$k]')
+    cval=$(jq -r "$cpath // empty" "$in" 2>/dev/null || true)
+    if [ -n "$cval" ]; then
+      comp_json=$(printf '%s' "$comp_json" | jq -c --arg k "$ckey" --arg v "$cval" '.[$k] = $v')
+    fi
+  done
+  if [ "$comp_json" != '{}' ]; then
+    (umask 077; printf '%s' "$comp_json" > "$tokens/$secret.companions.json")
+  fi
   jq --arg ph "nightshift:secret:$secret" --arg far "$far" "$(field .filter)" "$in" > "$out"
   chmod 600 "$out"
   # Extra files are static, not derived from the master: the sandbox-side

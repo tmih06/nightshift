@@ -36,12 +36,23 @@ func TestFetchMarksTheActiveAccountAndAttachesUsage(t *testing.T) {
 	api := &fakeAPI{t: t}
 	cpa := httptest.NewServer(api)
 	defer cpa.Close()
+	var quotaRefreshed bool
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/usage" {
+		switch r.URL.Path {
+		case "/usage":
+			reply(t, w, `[{"binding":"CLAUDE_ACCESS_TOKEN","label":"a@example.com","requests":7,"ok":5,"rate_limited":2,"input_tokens":1000,"output_tokens":300,"cache_read_tokens":4000,"cache_write_tokens":200,"total_tokens":5500,"cache_hit_percent":76.9,"avg_latency_ms":420,"by_model":{"claude-sonnet-4-6":{"requests":7,"input":1000,"output":300,"cache_read":4000,"cache_write":200,"total":5500}},"recent":[0,3,4],"recent_tokens":[0,2000,3500]}]`)
+		case "/pools":
+			reply(t, w, `[{"binding":"CLAUDE_ACCESS_TOKEN","name":"claude-a.json","label":"a@example.com","priority":1,"active_now":true,"cooldown_until":"2026-01-01T12:05:00Z","cooldown_reason":"rate limited (429)","failovers":3}]`)
+		case "/quota":
+			reply(t, w, `[{"binding":"CLAUDE_ACCESS_TOKEN","name":"claude-a.json","label":"a@example.com","plan":"max","source":"fetch","next_reset_at":"2026-01-01T15:00:00Z","windows":[{"name":"5h","label":"5-hour window","used_percent":42,"resets_at":"2026-01-01T15:00:00Z"}]}]`)
+		case "/history":
+			reply(t, w, `[{"binding":"CLAUDE_ACCESS_TOKEN","label":"a@example.com","days":[{"date":"2025-12-31","requests":7,"total":5500}]}]`)
+		case "/quota/refresh":
+			quotaRefreshed = true
+			reply(t, w, `[]`)
+		default:
 			http.NotFound(w, r)
-			return
 		}
-		reply(t, w, `[{"binding":"CLAUDE_ACCESS_TOKEN","label":"a@example.com","requests":7,"ok":5,"rate_limited":2,"recent":[0,3,4]}]`)
 	}))
 	defer proxy.Close()
 
@@ -60,12 +71,27 @@ func TestFetchMarksTheActiveAccountAndAttachesUsage(t *testing.T) {
 	}
 	// claude-b is chosen but does not exist in the fake CLIProxyAPI, so the
 	// first enabled claude account, claude-a, is the active one.
-	if !byName["claude-a.json"].Active {
-		t.Errorf("claude-a must be active when the chosen account is gone: %+v", byName["claude-a.json"])
+	if !byName["claude-a.json"].Active || byName["claude-a.json"].Priority != 1 {
+		t.Errorf("claude-a must be active #1 when the chosen account is gone: %+v", byName["claude-a.json"])
+	}
+	if !byName["claude-a.json"].ActiveNow || byName["claude-a.json"].Failovers != 3 || byName["claude-a.json"].CooldownReason != "rate limited (429)" {
+		t.Errorf("pool status was not attached: %+v", byName["claude-a.json"])
 	}
 	u := byName["claude-a.json"].Usage
-	if u == nil || u.Requests != 7 || u.RateLimited != 2 || len(u.Recent) != 3 {
-		t.Errorf("usage = %+v, want the proxy's counts for a@example.com", u)
+	if u == nil || u.Requests != 7 || u.RateLimited != 2 || len(u.Recent) != 3 || u.Input != 1000 || u.CacheRead != 4000 || u.Total != 5500 {
+		t.Errorf("usage = %+v, want the proxy's request & token counts for a@example.com", u)
+	}
+	if q := byName["claude-a.json"].Quota; q == nil || q.Plan != "max" || len(q.Windows) != 1 || q.Windows[0].UsedPercent != 42 {
+		t.Errorf("quota = %+v, want fetched quota windows", q)
+	}
+	if h := byName["claude-a.json"].History; len(h) != 1 || h[0] != (DayUsage{Date: "2025-12-31", Requests: 7, Total: 5500}) {
+		t.Errorf("history = %+v, want the proxy's daily counts", h)
+	}
+	if snap.Analytics == nil || snap.Analytics.Total != 5500 || snap.Analytics.ByModel["claude-sonnet-4-6"].Requests != 7 {
+		t.Errorf("analytics = %+v", snap.Analytics)
+	}
+	if err := live.RefreshQuotas(t.Context()); err != nil || !quotaRefreshed {
+		t.Errorf("RefreshQuotas = %v (refreshed=%v)", err, quotaRefreshed)
 	}
 	if byName["codex-b.json"].Usage != nil {
 		t.Error("an account the proxy never saw must have no usage")
@@ -99,6 +125,22 @@ func TestSetActiveKeepsTheOtherAgentsChoices(t *testing.T) {
 		t.Fatalf("the ConfigMap was not patched:\n%s", trace)
 	}
 	for _, want := range []string{`claude\":\"claude-b.json`, `codex\":\"codex-b.json`} {
+		if !strings.Contains(trace, want) {
+			t.Errorf("the patch lacks %q:\n%s", want, trace)
+		}
+	}
+}
+
+func TestSetChainSavesOrderAndPrimaryAccount(t *testing.T) {
+	dir := fakeKube(t)
+	if err := (Kube{}).SetChain(t.Context(), "claude", []string{"claude-z.json", "claude-a.json", "claude-z.json"}); err != nil {
+		t.Fatal(err)
+	}
+	trace := readFile(t, dir, "trace")
+	for _, want := range []string{
+		`claude\":\"claude-z.json`,
+		`claude\":[\"claude-z.json\",\"claude-a.json\"]`,
+	} {
 		if !strings.Contains(trace, want) {
 			t.Errorf("the patch lacks %q:\n%s", want, trace)
 		}
