@@ -338,6 +338,12 @@ paths:
       parameters:
         - {name: name, in: path, required: true, schema: {type: string}}
         - {name: address, in: path, required: true, schema: {type: string}}
+        - name: viewer
+          in: query
+          description: |
+            The viewer id used to read the screen. The terminal takes the size
+            of whoever typed last, so naming it keeps that viewer's size.
+          schema: {type: string, maxLength: 64, pattern: "^[A-Za-z0-9_.-]+$"}
       requestBody:
         required: true
         content:

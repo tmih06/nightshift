@@ -144,7 +144,9 @@ draw one without knowing how it is hosted:
   with ANSI styling, waiting up to `wait` ms for a change. Each `viewer` id has its
   own view, so two frontends can watch one terminal, each at its own size,
   without taking each other's changes.
-- `POST .../input` presses keys, in order.
+- `POST .../input?viewer=` presses keys, in order. A terminal takes the size of
+  whoever typed last, so a frontend sends the `viewer` id it watches with.
+  Without one, the terminal keeps the size it has.
 - `POST .../terminals` and `DELETE` open and stop terminals.
 
 A frontend with a real terminal widget gets raw bytes by decoding the ANSI;

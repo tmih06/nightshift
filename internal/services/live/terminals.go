@@ -187,7 +187,7 @@ func (t *Terminals) Screen(ctx context.Context, pod, address string, q server.Sc
 }
 
 // Input presses keys in a terminal.
-func (t *Terminals) Input(ctx context.Context, pod, address string, keys []v1.Key) error {
+func (t *Terminals) Input(ctx context.Context, pod, address, viewer string, keys []v1.Key) error {
 	if err := t.guard(ctx, pod); err != nil {
 		return err
 	}
@@ -195,6 +195,6 @@ func (t *Terminals) Input(ctx context.Context, pod, address string, keys []v1.Ke
 	for i, k := range keys {
 		ks[i] = session.Key{Text: k.Text, Name: k.Name}
 	}
-	_, err := call(ctx, func() (struct{}, error) { return struct{}{}, session.SendBatch(pod, address, ks) })
+	_, err := call(ctx, func() (struct{}, error) { return struct{}{}, session.SendBatchFrom(pod, address, viewer, ks) })
 	return err
 }

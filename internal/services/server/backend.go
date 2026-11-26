@@ -63,7 +63,7 @@ type Terminals interface {
 	OpenTerminal(ctx context.Context, pod string, req v1.TerminalRequest) (v1.Terminal, error)
 	CloseTerminal(ctx context.Context, pod, address string) error
 	Screen(ctx context.Context, pod, address string, q ScreenQuery) (v1.Screen, error)
-	Input(ctx context.Context, pod, address string, keys []v1.Key) error
+	Input(ctx context.Context, pod, address, viewer string, keys []v1.Key) error
 }
 
 // Accounts manages the coding-agent accounts.

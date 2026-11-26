@@ -55,8 +55,10 @@ func (c *Client) Screen(ctx context.Context, r ScreenRequest) (v1.Screen, error)
 	return fetch[v1.Screen](ctx, c, request{method: http.MethodGet, path: terminalsPath(r.Sandbox) + "/" + esc(r.Address) + "/screen", query: q})
 }
 
-// Input presses keys in a terminal, in order.
+// Input presses keys in a terminal, in order. It names this client's viewer,
+// so typing keeps the terminal at the size this client watches it at.
 func (c *Client) Input(ctx context.Context, sandbox, address string, keys []v1.Key) error {
 	body := v1.Input{Keys: keys}
-	return c.json(ctx, request{method: http.MethodPost, path: terminalsPath(sandbox) + "/" + esc(address) + "/input", body: body}, nil)
+	q := url.Values{"viewer": {c.viewer}}
+	return c.json(ctx, request{method: http.MethodPost, path: terminalsPath(sandbox) + "/" + esc(address) + "/input", query: q, body: body}, nil)
 }

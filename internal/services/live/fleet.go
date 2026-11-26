@@ -2,8 +2,12 @@ package live
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 
 	v1 "github.com/tmih06/nightshift/api/v1"
 	"github.com/tmih06/nightshift/internal/services/checkout"
@@ -12,15 +16,22 @@ import (
 	"github.com/tmih06/nightshift/internal/services/session"
 )
 
-// snapshotTTL is how long a read of the fleet answers the questions that only
-// need to know which pods exist.
-const snapshotTTL = 2 * time.Second
+const (
+	// snapshotTTL is how long a read of the fleet answers the questions that
+	// only need to know which pods exist.
+	snapshotTTL = 2 * time.Second
+	// claimTrust is how long a read that saw a sandbox claimed keeps saying so.
+	// Every screen read and key press asks, and a claim is never handed back
+	// to its pool, so only a deleted pod can outlive it.
+	claimTrust = 30 * time.Second
+)
 
 type snapshot struct {
 	boxes     []cluster.Sandbox
 	pools     map[string]cluster.Pool
 	egress    bool
 	metricsOK bool
+	started   time.Time
 	at        time.Time
 }
 
@@ -34,6 +45,11 @@ type liveUsage struct {
 // Fleet reads the sandbox fleet and remembers what it needs between reads:
 // the cgroup samples that make a CPU rate, and each pod's agent version.
 type Fleet struct {
+	// fetch reads the cluster; reading shares one such read between everyone
+	// who asks while it runs, as each one starts several kubectl processes.
+	fetch   func() ([]cluster.Sandbox, map[string]cluster.Pool, bool, error)
+	reading singleflight.Group
+
 	mu       sync.Mutex
 	snap     snapshot
 	live     map[string]liveUsage
@@ -42,7 +58,7 @@ type Fleet struct {
 
 // NewFleet returns a Fleet with nothing remembered.
 func NewFleet() *Fleet {
-	return &Fleet{live: map[string]liveUsage{}, versions: map[string]string{}}
+	return &Fleet{fetch: cluster.Fetch, live: map[string]liveUsage{}, versions: map[string]string{}}
 }
 
 // Fleet reads the fleet as it is now.
@@ -84,21 +100,29 @@ func (f *Fleet) Fleet(ctx context.Context, inc server.Include) (v1.Fleet, error)
 	return out, nil
 }
 
-// refresh reads the cluster and remembers what it saw.
+// refresh reads the cluster and remembers what it saw, joining a read that is
+// already under way.
 func (f *Fleet) refresh(ctx context.Context) (snapshot, error) {
-	type read struct {
-		boxes     []cluster.Sandbox
-		pools     map[string]cluster.Pool
-		metricsOK bool
-	}
-	r, err := call(ctx, func() (read, error) {
-		boxes, pools, metricsOK, err := cluster.Fetch()
-		return read{boxes: boxes, pools: pools, metricsOK: metricsOK}, wrapErr("read the cluster", err)
+	return call(ctx, func() (snapshot, error) {
+		v, err, _ := f.reading.Do("fleet", func() (any, error) { return f.read() })
+		if err != nil {
+			return snapshot{}, wrapErr("read the cluster", err)
+		}
+		snap, ok := v.(snapshot)
+		if !ok {
+			return snapshot{}, errors.New("read the cluster: no snapshot")
+		}
+		return snap, nil
 	})
+}
+
+func (f *Fleet) read() (snapshot, error) {
+	started := time.Now()
+	boxes, pools, metricsOK, err := f.fetch()
 	if err != nil {
-		return snapshot{}, err
+		return snapshot{}, fmt.Errorf("fetch fleet: %w", err)
 	}
-	snap := snapshot{boxes: r.boxes, pools: r.pools, metricsOK: r.metricsOK, egress: egressOf(r.boxes), at: time.Now()}
+	snap := snapshot{boxes: boxes, pools: pools, metricsOK: metricsOK, egress: egressOf(boxes), started: started, at: time.Now()}
 	f.mu.Lock()
 	f.snap = snap
 	f.mu.Unlock()
@@ -129,16 +153,23 @@ func (f *Fleet) current(ctx context.Context) (snapshot, error) {
 // Claimed is whether pod is a running sandbox that someone holds: the only
 // pods whose terminals the API will open.
 func (f *Fleet) Claimed(ctx context.Context, pod string) (bool, error) {
-	snap, err := f.current(ctx)
-	if err != nil {
-		return false, err
-	}
-	if has(snap, pod) {
+	f.mu.Lock()
+	snap := f.snap
+	f.mu.Unlock()
+	if time.Since(snap.at) < claimTrust && has(snap, pod) {
 		return true, nil
 	}
 	// The pod may be newer than the snapshot.
-	if snap, err = f.refresh(ctx); err != nil {
+	asked := time.Now()
+	snap, err := f.refresh(ctx)
+	if err != nil {
 		return false, err
+	}
+	// A read that was already under way may predate the claim: read once more.
+	if !has(snap, pod) && snap.started.Before(asked) {
+		if snap, err = f.refresh(ctx); err != nil {
+			return false, err
+		}
 	}
 	return has(snap, pod), nil
 }

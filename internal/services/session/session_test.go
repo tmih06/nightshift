@@ -168,6 +168,8 @@ func TestViewerProcess(t *testing.T) {
 		CWD        string   `json:"cwd,omitempty"`
 		Foreground *fakeFG  `json:"foreground,omitempty"`
 		CreatedMS  uint64   `json:"created_ms"`
+		Cols       uint16   `json:"cols"`
+		Rows       uint16   `json:"rows"`
 	}
 	terms := map[string]fakeTerm{
 		"t1": {
@@ -177,6 +179,8 @@ func TestViewerProcess(t *testing.T) {
 			CWD:        "/home/agent",
 			Foreground: &fakeFG{Name: "bash", CWD: "/home/agent/workspace/app"},
 			CreatedMS:  1,
+			Cols:       80,
+			Rows:       24,
 		},
 	}
 	nextTerm := 2
@@ -237,7 +241,7 @@ func TestViewerProcess(t *testing.T) {
 				_ = json.Unmarshal(req.Params, &p)
 				addr := fmt.Sprintf("t%d", nextTerm)
 				nextTerm++
-				ft := fakeTerm{Address: addr, Name: p.Name, Argv: []string{"bash"}, State: "live", CWD: p.CWD, CreatedMS: uint64(nextTerm)}
+				ft := fakeTerm{Address: addr, Name: p.Name, Argv: []string{"bash"}, State: "live", CWD: p.CWD, CreatedMS: uint64(nextTerm), Cols: 80, Rows: 24}
 				terms[addr] = ft
 				sendRPC(req.ID, ft)
 			case "terminal.kill":
@@ -260,8 +264,15 @@ func TestViewerProcess(t *testing.T) {
 			case "terminal.attach":
 				var p struct {
 					Terminal string `json:"terminal"`
+					Cols     uint16 `json:"cols"`
+					Rows     uint16 `json:"rows"`
 				}
 				_ = json.Unmarshal(req.Params, &p)
+				// Herdr takes the size of a viewer that attaches.
+				if ft, ok := terms[p.Terminal]; ok {
+					ft.Cols, ft.Rows = p.Cols, p.Rows
+					terms[p.Terminal] = ft
+				}
 				ch := nextChan
 				nextChan++
 				chanToTerm[ch] = p.Terminal

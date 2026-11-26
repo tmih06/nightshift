@@ -96,11 +96,17 @@ func screenQuery(r *http.Request) (ScreenQuery, error) {
 			return q, invalid("resize must be true or false")
 		}
 	}
-	q.Viewer = r.URL.Query().Get("viewer")
-	if q.Viewer != "" && !viewerID.MatchString(q.Viewer) {
-		return q, invalid("viewer must be up to 64 letters, digits, dots, dashes, or underscores")
+	q.Viewer, err = viewerParam(r)
+	return q, err
+}
+
+// viewerParam reads the optional id of the viewer a request speaks for.
+func viewerParam(r *http.Request) (string, error) {
+	viewer := r.URL.Query().Get("viewer")
+	if viewer != "" && !viewerID.MatchString(viewer) {
+		return "", invalid("viewer must be up to 64 letters, digits, dots, dashes, or underscores")
 	}
-	return q, nil
+	return viewer, nil
 }
 
 func (s *Server) getScreen(w http.ResponseWriter, r *http.Request) error {
@@ -125,6 +131,10 @@ func (s *Server) sendInput(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	viewer, err := viewerParam(r)
+	if err != nil {
+		return err
+	}
 	var in v1.Input
 	if err := decode(r, &in); err != nil {
 		return err
@@ -132,7 +142,7 @@ func (s *Server) sendInput(w http.ResponseWriter, r *http.Request) error {
 	if len(in.Keys) > maxKeys {
 		return invalid("too many keys in one request")
 	}
-	if err := t.Input(r.Context(), r.PathValue("name"), r.PathValue("address"), in.Keys); err != nil {
+	if err := t.Input(r.Context(), r.PathValue("name"), r.PathValue("address"), viewer, in.Keys); err != nil {
 		return fmt.Errorf("send input: %w", err)
 	}
 	w.WriteHeader(http.StatusNoContent)

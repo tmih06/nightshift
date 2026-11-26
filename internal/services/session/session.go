@@ -512,6 +512,8 @@ type wireTerminal struct {
 	CWD        string            `json:"cwd"`
 	Labels     map[string]string `json:"labels"`
 	CreatedMS  uint64            `json:"created_ms"`
+	Cols       uint16            `json:"cols"`
+	Rows       uint16            `json:"rows"`
 	Foreground *struct {
 		Name string `json:"name"`
 		CWD  string `json:"cwd"`
@@ -779,6 +781,39 @@ func getViewerAs(pod, term, who string, w, h int) (*viewer, error) {
 	return c.getViewer(term, who, w, h)
 }
 
+// inputViewer is who's attached viewer. A caller with none types through the
+// shared viewer, held at the size the terminal has now so it does not change.
+func inputViewer(pod, term, who string) (*viewer, error) {
+	c, err := getPodConn(pod)
+	if err != nil {
+		return nil, err
+	}
+	if who != "" {
+		c.mu.Lock()
+		v := c.viewers[viewerKey(term, who)]
+		c.mu.Unlock()
+		if v != nil {
+			return v, nil
+		}
+	}
+	var wt wireTerminal
+	if err := c.call("terminal.get", map[string]any{"terminal": term}, &wt); err != nil {
+		return nil, fmt.Errorf("size of %s: %w", term, err)
+	}
+	w, h := int(wt.Cols), int(wt.Rows)
+	if w < 1 || h < 1 {
+		return nil, fmt.Errorf("hc reports no size for %s", term)
+	}
+	v, err := c.getViewer(term, "", w, h)
+	if err != nil {
+		return nil, err
+	}
+	if err := v.resize(w, h); err != nil {
+		return nil, fmt.Errorf("hold %s at its size: %w", term, err)
+	}
+	return v, nil
+}
+
 // viewerKey names one viewer of one terminal in podConn.viewers.
 func viewerKey(term, who string) string {
 	if who == "" {
@@ -946,8 +981,15 @@ func (v *viewer) resize(w, h int) error {
 	return v.send(3, size[:])
 }
 
+// SendBatch types keys into a terminal for a caller that is not watching it.
 func SendBatch(pod, term string, keys []Key) error {
-	v, err := getViewer(pod, term, 160, 40)
+	return SendBatchFrom(pod, term, "", keys)
+}
+
+// SendBatchFrom types keys for the viewer who. Herdr gives a terminal the size
+// of whoever typed last, so the keys go out on that viewer's own channel.
+func SendBatchFrom(pod, term, who string, keys []Key) error {
+	v, err := inputViewer(pod, resolveTerm(pod, term), who)
 	if err != nil {
 		return err
 	}

@@ -97,7 +97,7 @@ func TestTheClientDrivesTerminalsAndAccounts(t *testing.T) {
 	if err != nil || term.Address != "t1" {
 		t.Fatalf("OpenTerminal = %+v, %v", term, err)
 	}
-	if err := c.Input(ctx, "pi-1", "t1", []v1.Key{{Text: "ls"}, {Name: "Enter"}}); err != nil || len(f.keys) != 2 {
+	if err := c.Input(ctx, "pi-1", "t1", []v1.Key{{Text: "ls"}, {Name: "Enter"}}); err != nil || len(f.keys) != 2 || f.typist == "" {
 		t.Fatalf("Input: %v, keys %+v", err, f.keys)
 	}
 	sc, err := c.Screen(ctx, client.ScreenRequest{Sandbox: "pi-1", Address: "t1", Cols: 80, Rows: 24, Resize: true, Wait: time.Second})

@@ -298,9 +298,11 @@ spec:
           requests:
             cpu: 20m
             memory: 64Mi
+          # A fleet read runs several kubectl processes at once. Less CPU
+          # throttles typing in terminals; less memory gets the pod killed.
           limits:
-            cpu: 500m
-            memory: 256Mi
+            cpu: "2"
+            memory: 512Mi
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true

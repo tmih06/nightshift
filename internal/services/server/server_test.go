@@ -31,6 +31,7 @@ type fake struct {
 	include  Include
 	wait     time.Duration
 	screenQ  ScreenQuery
+	typist   string
 	keys     []v1.Key
 	deleted  string
 	dropVol  bool
@@ -113,8 +114,8 @@ func (f *fake) Screen(_ context.Context, _, _ string, q ScreenQuery) (v1.Screen,
 	return v1.Screen{Changed: true, Cols: q.Cols, Rows: q.Rows, Lines: []string{"$ "}}, f.err
 }
 
-func (f *fake) Input(_ context.Context, _, _ string, keys []v1.Key) error {
-	f.keys = keys
+func (f *fake) Input(_ context.Context, _, _, viewer string, keys []v1.Key) error {
+	f.keys, f.typist = keys, viewer
 	return f.err
 }
 

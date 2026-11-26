@@ -113,6 +113,18 @@ Prune rules that no longer apply. Past about 200 lines, move older detail into
     the forward and fail with connection refused (`13a8f3e`).
   - **Enforced by**: `TestWithAPIForwardsALeftoverLocalAddress`.
 
+- **Rule**: Type into a terminal through the sender's own viewer, and never
+  attach one at a made-up size.
+  - **Why**: Keys went through a second viewer at 160x40, so typing resized the
+    terminal away from the one on screen and garbled it (`02b65ed`).
+  - **Enforced by**: `TestTypingKeepsTheTerminalsSize`.
+- **Rule**: Share one in-flight cluster read between requests, and start none
+  per key press or screen read of a known claim.
+  - **Why**: Concurrent screen reads stacked `kubectl` processes until
+    `nightshiftd` was throttled and OOM-killed (`cbf342a`).
+  - **Enforced by**: `TestClaimedSharesOneClusterRead`,
+    `TestTheServicesHaveRoomForTheirKubectls`.
+
 ## Commit messages
 
 Every commit message follows [Conventional Commits 1.0.0](https://www.conventionalcommits.org/). The format is `type(scope): subject`.
