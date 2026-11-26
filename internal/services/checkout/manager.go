@@ -121,6 +121,11 @@ type InvalidError struct{ Reason string }
 
 func (e *InvalidError) Error() string { return e.Reason }
 
+// ConflictError is a request that what exists already forbids.
+type ConflictError struct{ Reason string }
+
+func (e *ConflictError) Error() string { return e.Reason }
+
 // record adds an event to a run and wakes everyone following it.
 func (m *Manager) record(r *run, ev v1.CheckoutEvent) {
 	m.mu.Lock()

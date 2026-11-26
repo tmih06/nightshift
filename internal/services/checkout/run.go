@@ -202,9 +202,9 @@ func podDetail(state string) string {
 
 var shellSafe = regexp.MustCompile(`^[A-Za-z0-9_./:@%+=,-]+$`)
 
-// shellQuote leaves plain words bare, so the typed line stays readable, and
+// Quote leaves plain words bare, so the typed line stays readable, and
 // single-quotes the rest: branch names may hold $, ;, or quotes.
-func shellQuote(s string) string {
+func Quote(s string) string {
 	if shellSafe.MatchString(s) && !strings.HasPrefix(s, "-") {
 		return s
 	}

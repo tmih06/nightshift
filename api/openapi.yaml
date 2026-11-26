@@ -29,6 +29,7 @@ tags:
   - name: fleet
   - name: claims
   - name: checkouts
+  - name: runs
   - name: terminals
   - name: accounts
 paths:
@@ -212,6 +213,84 @@ paths:
           content:
             text/event-stream:
               schema: {$ref: "#/components/schemas/CheckoutEvent"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/runs:
+    post:
+      tags: [runs]
+      operationId: createRun
+      summary: Hand a task to a coding agent.
+      description: |
+        Needs the `runs` capability. The repository is cloned onto a volume of
+        the run's own, a sandbox is started from the pool's template, and the
+        pool's agent runs the prompt without asking for approvals. The run
+        carries on if the caller goes away. A request whose `idempotencyKey`
+        was used before returns that run; a different request under the same key
+        is a `conflict`. The sandbox stays until the run is deleted.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RunRequest"}
+      responses:
+        "202":
+          description: The run.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Run"}
+        default: {$ref: "#/components/responses/Problem"}
+    get:
+      tags: [runs]
+      operationId: listRuns
+      summary: Runs, newest first, without their output.
+      parameters:
+        - name: externalRef
+          in: query
+          description: Only the runs that carry this reference.
+          schema: {type: string}
+      responses:
+        "200":
+          description: The runs.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Runs"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/runs/{id}:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string}}
+    get:
+      tags: [runs]
+      operationId: getRun
+      summary: Where a run stands, with the end of the agent's output.
+      responses:
+        "200":
+          description: The run.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Run"}
+        default: {$ref: "#/components/responses/Problem"}
+    delete:
+      tags: [runs]
+      operationId: deleteRun
+      summary: Stop a run and destroy its sandbox and the work on its volume.
+      responses:
+        "204": {description: Deleted.}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/runs/{id}/events:
+    get:
+      tags: [runs]
+      operationId: watchRun
+      summary: A run, again each time it changes, until it finishes.
+      description: |
+        Events of type `run`. The first arrives at once, and the stream ends
+        after one whose state is `done` or `failed`.
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      responses:
+        "200":
+          description: A stream of `run` events.
+          content:
+            text/event-stream:
+              schema: {$ref: "#/components/schemas/Run"}
         default: {$ref: "#/components/responses/Problem"}
   /v1/volumes:
     get:
@@ -680,6 +759,49 @@ components:
         sandbox: {type: string}
         startedAt: {type: string, format: date-time}
         last: {$ref: "#/components/schemas/CheckoutEvent"}
+    RunSource:
+      type: object
+      required: [cloneUrl]
+      properties:
+        cloneUrl: {type: string, description: An https clone address without credentials., examples: ["https://gitlab.com/group/project.git"]}
+        ref: {type: string, description: Where to start; absent means the default branch.}
+        branch: {type: string, description: The local branch the agent works on.}
+    RunRequest:
+      type: object
+      required: [source, prompt, pool]
+      properties:
+        source: {$ref: "#/components/schemas/RunSource"}
+        prompt: {type: string, maxLength: 65536}
+        pool: {type: string, examples: [claude-code-pool]}
+        model: {type: string}
+        externalRef: {type: string, maxLength: 200, examples: ["linear:ENG-42"]}
+        idempotencyKey: {type: string, maxLength: 200}
+        timeoutSeconds: {type: integer, minimum: 60, maximum: 86400}
+    Run:
+      type: object
+      required: [id, state, source, pool, timeoutSeconds, createdAt, updatedAt]
+      properties:
+        id: {type: string}
+        state: {type: string, enum: [queued, cloning, starting, working, done, failed]}
+        source: {$ref: "#/components/schemas/RunSource"}
+        pool: {type: string}
+        model: {type: string}
+        externalRef: {type: string}
+        timeoutSeconds: {type: integer}
+        sandbox: {type: string}
+        exitCode: {type: integer}
+        output: {type: string, description: The end of what the agent printed; lists leave it out.}
+        error: {type: string}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        startedAt: {type: string, format: date-time}
+    Runs:
+      type: object
+      required: [runs]
+      properties:
+        runs:
+          type: array
+          items: {$ref: "#/components/schemas/Run"}
     CheckoutEvent:
       type: object
       required: [step, at]

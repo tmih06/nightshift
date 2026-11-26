@@ -35,12 +35,13 @@ func services() map[string][]string {
 		"internal/services/session":  {"internal/services/cluster"},
 		"internal/services/accounts": {"internal/services/cluster"},
 		"internal/services/checkout": {"internal/services/cluster", "internal/services/session"},
+		"internal/services/runs":     {"internal/services/checkout", "internal/services/cluster", "internal/services/session"},
 		// The HTTP layer knows nothing of Kubernetes: it serves the contract
 		// over interfaces, and knows only the errors the checkouts raise.
 		"internal/services/server": {"api", "internal/services/checkout"},
 		"internal/services/live": {
 			"internal/services/accounts", "internal/services/checkout", "internal/services/cluster",
-			"internal/services/server", "internal/services/session",
+			"internal/services/runs", "internal/services/server", "internal/services/session",
 		},
 		"internal/services/daemon": {
 			"internal/services/accounts", "internal/services/cluster", "internal/services/live", "internal/services/server",

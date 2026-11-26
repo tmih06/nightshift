@@ -28,9 +28,9 @@ func LaunchCommand(command, model string) string {
 	}
 	model = strings.TrimSpace(model)
 	if model == "" {
-		return shellQuote(command)
+		return Quote(command)
 	}
-	return shellQuote(command) + " --model " + shellQuote(model)
+	return Quote(command) + " --model " + Quote(model)
 }
 
 // ForPool resolves the coding agent harness and selectable models of a pool, from

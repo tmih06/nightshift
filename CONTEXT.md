@@ -71,6 +71,9 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
   coding-agent accounts' data layer (CLIProxyAPI client, port-forwards, the
   active-account ConfigMap, proxy usage), `checkout` is the pipeline that puts
   a pull request, issue, or branch on its own volume and a sandbox on it,
+  `runs` hands a task to a coding agent in such a sandbox and records how it
+  ended (the `/v1/runs` endpoints, for issue tracker adapters; see
+  `docs/api.md`),
   `server` is the HTTP layer that implements the contract over interfaces,
   `live` answers it from the cluster, `daemon` runs it, and `egress` is the
   library behind `cmd/egress-proxy`, the standalone outbound egress +

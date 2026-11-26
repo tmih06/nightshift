@@ -58,7 +58,7 @@ func TestCloneScriptQuotesBranchNames(t *testing.T) {
 	if got := s.CloneScript(); !strings.HasSuffix(got, "git checkout -B 'it'\\''s;$(rm -rf \x7e)' FETCH_HEAD") {
 		t.Errorf("branch not quoted: %s", got)
 	}
-	if q := shellQuote("-x"); q != "'-x'" {
+	if q := Quote("-x"); q != "'-x'" {
 		t.Errorf("a leading dash is left bare: %s", q)
 	}
 }

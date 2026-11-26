@@ -41,6 +41,16 @@ type Checkouts interface {
 	Follow(ctx context.Context, id string, fn func(v1.CheckoutEvent) error) error
 }
 
+// Runs hands tasks to coding agents and follows them.
+type Runs interface {
+	Create(req v1.RunRequest) (v1.Run, error)
+	List(externalRef string) ([]v1.Run, error)
+	Get(id string) (v1.Run, error)
+	// Watch is Get, with a channel that closes when the run changes.
+	Watch(id string) (v1.Run, <-chan struct{}, error)
+	Delete(id string) error
+}
+
 // Volumes keeps what checkouts leave behind.
 type Volumes interface {
 	Volumes(ctx context.Context) ([]v1.Volume, error)

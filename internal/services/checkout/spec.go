@@ -12,9 +12,9 @@ import (
 	"github.com/tmih06/nightshift/internal/services/cluster"
 )
 
-// workspaceDir is the sandbox images' working directory (images/base), where a
+// WorkspaceDir is the sandbox images' working directory (images/base), where a
 // volume is mounted under the repository's name.
-const workspaceDir = "/home/node/workspace"
+const WorkspaceDir = "/home/node/workspace"
 
 // Spec is a target to keep on its own volume, and the agent to start on it.
 type Spec struct {
@@ -55,7 +55,7 @@ func (s Spec) volumeKind() cluster.VolumeKind {
 
 // MountPath is where the volume sits in the sandbox.
 func (s Spec) MountPath() string {
-	return workspaceDir + "/" + s.Target.Repo[strings.LastIndex(s.Target.Repo, "/")+1:]
+	return WorkspaceDir + "/" + s.Target.Repo[strings.LastIndex(s.Target.Repo, "/")+1:]
 }
 
 func (s Spec) branch() string {
@@ -91,6 +91,28 @@ func (s Spec) String() string {
 // carriage returns on one line, which the container log would hold back until
 // the line ends, so it is turned into lines, unbuffered, to follow.
 func (s Spec) CloneScript() string {
+	lines := CloneLines("https://github.com/"+s.Target.Repo+".git", true)
+	if s.Target.Kind == v1.TargetIssue || s.Target.Kind == v1.TargetBranch {
+		b := Quote(s.branch())
+		ref := Quote("refs/remotes/origin/" + s.branch())
+		lines = append(lines,
+			"if git show-ref --verify --quiet "+ref+"; then git checkout -B "+b+" --track "+ref+"; else git checkout -B "+b+"; fi",
+		)
+	} else {
+		lines = append(lines, RetryLines(
+			"fetch",
+			"",
+			fmt.Sprintf("git fetch --progress origin pull/%d/head 2>&1 | lines", s.Target.Number),
+		)...)
+		lines = append(lines, "git checkout -B "+Quote(s.branch())+" FETCH_HEAD")
+	}
+	return strings.Join(lines, "\n")
+}
+
+// CloneLines starts a clone script: it drops what an unfinished clone left,
+// clones url into cluster.VolumeRepoDir, and moves into it. githubToken offers
+// git the GITHUB_TOKEN placeholder, which only GitHub is to be given.
+func CloneLines(url string, githubToken bool) []string {
 	dir := cluster.VolumeRepoDir
 	lines := []string{
 		"set -euo pipefail",
@@ -99,32 +121,20 @@ func (s Spec) CloneScript() string {
 		"export GIT_CONFIG_KEY_0=http.version GIT_CONFIG_VALUE_0=HTTP/1.1",
 		"export GIT_CONFIG_KEY_1=http.lowSpeedLimit GIT_CONFIG_VALUE_1=1024",
 		"export GIT_CONFIG_KEY_2=http.lowSpeedTime GIT_CONFIG_VALUE_2=20",
-		`if [ -n "${GITHUB_TOKEN:-}" ]; then export GIT_ASKPASS=/tmp/git-askpass.sh GIT_TERMINAL_PROMPT=0; printf '#!/bin/sh\ncase "$1" in *Username*) echo x-access-token;; *) echo "$GITHUB_TOKEN";; esac\n' > "$GIT_ASKPASS"; chmod 700 "$GIT_ASKPASS"; fi`,
 	}
-	lines = append(lines, retryScriptLines(
+	if githubToken {
+		lines = append(lines, `if [ -n "${GITHUB_TOKEN:-}" ]; then export GIT_ASKPASS=/tmp/git-askpass.sh GIT_TERMINAL_PROMPT=0; printf '#!/bin/sh\ncase "$1" in *Username*) echo x-access-token;; *) echo "$GITHUB_TOKEN";; esac\n' > "$GIT_ASKPASS"; chmod 700 "$GIT_ASKPASS"; fi`)
+	}
+	lines = append(lines, RetryLines(
 		"clone",
 		"rm -rf "+dir,
-		"git clone --progress "+shellQuote("https://github.com/"+s.Target.Repo+".git")+" "+dir+" 2>&1 | lines",
+		"git clone --progress "+Quote(url)+" "+dir+" 2>&1 | lines",
 	)...)
-	lines = append(lines, "cd "+dir)
-	if s.Target.Kind == v1.TargetIssue || s.Target.Kind == v1.TargetBranch {
-		b := shellQuote(s.branch())
-		ref := shellQuote("refs/remotes/origin/" + s.branch())
-		lines = append(lines,
-			"if git show-ref --verify --quiet "+ref+"; then git checkout -B "+b+" --track "+ref+"; else git checkout -B "+b+"; fi",
-		)
-	} else {
-		lines = append(lines, retryScriptLines(
-			"fetch",
-			"",
-			fmt.Sprintf("git fetch --progress origin pull/%d/head 2>&1 | lines", s.Target.Number),
-		)...)
-		lines = append(lines, "git checkout -B "+shellQuote(s.branch())+" FETCH_HEAD")
-	}
-	return strings.Join(lines, "\n")
+	return append(lines, "cd "+dir)
 }
 
-func retryScriptLines(label, setup, cmd string) []string {
+// RetryLines runs cmd up to three times, after setup each time.
+func RetryLines(label, setup, cmd string) []string {
 	out := []string{"for i in 1 2 3; do"}
 	if setup != "" {
 		out = append(out, "  "+setup)
@@ -152,10 +162,10 @@ func (s Spec) ShellLine() string {
 func (s Spec) shellLine(cloned bool) string {
 	var line string
 	if (s.Target.Kind == v1.TargetIssue || s.Target.Kind == v1.TargetBranch) && cloned {
-		b := shellQuote(s.branch())
-		line = "cd " + shellQuote(s.MountPath()) + " && (git checkout " + b + " 2>/dev/null || git checkout -b " + b + ") && git status -sb"
+		b := Quote(s.branch())
+		line = "cd " + Quote(s.MountPath()) + " && (git checkout " + b + " 2>/dev/null || git checkout -b " + b + ") && git status -sb"
 	} else {
-		line = "cd " + shellQuote(s.MountPath()) + " && git status -sb"
+		line = "cd " + Quote(s.MountPath()) + " && git status -sb"
 	}
 	if cmd := LaunchCommand(s.Harness, s.Model); cmd != "" {
 		line += " && " + cmd

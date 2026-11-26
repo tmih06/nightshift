@@ -10,6 +10,7 @@ import (
 
 	"github.com/tmih06/nightshift/internal/services/accounts"
 	"github.com/tmih06/nightshift/internal/services/checkout"
+	"github.com/tmih06/nightshift/internal/services/runs"
 )
 
 // Backend stands behind every interface of the server.
@@ -21,6 +22,7 @@ type Backend struct {
 	// Accounts is nil when the backend has no account service.
 	Accounts  *Accounts
 	Checkouts *checkout.Manager
+	Runs      *runs.Manager
 }
 
 // Options say how the backend reaches what it needs.
@@ -40,6 +42,7 @@ func New(opts Options) *Backend {
 		Volumes:   &Volumes{fleet: fleet},
 		Terminals: NewTerminals(fleet),
 		Checkouts: checkout.NewManager(checkout.Live()),
+		Runs:      runs.NewManager(runs.Live()),
 	}
 	if opts.Accounts != nil {
 		b.Accounts = &Accounts{svc: opts.Accounts}
@@ -50,6 +53,7 @@ func New(opts Options) *Backend {
 // Close stops what the backend runs, waiting for it until ctx ends.
 func (b *Backend) Close(ctx context.Context) {
 	b.Checkouts.Close(ctx)
+	b.Runs.Close(ctx)
 	b.Terminals.Close()
 	if b.Accounts != nil {
 		b.Accounts.svc.Close()
