@@ -9,7 +9,8 @@ COPY internal/services/egress ./internal/services/egress
 
 ARG TARGETOS=linux
 ARG TARGETARCH
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/egress-proxy ./cmd/egress-proxy
 
 FROM gcr.io/distroless/static-debian12:nonroot

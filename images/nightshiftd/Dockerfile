@@ -17,7 +17,8 @@ COPY internal/services ./internal/services
 ARG TARGETOS=linux
 ARG TARGETARCH
 ARG VERSION=dev
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH:-$(go env GOARCH)} \
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH:-$(go env GOARCH)} \
     go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" \
     -o /out/nightshiftd ./cmd/nightshiftd
 
