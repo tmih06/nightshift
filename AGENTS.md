@@ -126,6 +126,12 @@ Prune rules that no longer apply. Past about 200 lines, move older detail into
     `TestOverlappingFleetReadsShareTheirKubectls`,
     `TestTheServicesHaveRoomForTheirKubectls`.
 
+- **Rule**: Start a command in a sandbox that nobody is watching with
+  `hc run --bg` in a one-shot exec, never by typing into a session.
+  - **Why**: Each run kept a 48 MB `kubectl exec hc connect` alive in
+    `nightshiftd` until it was deleted, enough to OOM-kill it after about nine.
+  - **Enforced by**: `TestStartingARunHoldsNoConnectionOpen`.
+
 ## Commit messages
 
 Every commit message follows [Conventional Commits 1.0.0](https://www.conventionalcommits.org/). The format is `type(scope): subject`.

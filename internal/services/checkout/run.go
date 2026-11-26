@@ -48,17 +48,6 @@ func Live() Ops {
 	}
 }
 
-// TypeLine brings up the sandbox's bash and enters line in it.
-func (o Ops) TypeLine(pod, line string) error {
-	if err := o.Ensure(pod); err != nil {
-		return fmt.Errorf("start bash: %w", err)
-	}
-	if err := o.Send(pod, []session.Key{{Text: line}, {Name: "Enter"}}); err != nil {
-		return fmt.Errorf("could not type into bash: %w", err)
-	}
-	return nil
-}
-
 // Run puts s on its volume, cloning it the first time, starts a sandbox from
 // template on it, and brings its bash into the clone, telling emit each step as
 // it goes. Its last event is Done or has Error set.
@@ -178,8 +167,12 @@ func (p *pipeline) shell(name string, cloned bool) {
 		detail = "starting " + summary
 	}
 	p.say(v1.CheckoutEvent{Step: v1.StepShell, Sandbox: name, Detail: detail})
-	if err := p.ops.TypeLine(name, p.spec.shellLine(cloned)); err != nil {
+	if err := p.ops.Ensure(name); err != nil {
 		p.fail(v1.StepShell, err)
+		return
+	}
+	if err := p.ops.Send(name, []session.Key{{Text: p.spec.shellLine(cloned)}, {Name: "Enter"}}); err != nil {
+		p.fail(v1.StepShell, fmt.Errorf("could not type into bash: %w", err))
 		return
 	}
 	p.emit(v1.CheckoutEvent{Step: v1.StepShell, Sandbox: name, Done: true, At: time.Now().UTC()})

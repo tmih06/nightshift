@@ -26,7 +26,7 @@ type fakeCluster struct {
 	sandbox   string
 	prompt    string
 	script    string
-	typed     string
+	connected bool   // something opened a session into the sandbox
 	answer    string // what the status script prints
 	cloneErr  error
 	volumeErr error
@@ -88,9 +88,13 @@ func (f *fakeCluster) pipelineOps() checkout.Ops {
 			f.locked(func() { name = f.sandbox })
 			return name, nil
 		},
-		Ensure: func(string) error { return nil },
-		Send: func(_ string, keys []session.Key) error {
-			f.locked(func() { f.typed = keys[0].Text })
+		// A run must use neither: a session holds a kubectl open.
+		Ensure: func(string) error {
+			f.locked(func() { f.connected = true })
+			return nil
+		},
+		Send: func(string, []session.Key) error {
+			f.locked(func() { f.connected = true })
 			return nil
 		},
 	}
@@ -112,14 +116,14 @@ func (f *fakeCluster) listRecords() (map[string][]byte, error) {
 	return out, nil
 }
 
-// exec answers the status script, and keeps what the write command was given.
+// exec answers the status script, and keeps what the launch command was given.
 func (f *fakeCluster) exec(_ string, stdin []byte, args ...string) (out []byte, err error) {
 	f.locked(func() {
 		if args[len(args)-1] == statusScript {
 			out = []byte(f.answer)
 			return
 		}
-		f.prompt, f.script = string(stdin), args[len(args)-1]
+		f.prompt, f.script = string(stdin), args[len(args)-2]
 	})
 	return out, nil
 }
@@ -179,9 +183,6 @@ func TestARunGoesFromRequestToResult(t *testing.T) {
 	f.locked(func() {
 		if f.prompt != "fix the 'bug'" || !strings.Contains(f.script, "claude --dangerously-skip-permissions --print") {
 			t.Errorf("the sandbox got prompt %q and script %q", f.prompt, f.script)
-		}
-		if !strings.HasPrefix(f.typed, "bash ") {
-			t.Errorf("typed %q", f.typed)
 		}
 		f.answer = "exit 0\nall done\n"
 	})
@@ -314,23 +315,48 @@ func TestEveryPoolAgentCanRunATask(t *testing.T) {
 	}
 }
 
-// TestTheScriptAndPromptAreStoredByOneCommand runs the write command in a real
-// shell, as the sandbox would.
-func TestTheScriptAndPromptAreStoredByOneCommand(t *testing.T) {
+// Each run once held a "kubectl exec hc connect" in the services, some 48 MB,
+// until it was deleted, as the agent was started by typing into a session.
+func TestStartingARunHoldsNoConnectionOpen(t *testing.T) {
+	f := newFakeCluster()
+	m := newManager(t, f)
+	run, err := m.Create(request())
+	if err != nil {
+		t.Fatal(err)
+	}
+	until(t, m, run.ID, inState(v1.RunWorking))
+	f.locked(func() {
+		if f.connected {
+			t.Error("the run opened a session into its sandbox")
+		}
+	})
+}
+
+// TestOneCommandStoresTheTaskAndStartsTheAgent runs the launch command in a
+// real shell, as the sandbox would, with a stub for hc.
+func TestOneCommandStoresTheTaskAndStartsTheAgent(t *testing.T) {
 	home := t.TempDir()
+	stub := "#!/bin/sh\nprintf '%s|' \"$@\" > \"$HOME/hc.args\"\n"
+	if err := os.WriteFile(filepath.Join(home, "hc"), []byte(stub), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	args := writeCommand("echo '$HOME' %s")
-	cmd := exec.CommandContext(ctx, "sh")
-	cmd.Args = append(cmd.Args, args[1:]...)
-	cmd.Env = append(os.Environ(), "HOME="+home)
+	// As the manifest tests do, the shell makes its own stub executable.
+	cmd := exec.CommandContext(ctx, "sh", "-c", `chmod 700 "$HOME/hc" && exec "$@"`, "sh")
+	cmd.Args = append(cmd.Args, launchCommand("echo '$HOME' %s", "/work/my repo")...)
+	cmd.Env = append(os.Environ(), "HOME="+home, "PATH="+home+":"+os.Getenv("PATH"))
 	cmd.Stdin = strings.NewReader("say 'hi'")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("%v: %s", err, out)
 	}
-	dir := os.DirFS(filepath.Join(home, ".nightshift"))
-	for name, want := range map[string]string{scriptFile: "echo '$HOME' %s", promptFile: "say 'hi'"} {
-		got, err := fs.ReadFile(dir, name)
+	files := os.DirFS(home)
+	for name, want := range map[string]string{
+		".nightshift/" + scriptFile: "echo '$HOME' %s",
+		".nightshift/" + promptFile: "say 'hi'",
+		"hc.args":                   `run|--bg|--no-parent|--cwd|/work/my repo|bash|-c|bash "$HOME/.nightshift"/run.sh; exec bash|`,
+	} {
+		got, err := fs.ReadFile(files, name)
 		if err != nil || string(got) != want {
 			t.Errorf("%s = %q, %v, want %q", name, got, err, want)
 		}

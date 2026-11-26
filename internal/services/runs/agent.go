@@ -42,11 +42,17 @@ func agentScript(command, dir string, seconds int) string {
 	}, "\n")
 }
 
-// writeCommand stores script as the run's script and its stdin as the prompt,
-// in one exec.
-func writeCommand(script string) []string {
-	write := "mkdir -p " + stateDir + ` && printf %s "$1" > ` + stateDir + "/" + scriptFile + " && cat > " + stateDir + "/" + promptFile
-	return []string{"sh", "-c", write, "sh", script}
+// launchCommand stores script, and its stdin as the prompt, then starts the
+// script in a new terminal in dir, which stays a shell afterwards. It is one
+// exec that ends at once: typing into a session instead keeps a kubectl alive
+// in the services for as long as the sandbox lives.
+func launchCommand(script, dir string) []string {
+	start := "bash " + stateDir + "/" + scriptFile + "; exec bash"
+	launch := "mkdir -p " + stateDir +
+		` && printf %s "$1" > ` + stateDir + "/" + scriptFile +
+		" && cat > " + stateDir + "/" + promptFile +
+		` && hc run --bg --no-parent --cwd "$2" bash -c ` + checkout.Quote(start)
+	return []string{"sh", "-c", launch, "sh", script, dir}
 }
 
 // statusScript prints how the agent stands: "exit N" and the end of its output,

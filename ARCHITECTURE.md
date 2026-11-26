@@ -281,8 +281,9 @@ flowchart LR
 ```
 
 It reuses the checkout's clone Job and volume sandbox. The agent runs in its
-non-interactive mode from a script typed into the sandbox's bash, so it shows in
-the Pods tab like any terminal. The script leaves the exit status in a file,
+non-interactive mode from a script that `hc run` starts in a new terminal, so it
+shows in the Pods tab like any other, and the services keep no connection to the
+sandbox open. The script leaves the exit status in a file,
 which the services poll with `kubectl exec`. The run's record is an annotation
 on its volume, so a restarted server finds it again and needs no new
 permission. See `docs/api.md` for the contract and its limits.

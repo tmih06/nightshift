@@ -80,14 +80,11 @@ func (m *Manager) sandbox(e *entry, template string, pod map[string]any, dir str
 	return name, nil
 }
 
-// launch writes the prompt and script into the sandbox and types the script's
-// name into its bash, so anyone can watch the agent work.
+// launch gives the sandbox the task and starts the agent in a terminal, so
+// anyone can watch it work.
 func (m *Manager) launch(e *entry, t task, sandbox, dir string) error {
 	script := agentScript(t.command, dir, e.rec.Run.TimeoutSeconds)
-	if _, err := m.ops.Exec(sandbox, []byte(t.prompt), writeCommand(script)...); err != nil {
-		return fmt.Errorf("write the task: %w", err)
-	}
-	if err := m.ops.TypeLine(sandbox, "bash "+stateDir+"/"+scriptFile); err != nil {
+	if _, err := m.ops.Exec(sandbox, []byte(t.prompt), launchCommand(script, dir)...); err != nil {
 		return fmt.Errorf("start the agent: %w", err)
 	}
 	now := time.Now().UTC()
