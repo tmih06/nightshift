@@ -106,6 +106,12 @@ necessarily the exact selected pod.
 The controller replenishes that pool. Deleting a claim destroys its sandbox
 and pod because its shutdown policy is `Delete`.
 
+An agy sandbox is ready to run when it boots: `agy-template`'s start command
+marks first-run setup done, trusts home and each folder in the workspace (agy
+matches exact paths), and sets agy to proceed without asking. The sandbox and
+the egress proxy are what contain it. A repository cloned later by hand still
+gets agy's one trust question.
+
 ## Pull request, issue, and repository volumes
 
 `S` on a pull request, issue, or repository/branch in the GitHub tab gives it a

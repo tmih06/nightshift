@@ -22,9 +22,10 @@ type document struct {
 		PodTemplate struct {
 			Spec struct {
 				Containers []struct {
-					Name            string `yaml:"name"`
-					Image           string `yaml:"image"`
-					ImagePullPolicy string `yaml:"imagePullPolicy"`
+					Name            string   `yaml:"name"`
+					Image           string   `yaml:"image"`
+					ImagePullPolicy string   `yaml:"imagePullPolicy"`
+					Command         []string `yaml:"command"`
 					Resources       struct {
 						Requests quantities `yaml:"requests"`
 						Limits   quantities `yaml:"limits"`

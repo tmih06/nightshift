@@ -25,7 +25,8 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
 - `k8s/` holds the Kubernetes manifests and cluster scripts: `warmpool.yaml`
   creates the namespace `nightshift` and six template/pool pairs, each keeping
   one Pi, Codex, Claude Code, Antigravity (`agy`), OMPi slim
-  (`ompig-slim`), or OpenCode sandbox warm. Each pod is capped at
+  (`ompig-slim`), or OpenCode sandbox warm. An agy sandbox boots with its
+  first-run setup done, its folders trusted, and approvals off. Each pod is capped at
   1000m CPU and 2Gi memory. `claim.yaml` claims a Pi sandbox by default.
   `sbx.sh` wraps that loop in one command and is installed as `sbx` through
   a symlink in `~/.local/bin`. `egress.yaml` and `egress-setup.sh` deploy the

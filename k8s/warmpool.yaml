@@ -215,6 +215,18 @@ spec:
           if [ -f "$c" ]; then
             tar -xf "$c" -C "$HOME" 2>/dev/null || true
           fi
+          # Open agy straight at its prompt and let it act without asking:
+          # the sandbox and the egress proxy are the guard rails. agy trusts
+          # a folder only by its exact path, so list home and each workspace.
+          d=$HOME/.gemini/antigravity-cli
+          mkdir -p "$d/cache"
+          jq -n '{consumerOnboardingComplete: true,
+            onboardingComplete: true}' > "$d/cache/onboarding.json"
+          { echo "$HOME"; find "$HOME/workspace" -maxdepth 1 -type d; } |
+            jq -Rn '{trustedWorkspaces: [inputs],
+              toolPermission: "always-proceed",
+              artifactReviewPolicy: "always-proceed",
+              allowNonWorkspaceAccess: true}' > "$d/settings.json"
           exec sleep infinity
         resources:
           requests:
