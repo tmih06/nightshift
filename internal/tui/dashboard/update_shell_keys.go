@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	v1 "github.com/tmih06/nightshift/api/v1"
+	"github.com/tmih06/nightshift/internal/tui/fleet"
 )
 
 // sgrMouseLeakRe matches SGR mouse suffixes that leak as text when a PTY or
@@ -60,29 +61,22 @@ func (m model) handlePrefixKey(msg tea.KeyPressMsg) (model, tea.Cmd) {
 		return m, nil
 	case "c":
 		b := m.selectedBox()
-		if b == nil || b.Phase != "Running" {
+		if b == nil || b.Phase != fleet.PodPhaseRunning {
 			return m, nil
 		}
 		m.flash("opening new window…")
 		return m, createWindowCmd(m.api, b.Name, m.activeTerm(b.Name))
 	case "n", "l", "right":
-		return m, m.stepWindow(1)
+		cmd := m.stepWindow(1)
+		return m, cmd
 	case "p", "h", "left":
-		return m, m.stepWindow(-1)
+		cmd := m.stepWindow(-1)
+		return m, cmd
 	case "x", "&":
-		b := m.selectedBox()
-		if b == nil {
-			return m, nil
-		}
-		term := m.activeTerm(b.Name)
-		if term == "" {
-			return m, nil
-		}
-		m.flash("closing window…")
-		return m, killWindowCmd(m.api, b.Name, term)
+		return m.closeActiveWindow()
 	case "f", "F":
 		b := m.selectedBox()
-		if b == nil || b.Phase != "Running" {
+		if b == nil || b.Phase != fleet.PodPhaseRunning {
 			return m, nil
 		}
 		return m.zoomShell(b)
@@ -90,9 +84,23 @@ func (m model) handlePrefixKey(msg tea.KeyPressMsg) (model, tea.Cmd) {
 		return m.queueShell(v1.Key{Name: "C-b"})
 	}
 	if len(s) == 1 && s[0] >= '1' && s[0] <= '9' {
-		return m, m.selectWindowIndex(int(s[0] - '1'))
+		cmd := m.selectWindowIndex(int(s[0] - '1'))
+		return m, cmd
 	}
 	return m, nil
+}
+
+func (m model) closeActiveWindow() (model, tea.Cmd) {
+	b := m.selectedBox()
+	if b == nil {
+		return m, nil
+	}
+	term := m.activeTerm(b.Name)
+	if term == "" {
+		return m, nil
+	}
+	m.flash("closing window…")
+	return m, killWindowCmd(m.api, b.Name, term)
 }
 
 func (m model) pasteIntoShell(text string) (model, tea.Cmd) {
@@ -110,7 +118,8 @@ func (m model) queueShell(key v1.Key) (model, tea.Cmd) {
 	if m.sending {
 		return m, nil
 	}
-	return m, m.startDrain()
+	cmd := m.startDrain()
+	return m, cmd
 }
 
 func isMouseEscapeFragment(msg tea.KeyPressMsg) bool {

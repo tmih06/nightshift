@@ -8,8 +8,8 @@ import (
 )
 
 // fakeKube answers the kubectl call Live makes: nightshift-auth-key holds the
-// key "secret-key". It returns the directory holding the call trace.
-func fakeKube(t *testing.T) string {
+// key "secret-key".
+func fakeKube(t *testing.T) {
 	t.Helper()
 	dir := stubKubectl(t, `echo "$*" >> "$KUBE_TRACE"
 case "$*" in
@@ -17,7 +17,6 @@ case "$*" in
 esac
 `)
 	t.Setenv("KUBE_TRACE", dir+"/trace")
-	return dir
 }
 
 func TestFetchMarksTheActiveAccountAndAttachesUsage(t *testing.T) {

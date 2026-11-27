@@ -1,6 +1,10 @@
 package dashboard
 
-import tea "charm.land/bubbletea/v2"
+import (
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/tmih06/nightshift/internal/tui/fleet"
+)
 
 func (m model) updateKeyboard(msg tea.KeyPressMsg) (model, tea.Cmd) {
 	if m.confirmDestroy && msg.String() != "x" {
@@ -72,7 +76,7 @@ func (m model) updateKeyboard(msg tea.KeyPressMsg) (model, tea.Cmd) {
 			m.flash("infra pod — view logs or configs with enter")
 			return m, nil
 		}
-		if b.Phase != "Running" {
+		if b.Phase != fleet.PodPhaseRunning {
 			m.flash("pod is " + b.Phase + ", no bash to enter")
 			return m, nil
 		}
@@ -81,7 +85,7 @@ func (m model) updateKeyboard(msg tea.KeyPressMsg) (model, tea.Cmd) {
 		return m, attachCmd(m.api, b.Name)
 	case "F":
 		b := m.selectedBox()
-		if b == nil || b.Phase != "Running" {
+		if b == nil || b.Phase != fleet.PodPhaseRunning {
 			return m, nil
 		}
 		if b.Warm() {

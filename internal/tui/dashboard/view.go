@@ -443,7 +443,7 @@ func (m model) windowTabBar(width, startX int) (string, []windowTabSpan) {
 	}
 	wins := m.podWindows(b.Name)
 	if len(wins) == 0 {
-		if b.Phase != "Running" {
+		if b.Phase != fleet.PodPhaseRunning {
 			return "", nil
 		}
 		btn := winActionStyle.Render(" + new window ")
@@ -925,6 +925,34 @@ func padTo(s string, width int) string {
 	return s + strings.Repeat(" ", max(0, width-ansi.StringWidth(s)))
 }
 
+type usageGraphCell struct {
+	mask rune
+	maxV float64
+}
+
+type usageGraphLayout struct {
+	cells     []usageGraphCell
+	firstCell int
+}
+
+func usageGraphCells(vals []float64, width int) usageGraphLayout {
+	const dotRows = 4
+	firstCell := width - (len(vals)+1)/2
+	cells := make([]usageGraphCell, width)
+	for j, v := range vals {
+		h := clamp(int(v*dotRows+0.5), 1, dotRows)
+		c := firstCell + j/2
+		col := j % 2
+		for top := dotRows - h; top < dotRows; top++ {
+			cells[c].mask |= dotBit(col, top)
+		}
+		if v > cells[c].maxV {
+			cells[c].maxV = v
+		}
+	}
+	return usageGraphLayout{cells: cells, firstCell: firstCell}
+}
+
 // usageGraph draws a 1-row braille history chart (2 samples per cell,
 // 4 dot rows scaled against the limit) batching same-color runs.
 func usageGraph(hist []float64, width int) string {
@@ -938,28 +966,11 @@ func usageGraph(hist []float64, width int) string {
 	if dotCols := 2 * width; len(vals) > dotCols {
 		vals = vals[len(vals)-dotCols:]
 	}
-	const dotRows = 4
-	firstCell := width - (len(vals)+1)/2
-	type graphCell struct {
-		mask rune
-		maxV float64
-	}
-	cells := make([]graphCell, width)
-	for j, v := range vals {
-		h := clamp(int(v*dotRows+0.5), 1, dotRows)
-		c := firstCell + j/2
-		col := j % 2
-		for top := dotRows - h; top < dotRows; top++ {
-			cells[c].mask |= dotBit(col, top)
-		}
-		if v > cells[c].maxV {
-			cells[c].maxV = v
-		}
-	}
+	graph := usageGraphCells(vals, width)
 
 	var out strings.Builder
-	if firstCell > 0 {
-		out.WriteString(strings.Repeat(" ", firstCell))
+	if graph.firstCell > 0 {
+		out.WriteString(strings.Repeat(" ", graph.firstCell))
 	}
 	var run strings.Builder
 	curBucket := -1
@@ -969,13 +980,13 @@ func usageGraph(hist []float64, width int) string {
 			run.Reset()
 		}
 	}
-	for c := firstCell; c < width; c++ {
-		bucket := levelBucket(cells[c].maxV)
+	for c := graph.firstCell; c < width; c++ {
+		bucket := levelBucket(graph.cells[c].maxV)
 		if bucket != curBucket {
 			flush()
 			curBucket = bucket
 		}
-		run.WriteRune(0x2800 + cells[c].mask)
+		run.WriteRune(0x2800 + graph.cells[c].mask)
 	}
 	flush()
 	return out.String()

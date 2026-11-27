@@ -1,6 +1,10 @@
 package dashboard
 
-import tea "charm.land/bubbletea/v2"
+import (
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/tmih06/nightshift/internal/tui/fleet"
+)
 
 func (m model) updateMouse(msg tea.MouseMsg) (model, tea.Cmd) {
 	mouse := msg.Mouse()
@@ -131,12 +135,13 @@ func (m model) clickWindowBar(x, y int, button tea.MouseButton) (model, tea.Cmd,
 			}
 			m.focus = focusShell
 			m.prefix = false
-			return m, m.selectWindow(b.Name, s.address), true
+			cmd := m.selectWindow(b.Name, s.address)
+			return m, cmd, true
 		case winActionNew:
 			if button != tea.MouseLeft {
 				return m, nil, false
 			}
-			if b.Phase != "Running" {
+			if b.Phase != fleet.PodPhaseRunning {
 				m.flash("pod is " + b.Phase + ", cannot open window")
 				return m, nil, true
 			}
@@ -193,7 +198,7 @@ func (m model) applyClick(x, y int) (model, tea.Cmd) {
 			m.prefix = false
 			return m, nil
 		}
-		if b := m.selectedBox(); b != nil && b.Claimed() && b.Phase == "Running" {
+		if b := m.selectedBox(); b != nil && b.Claimed() && b.Phase == fleet.PodPhaseRunning {
 			m.flash("starting bash in " + b.Name)
 			return m, attachCmd(m.api, b.Name)
 		}

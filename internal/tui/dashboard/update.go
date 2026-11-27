@@ -78,7 +78,8 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 				m.shellLines, m.shellPod, m.shellTerm = msg.lines, msg.pod, msg.term
 			}
 		}
-		return m, m.watchShell()
+		cmd := m.watchShell()
+		return m, cmd
 	case loadedMsg:
 		prev := m.selectedIndex()
 		m.boxes, m.pools = msg.boxes, msg.pools
@@ -293,7 +294,8 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 			m.pendingTerm = ""
 			return m, nil
 		}
-		return m, m.startDrain()
+		cmd := m.startDrain()
+		return m, cmd
 	}
 	return m, nil
 }

@@ -196,7 +196,8 @@ func (m model) FocusPod(pod string) (Model, tea.Cmd) {
 		if m.hasSession(target.Name) {
 			m.focus = focusShell
 			m.prefix = false
-			return m, m.watchShell()
+			cmd := m.watchShell()
+			return m, cmd
 		}
 		return m, attachCmd(m.api, target.Name)
 	}
@@ -383,7 +384,7 @@ func (m *model) selectWindowIndex(idx int) tea.Cmd {
 
 func (m *model) watchShell() tea.Cmd {
 	b := m.selectedBox()
-	if m.watchingShell || m.hidden || b == nil || !m.hasSession(b.Name) || b.Phase != "Running" {
+	if m.watchingShell || m.hidden || b == nil || !m.hasSession(b.Name) || b.Phase != fleet.PodPhaseRunning {
 		return nil
 	}
 	term := m.activeTerm(b.Name)

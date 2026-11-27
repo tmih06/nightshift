@@ -70,16 +70,24 @@ func (u *usageStore) historyLocked() []AccountHistory {
 			delete(u.days, k)
 			continue
 		}
-		sort.Slice(h.Days, func(i, j int) bool { return h.Days[i].Date < h.Days[j].Date })
-		out = append(out, h)
+		out = appendSortedAccountHistory(out, h)
 	}
+	sortAccountHistories(out)
+	return out
+}
+
+func appendSortedAccountHistory(out []AccountHistory, h AccountHistory) []AccountHistory {
+	sort.Slice(h.Days, func(i, j int) bool { return h.Days[i].Date < h.Days[j].Date })
+	return append(out, h)
+}
+
+func sortAccountHistories(out []AccountHistory) {
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Binding != out[j].Binding {
 			return out[i].Binding < out[j].Binding
 		}
 		return out[i].Label < out[j].Label
 	})
-	return out
 }
 
 // History reports the daily requests and tokens of every account.

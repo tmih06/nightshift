@@ -41,7 +41,7 @@ func allMethods() gh.MergeMethods {
 func openMergeOn(t *testing.T, d gh.PullRequestDetail, repo store.Repo) prview.Model {
 	t.Helper()
 
-	label, _ := mergeLabelOf(d)
+	label := mergeLabelOf(d)
 	m := onRailRow(t, detailed(held(d), 200, 60), label)
 
 	_, cmd := key(m, "enter")
@@ -59,22 +59,22 @@ func openMerge(t *testing.T) prview.Model {
 	return openMergeOn(t, mergeableDetail(), mergeRepo(allMethods()))
 }
 
-func mergeLabelOf(d gh.PullRequestDetail) (string, bool) {
+func mergeLabelOf(d gh.PullRequestDetail) string {
 	switch d.Merge {
 	case gh.MergeClean:
-		return "Ready to merge", true
+		return "Ready to merge"
 	case gh.MergeUnstable:
-		return "Checks failing", true
+		return "Checks failing"
 	case gh.MergeBlocked:
-		return "Blocked", true
+		return "Blocked"
 	case gh.MergeBehind:
-		return "Behind the base", true
+		return "Behind the base"
 	case gh.MergeConflicting:
-		return "Conflicts", false
+		return "Conflicts"
 	case gh.MergeDraft:
-		return "Draft", false
+		return "Draft"
 	}
-	return "Checking", false
+	return "Checking"
 }
 
 func formBox(t *testing.T, m prview.Model) string {
@@ -115,7 +115,7 @@ func TestTheMergeRowIsAControlOnlyWhereThereIsAMergeToMake(t *testing.T) {
 			d.Merge = tt.state
 			d.Viewer.CanMergeAsAdmin = tt.admin
 
-			label, _ := mergeLabelOf(d)
+			label := mergeLabelOf(d)
 			m := press(detailed(held(d), 200, 60), "1")
 
 			var reached bool

@@ -586,15 +586,9 @@ func (u *usageStore) historyDB(ctx context.Context) []AccountHistory {
 		for _, d := range days {
 			h.Days = append(h.Days, d)
 		}
-		sort.Slice(h.Days, func(i, j int) bool { return h.Days[i].Date < h.Days[j].Date })
-		out = append(out, h)
+		out = appendSortedAccountHistory(out, h)
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Binding != out[j].Binding {
-			return out[i].Binding < out[j].Binding
-		}
-		return out[i].Label < out[j].Label
-	})
+	sortAccountHistories(out)
 	return out
 }
 

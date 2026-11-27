@@ -355,19 +355,15 @@ func (m Model) listRow(l listLine, width int) string {
 	return m.accountRow(a, l.acc == m.cursor, width)
 }
 
-// accountRow is one account in the list: its health, name, most used quota
-// window, state, and request count, as far as width allows.
-func (m Model) accountRow(a v1.Account, selected bool, width int) string {
+type accountRowStatus struct {
+	mark       string
+	markStyle  lipgloss.Style
+	state      string
+	stateStyle lipgloss.Style
+}
+
+func (m Model) accountRowStatus(a v1.Account) accountRowStatus {
 	s := m.st
-	// Each part carries the selection's background itself: a style around the
-	// whole line would end at the first part's reset.
-	on := func(st lipgloss.Style) lipgloss.Style {
-		if selected {
-			return st.Background(m.theme.SelectedBackground)
-		}
-		return st
-	}
-	blank := func(n int) string { return on(s.text).Render(strings.Repeat(" ", max(0, n))) }
 	cooling := a.CooldownUntil.After(m.now())
 	_, known := inUse(m.snap, a.Provider)
 	mark, markStyle := "○", s.faint
@@ -386,7 +382,24 @@ func (m Model) accountRow(a v1.Account, selected bool, width int) string {
 	case m.pending(a):
 		state, stateStyle = "pending", s.warn
 	}
-	tail := m.listQuota(a, width, on) + on(stateStyle).Render(pad(state, 10))
+	return accountRowStatus{mark: mark, markStyle: markStyle, state: state, stateStyle: stateStyle}
+}
+
+// accountRow is one account in the list: its health, name, most used quota
+// window, state, and request count, as far as width allows.
+func (m Model) accountRow(a v1.Account, selected bool, width int) string {
+	s := m.st
+	// Each part carries the selection's background itself: a style around the
+	// whole line would end at the first part's reset.
+	on := func(st lipgloss.Style) lipgloss.Style {
+		if selected {
+			return st.Background(m.theme.SelectedBackground)
+		}
+		return st
+	}
+	blank := func(n int) string { return on(s.text).Render(strings.Repeat(" ", max(0, n))) }
+	status := m.accountRowStatus(a)
+	tail := m.listQuota(a, width, on) + on(status.stateStyle).Render(pad(status.state, 10))
 	if width >= 70 {
 		req := ""
 		if a.Usage != nil {
@@ -400,7 +413,7 @@ func (m Model) accountRow(a v1.Account, selected bool, width int) string {
 	}
 	room := max(8, width-3-lipgloss.Width(tail))
 	name := ansi.Truncate(label(a), room-len(prefix), "…")
-	line := blank(1) + on(markStyle).Render(mark) + blank(1) + on(s.faint).Render(prefix) + on(s.text).Render(name) +
+	line := blank(1) + on(status.markStyle).Render(status.mark) + blank(1) + on(s.faint).Render(prefix) + on(s.text).Render(name) +
 		blank(room-len(prefix)-lipgloss.Width(name)) + tail
 	return pad(line+blank(width-lipgloss.Width(line)), width)
 }

@@ -45,15 +45,15 @@
       "vendored": 2
     },
     "golangci/gocognit": {
-      "first": 50,
+      "first": 49,
       "vendored": 56
     },
     "golangci/goconst": {
-      "first": 81,
+      "first": 77,
       "vendored": 66
     },
     "golangci/gocritic": {
-      "first": 187,
+      "first": 182,
       "vendored": 321
     },
     "golangci/godox": {
