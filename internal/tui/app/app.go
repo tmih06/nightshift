@@ -168,7 +168,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.PasteMsg:
 		if m.picker != nil {
-			return m.updatePickerPaste(msg)
+			m = m.updatePickerPaste(msg)
+			return m, nil
 		}
 		return m.toActive(msg)
 

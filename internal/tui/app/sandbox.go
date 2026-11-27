@@ -241,7 +241,7 @@ func (m Model) updatePickerBranch(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) updatePickerPaste(msg tea.PasteMsg) (Model, tea.Cmd) {
+func (m Model) updatePickerPaste(msg tea.PasteMsg) Model {
 	p := *m.picker
 	if !p.modelOpen && p.hasBranchInput() && p.focusBranch {
 		p.branchInput.SetWidth(m.pickerInputWidth(&p))
@@ -249,7 +249,7 @@ func (m Model) updatePickerPaste(msg tea.PasteMsg) (Model, tea.Cmd) {
 		p.branchErr = ""
 		m.picker = &p
 	}
-	return m, nil
+	return m
 }
 
 // openModelSubmenu validates the branch (when applicable) and forks the
