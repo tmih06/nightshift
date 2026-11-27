@@ -39,29 +39,13 @@ type Client struct {
 	viewer string
 }
 
-// Option changes how a Client is made.
-type Option func(*Client)
-
-// WithHTTPClient uses h for requests, for a proxy, a CA, or a test. It should
-// have no overall Timeout: streams and long polls outlive any.
-func WithHTTPClient(h *http.Client) Option { return func(c *Client) { c.http = h } }
-
-// WithViewer names this client's view of terminals. Two frontends with
-// different names can watch one terminal each at its own size. The default is
-// a name that is unique to the Client.
-func WithViewer(id string) Option { return func(c *Client) { c.viewer = id } }
-
 // New returns a Client for the server at base, such as http://127.0.0.1:7777.
-func New(base, token string, opts ...Option) (*Client, error) {
+func New(base, token string) (*Client, error) {
 	u, err := url.Parse(strings.TrimRight(base, "/"))
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return nil, fmt.Errorf("%q is not a server address like http://127.0.0.1:7777", base)
 	}
-	c := &Client{base: u, token: token, http: &http.Client{Transport: transport()}, viewer: "c" + strconv.FormatInt(time.Now().UnixNano(), 36)}
-	for _, o := range opts {
-		o(c)
-	}
-	return c, nil
+	return &Client{base: u, token: token, http: &http.Client{Transport: transport()}, viewer: "c" + strconv.FormatInt(time.Now().UnixNano(), 36)}, nil
 }
 
 // transport keeps enough idle connections for what a frontend asks at once:
