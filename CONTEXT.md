@@ -167,7 +167,8 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
   opens. gh-dash's log is discarded unless `NIGHTSHIFT_DEBUG` names a file.
 - `S` on a pull request, issue, or repository/branch row checks it out on its
   own volume in a new sandbox. On a pull request, a dialog over gh-dash or the
-  Repo view names the volume and lists the pools with their templates;
+  Repo view names the volume and lists the pools with their templates, only
+  those of agents with a signed-in account (pools kept warm);
   `↑`/`↓` or `j`/`k` picks the pool, and `enter`, `→`/`l`, a number, or a click
   forks a cascading model submenu to the right of the selected pool for that
   harness (`claude`, `codex`, `pi`, `opencode`, `devin`, and so on). Inside the model submenu,

@@ -87,6 +87,42 @@ func TestSandboxKeyAsksWhichPool(t *testing.T) {
 	}
 }
 
+// A pool nightshift-auth keeps at zero has no account: its sandbox could not
+// reach its provider, so the picker does not offer it.
+func TestThePickerOffersOnlyPoolsWithAnAccount(t *testing.T) {
+	m, _ := newModel(t)
+	m.sandboxes = m.sandboxes.WithFleet(nil, map[string]fleet.Pool{
+		"pi-pool":    {Name: "pi-pool", Template: "pi-template", Ready: 1, Desired: 1, Harness: piHarness()},
+		"codex-pool": {Name: "codex-pool", Template: "codex-template", Harness: codexHarness()},
+		"agy-pool":   {Name: "agy-pool", Template: "agy-template"},
+	})
+	m = press(m, "tab")
+	next, _ := m.Update(rocket7)
+	m, ok := next.(Model)
+	if !ok || m.picker == nil || len(m.picker.pools) != 1 || m.picker.pools[0].Name != "pi-pool" {
+		t.Fatalf("picker = %+v", m.picker)
+	}
+	if body := strings.Join(frame(m), "\n"); strings.Contains(body, "codex-pool") || strings.Contains(body, "agy-pool") {
+		t.Errorf("the picker offers a pool with no account:\n%s", body)
+	}
+}
+
+func TestThePickerSaysWhenNoAgentIsSignedIn(t *testing.T) {
+	m, _ := newModel(t)
+	m.sandboxes = m.sandboxes.WithFleet(nil, map[string]fleet.Pool{
+		"codex-pool": {Name: "codex-pool", Template: "codex-template"},
+	})
+	m = press(m, "tab")
+	next, _ := m.Update(rocket7)
+	m, ok := next.(Model)
+	if !ok || m.picker != nil {
+		t.Fatal("a picker opened with nothing to offer")
+	}
+	if body := strings.Join(frame(m), "\n"); !strings.Contains(body, "Accounts tab") {
+		t.Errorf("no word on why nothing can be checked out:\n%s", body)
+	}
+}
+
 func TestThePickerHoldsTheKeyboard(t *testing.T) {
 	m, gh := openPicker(t)
 	before := len(gh.keys)

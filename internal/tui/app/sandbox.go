@@ -57,11 +57,28 @@ func (m Model) prepareRepoPools(repo, url string) (pools []fleet.Pool, notice st
 		}
 		return nil, fmt.Sprintf("cannot check out %q", target)
 	}
-	pools = m.sandboxes.WarmPools()
-	if len(pools) == 0 {
+	all := m.sandboxes.WarmPools()
+	if len(all) == 0 {
 		return nil, "no warm pools to claim from: is the cluster up?"
 	}
+	pools = available(all)
+	if len(pools) == 0 {
+		return nil, "no agent is signed in: sign one in on the Accounts tab"
+	}
 	return pools, ""
+}
+
+// available is the pools a sandbox can start from: those the cluster keeps
+// warm. nightshift-auth scales an agent's pool to zero while it has no
+// account, and a sandbox of that agent could not reach its provider.
+func available(pools []fleet.Pool) []fleet.Pool {
+	out := make([]fleet.Pool, 0, len(pools))
+	for i := range pools {
+		if pools[i].Desired > 0 || pools[i].Ready > 0 {
+			out = append(out, pools[i])
+		}
+	}
+	return out
 }
 
 // preparePicker validates the target repository/number and returns available
