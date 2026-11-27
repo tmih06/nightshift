@@ -2,7 +2,7 @@
   "rules": {
     "deadcode/unreachable-func": {
       "first": 0,
-      "vendored": 113
+      "vendored": 0
     },
     "golangci/contextcheck": {
       "first": 2,
@@ -38,7 +38,7 @@
     },
     "golangci/gochecknoglobals": {
       "first": 65,
-      "vendored": 122
+      "vendored": 121
     },
     "golangci/gochecknoinits": {
       "first": 1,
@@ -54,7 +54,7 @@
     },
     "golangci/gocritic": {
       "first": 187,
-      "vendored": 326
+      "vendored": 321
     },
     "golangci/godox": {
       "first": 0,
@@ -82,7 +82,7 @@
     },
     "golangci/nolintlint": {
       "first": 0,
-      "vendored": 4
+      "vendored": 3
     },
     "golangci/perfsprint": {
       "first": 1,
@@ -114,11 +114,11 @@
     },
     "golangci/unused": {
       "first": 0,
-      "vendored": 69
+      "vendored": 0
     },
     "golangci/wrapcheck": {
       "first": 44,
-      "vendored": 82
+      "vendored": 77
     },
     "jscpd/duplicated-lines": {
       "first": 46,
