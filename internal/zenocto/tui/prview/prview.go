@@ -1616,10 +1616,6 @@ func shareBranchRoom(base, head, room int) (int, int) {
 	return half, room - half
 }
 
-func (m Model) branchRow(width int) string {
-	return m.branchLine(width)
-}
-
 func (m Model) statusHalf() string {
 	return m.joinStatus(m.stateBadge(), m.checksBadge(), m.reviewBadge(), m.pendingBadge())
 }

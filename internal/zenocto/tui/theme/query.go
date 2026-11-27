@@ -1,16 +1,13 @@
 package theme
 
 import (
-	"fmt"
 	"image/color"
 	"io"
-	"os"
 	"strconv"
 	"time"
 
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/charmbracelet/x/term"
 )
 
 // Paid only by a terminal that answers nothing: any answer includes the device attributes, which end the read.
@@ -24,32 +21,6 @@ type Surface struct {
 	// Red and Green are slots 1 and 2 as the terminal paints them, which a slot's RGBA() cannot say.
 	Red   color.Color
 	Green color.Color
-}
-
-func requestPalette(slot int) string {
-	return fmt.Sprintf("\x1b]4;%d;?\x07", slot)
-}
-
-// Query asks the terminal for its colors over one round trip. Call it before
-// Bubble Tea takes the tty; it holds the terminal in raw mode meanwhile.
-func Query(in, out *os.File) Surface {
-	var s Surface
-	if !term.IsTerminal(in.Fd()) || !term.IsTerminal(out.Fd()) {
-		return s
-	}
-
-	state, err := term.MakeRaw(in.Fd())
-	if err != nil {
-		return s
-	}
-	defer term.Restore(in.Fd(), state) //nolint:errcheck
-
-	query := ansi.RequestForegroundColor + ansi.RequestBackgroundColor +
-		requestPalette(int(slotRed)) + requestPalette(int(slotGreen)) +
-		ansi.RequestPrimaryDeviceAttributes
-
-	read(in, out, query, queryTimeout, s.take)
-	return s
 }
 
 func (s *Surface) take(seq string, pa *ansi.Parser) bool {

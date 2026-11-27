@@ -34,7 +34,6 @@ const (
 )
 
 type poller struct {
-	sections []time.Time
 	detailID string
 	detailAt time.Time
 
@@ -44,16 +43,6 @@ type poller struct {
 	// Nothing else slows a failing page fetch: DetailFailed leaves its debt standing.
 	pageID string
 	pageAt time.Time
-}
-
-func (p *poller) stampSection(i, count int, at time.Time) {
-	if i < 0 || i >= count {
-		return
-	}
-	if len(p.sections) != count {
-		p.sections = make([]time.Time, count)
-	}
-	p.sections[i] = at
 }
 
 func (p *poller) stampDetail(id string, at time.Time) {
@@ -69,14 +58,6 @@ func (p poller) pageDue(id string, at time.Time) bool {
 		return true
 	}
 	return at.Sub(p.pageAt) >= pollIdle
-}
-
-// A section that has never answered is not due: its first fetch is still out.
-func (p poller) sectionDue(i int, at time.Time) bool {
-	if i < 0 || i >= len(p.sections) || p.sections[i].IsZero() {
-		return false
-	}
-	return at.Sub(p.sections[i]) >= pollIdle
 }
 
 func (p poller) detailDue(id string, every time.Duration, at time.Time) bool {

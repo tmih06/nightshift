@@ -31,8 +31,6 @@ func New(name string) (Syntax, bool) {
 	return Syntax{style: styles.Get(name), cache: &sync.Map{}}, ok || name == ""
 }
 
-func Names() []string { return styles.Names() }
-
 // Lines splits code into lines of colored tokens, choosing the lexer from path.
 // Pass a whole file: lexers carry state across lines.
 func (s *Syntax) Lines(path, code string) [][]Token {

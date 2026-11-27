@@ -168,19 +168,6 @@ func MergeStateLabel(th theme.Theme, s gh.MergeState, checks gh.CheckState) (str
 	return "Checking", th.Subtle
 }
 
-// ReviewColor is the review decision as a color. No review required reads as approved.
-func ReviewColor(th theme.Theme, d gh.ReviewDecision) color.Color {
-	switch d {
-	case gh.ReviewDecisionChangesRequested:
-		return th.Error
-	case gh.ReviewDecisionReviewRequired:
-		return th.Warning
-	case gh.ReviewDecisionApproved, gh.ReviewDecisionNone:
-		return th.Success
-	}
-	return th.Success
-}
-
 // ReviewLabel names the review decision, or returns empty when no review is required.
 func ReviewLabel(th theme.Theme, d gh.ReviewDecision) (string, color.Color) {
 	switch d {
