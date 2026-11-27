@@ -13,8 +13,9 @@ import (
 	ghtheme "github.com/tmih06/nightshift/internal/ghdash/tui/theme"
 )
 
-func newBenchRepoModel(b *testing.B, numRepos int, withReadmes bool) (*Model, *fakeClient) {
+func newBenchRepoModel(b *testing.B, withReadmes bool) *Model {
 	b.Helper()
+	const numRepos = 50
 	fc := newFakeClient()
 	fc.repos = make([]Repo, numRepos)
 	fc.overviews = make(map[string]Repo, numRepos)
@@ -104,11 +105,11 @@ func main() {
 	m.ensureNavCursorValid()
 	m.syncSelectionFromNav()
 	_ = m.View()
-	return m, fc
+	return m
 }
 
 func BenchmarkRepoNavKeyToFrame(b *testing.B) {
-	m, _ := newBenchRepoModel(b, 50, true)
+	m := newBenchRepoModel(b, true)
 	down := tea.KeyPressMsg{Text: "j"}
 	up := tea.KeyPressMsg{Text: "k"}
 	b.ResetTimer()
@@ -121,7 +122,7 @@ func BenchmarkRepoNavKeyToFrame(b *testing.B) {
 }
 
 func BenchmarkRepoNavWheelToFrame(b *testing.B) {
-	m, _ := newBenchRepoModel(b, 50, true)
+	m := newBenchRepoModel(b, true)
 	down := tea.MouseWheelMsg{X: 5, Y: 10, Button: tea.MouseWheelDown}
 	up := tea.MouseWheelMsg{X: 5, Y: 10, Button: tea.MouseWheelUp}
 	b.ResetTimer()
@@ -134,7 +135,7 @@ func BenchmarkRepoNavWheelToFrame(b *testing.B) {
 }
 
 func BenchmarkRepoViewOnly(b *testing.B) {
-	m, _ := newBenchRepoModel(b, 50, true)
+	m := newBenchRepoModel(b, true)
 	b.ResetTimer()
 	for b.Loop() {
 		_ = m.View()
@@ -145,7 +146,7 @@ func BenchmarkRepoNavColdSweep20(b *testing.B) {
 	down := tea.KeyPressMsg{Text: "j"}
 	for b.Loop() {
 		b.StopTimer()
-		m, _ := newBenchRepoModel(b, 50, false)
+		m := newBenchRepoModel(b, false)
 		b.StartTimer()
 		fetches := 0
 		for range 20 {
@@ -160,7 +161,7 @@ func BenchmarkRepoNavColdSweep20(b *testing.B) {
 }
 
 func BenchmarkRepoNavColdReadme(b *testing.B) {
-	m, _ := newBenchRepoModel(b, 50, true)
+	m := newBenchRepoModel(b, true)
 	block := "\n```go\nfunc process(items []string) int {\n\ttotal := 0\n\tfor _, item := range items {\n\t\ttotal += len(item)\n\t}\n\treturn total\n}\n```\n\n" +
 		"- Bullet point describing **architecture**, `config.yml`, and edge cases.\n" +
 		"- Follow-up item covering rollout and verification.\n"
