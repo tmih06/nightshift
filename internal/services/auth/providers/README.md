@@ -6,9 +6,12 @@ implementing `Provider` (`provider.go`), listed in `All`.
 ## Adding an agent
 
 1. Write `<agent>.go` with its `Info` (id, name, egress secret, warm pool,
-   where its CLI keeps its login, and the API hosts that get the token),
-   `Begin` and `Finish` (OAuth with PKCE; `Finish` takes what the person
-   pastes: the code the provider shows, or the address the browser ends on),
+   where its CLI keeps its login, the API hosts that get the token, and its
+   `Methods`: every way the agent's own CLI signs in, the browser first),
+   `Begin` and `Finish` for each method (`KindBrowser`: a link, then the
+   pasted code or address; `KindDevice`: a code to enter on the provider's
+   page, finished by asking until `Finish` stops answering `ErrPending`;
+   `KindPaste`: a token or the CLI's login file, read with `loginFile`),
    `Refresh` (`ErrNoRefresh` when the login cannot be renewed),
    `SandboxLogin` (built from a named list of fields, the placeholder for the
    token, nothing that names the account), and `Companions` (other
@@ -33,13 +36,16 @@ Copyright Michael Kinsy) as vendored in
 | Here | There (`vendor/github.com/MichaelKinsy/PiG/ai/`) |
 | --- | --- |
 | `claude.go` | `oauth_anthropic.go` (copy-code login) |
-| `codex.go` | `oauth_openai_codex.go` (browser login) |
+| `codex.go` | `oauth_openai_codex.go` (browser and device-code logins) |
 | `antigravity.go` | `google_cloud_code_auth.go` (Antigravity's client) |
-| `devin.go` | `oauth_devin.go`, `devin_proto.go` (session token prefix) |
+| `devin.go` | `oauth_devin.go` (browser and CLI-credential logins), `devin_proto.go` (session token prefix) |
 | `oauth.go` | PKCE and paste parsing from `oauth_*.go` |
 
-Left out: the local callback servers (in a cluster the browser's localhost
-address never loads, so the paste is the only way), device-code logins,
+New here: pasting a CLI's login file, which also carries logins over from
+another tool, and Claude's `setup-token` token. Left out: the local callback
+servers (in a cluster the browser's localhost address never loads, so the
+paste is the only way), API keys for Claude and Codex (billed per use, and sent
+in other headers than the subscription tokens they would share a chain with),
 Antigravity's Cloud Code project binding (agy binds its own), and Devin's
 identity lookup over Connect RPC (the session token's claims name the
 account). The Claude profile lookup, which fills in the plan a sandbox login

@@ -107,21 +107,43 @@ func (c *fakeCluster) files(t *testing.T) map[string]string {
 }
 
 // fakeProvider is an agent whose sign-in takes the pasted text as its token
-// and whose renewal appends "+".
+// ("bad" is refused) and whose renewal appends "+". Its device sign-in is
+// approved on the second ask, as TOKEN-D.
 type fakeProvider struct {
 	id      string
 	renewal error
+	asks    int
 }
 
 func (f *fakeProvider) Info() providers.Info {
-	return providers.Info{ID: f.id, Name: f.id, Secret: strings.ToUpper(f.id) + "_TOKEN", Pool: f.id + "-pool", LoginFile: "." + f.id + "/login"}
+	return providers.Info{
+		ID: f.id, Name: f.id, Secret: strings.ToUpper(f.id) + "_TOKEN", Pool: f.id + "-pool", LoginFile: "." + f.id + "/login",
+		Methods: []providers.Method{
+			{ID: "browser", Label: "browser", Kind: providers.KindBrowser},
+			{ID: "device", Label: "device", Kind: providers.KindDevice},
+		},
+	}
 }
 
-func (f *fakeProvider) Begin() (providers.Pending, error) {
-	return providers.Pending{Provider: f.id, URL: "https://example.com/" + f.id, State: "s"}, nil
+func (f *fakeProvider) Begin(_ context.Context, method string) (providers.Pending, error) {
+	m := f.Info().Methods[0]
+	if method == "device" {
+		m = f.Info().Methods[1]
+	}
+	return providers.Pending{Provider: f.id, Method: m, URL: "https://example.com/" + f.id, State: "s"}, nil
 }
 
-func (f *fakeProvider) Finish(_ context.Context, _ providers.Pending, input string) (providers.Credential, error) {
+func (f *fakeProvider) Finish(_ context.Context, p providers.Pending, input string) (providers.Credential, error) {
+	if p.Method.Kind == providers.KindDevice {
+		f.asks++
+		if f.asks < 2 {
+			return providers.Credential{}, providers.ErrPending
+		}
+		input = "TOKEN-D d@example.com"
+	}
+	if input == "bad" {
+		return providers.Credential{}, errors.New("not a code")
+	}
 	token, email, _ := strings.Cut(input, " ")
 	return providers.Credential{Access: token, Refresh: "r-" + token, Email: email, Expires: time.Now().Add(time.Hour)}, nil
 }
@@ -157,7 +179,7 @@ func newTestService(t *testing.T, cluster Cluster, list ...providers.Provider) *
 // signIn signs an alpha account in with input.
 func signIn(t *testing.T, svc *Service, input string) string {
 	t.Helper()
-	_, id, err := svc.StartLogin("alpha")
+	_, id, err := svc.StartLogin(t.Context(), "alpha", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,6 +188,44 @@ func signIn(t *testing.T, svc *Service, input string) string {
 		t.Fatal(err)
 	}
 	return name
+}
+
+// A mistyped paste must not end the sign-in: the person fixes it and tries
+// again with the same link, and only a finished sign-in is gone.
+func TestAFailedAnswerLeavesTheSignInOpen(t *testing.T) {
+	svc := newTestService(t, newFakeCluster("alpha-pool"), &fakeProvider{id: "alpha"})
+	_, id, err := svc.StartLogin(t.Context(), "alpha", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CompleteLogin(t.Context(), id, "bad"); err == nil {
+		t.Fatal("a bad paste signed in")
+	}
+	if _, err := svc.CompleteLogin(t.Context(), id, "TOKEN-1 a@example.com"); err != nil {
+		t.Fatalf("the second try: %v", err)
+	}
+	if _, err := svc.CompleteLogin(t.Context(), id, "TOKEN-1 a@example.com"); !errors.Is(err, ErrUnknownLogin) {
+		t.Errorf("a finished sign-in answered again: %v", err)
+	}
+}
+
+func TestADeviceSignInWaitsForApproval(t *testing.T) {
+	cluster := newFakeCluster("alpha-pool")
+	svc := newTestService(t, cluster, &fakeProvider{id: "alpha"})
+	pend, id, err := svc.StartLogin(t.Context(), "alpha", "device")
+	if err != nil || pend.Method.Kind != providers.KindDevice {
+		t.Fatalf("pending = %+v, %v", pend, err)
+	}
+	if _, err := svc.CompleteLogin(t.Context(), id, ""); !errors.Is(err, providers.ErrPending) {
+		t.Fatalf("an unapproved device sign-in answered %v", err)
+	}
+	name, err := svc.CompleteLogin(t.Context(), id, "")
+	if err != nil || name != "alpha-d@example.com" {
+		t.Fatalf("approved: %q, %v", name, err)
+	}
+	if got := cluster.egress("REAL_ALPHA_TOKEN"); got != "TOKEN-D" {
+		t.Errorf("REAL_ALPHA_TOKEN = %q", got)
+	}
 }
 
 // A sign-in reaches the cluster at once: the real token only to the egress

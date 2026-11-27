@@ -112,12 +112,14 @@ func TestTheClientDrivesTerminalsAndAccounts(t *testing.T) {
 	if err != nil || len(snap.Providers) != 1 {
 		t.Fatalf("Accounts = %+v, %v", snap, err)
 	}
-	login, err := c.StartLogin(ctx, "claude")
+	login, err := c.StartLogin(ctx, "claude", "")
 	if err != nil || login.ID != "st1" {
 		t.Fatalf("StartLogin = %+v, %v", login, err)
 	}
+	if p, err := c.CompleteLogin(ctx, login, "http://localhost:1/cb?code=x"); err != nil || !p.Done {
+		t.Errorf("CompleteLogin = %+v, %v", p, err)
+	}
 	for name, err := range map[string]error{
-		"CompleteLogin": c.CompleteLogin(ctx, login, "http://localhost:1/cb?code=x"),
 		"CancelLogin":   c.CancelLogin(ctx, login),
 		"SetDisabled":   c.SetDisabled(ctx, "a@b.json", true),
 		"RemoveAccount": c.RemoveAccount(ctx, "a@b.json"),

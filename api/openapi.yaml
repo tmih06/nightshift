@@ -456,7 +456,7 @@ paths:
             schema: {$ref: "#/components/schemas/LoginRequest"}
       responses:
         "201":
-          description: Open the URL in a browser and approve.
+          description: What to do next depends on the login's method kind.
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Login"}
@@ -465,7 +465,7 @@ paths:
     post:
       tags: [accounts]
       operationId: completeLogin
-      summary: Finish a sign-in with the address the browser ended on.
+      summary: Finish a sign-in, or ask after a device sign-in.
       parameters:
         - {name: id, in: path, required: true, schema: {type: string}}
       requestBody:
@@ -474,7 +474,11 @@ paths:
           application/json:
             schema: {$ref: "#/components/schemas/LoginCompletion"}
       responses:
-        "204": {description: The account is saved.}
+        "200":
+          description: The account is saved, or a device sign-in still waits.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/LoginProgress"}
         default: {$ref: "#/components/responses/Problem"}
   /v1/accounts/logins/{id}:
     delete:
@@ -914,6 +918,26 @@ components:
       properties:
         id: {type: string, examples: [claude]}
         name: {type: string, examples: [Claude Code]}
+        methods:
+          type: array
+          description: The ways to sign one of its accounts in, the usual one first.
+          items: {$ref: "#/components/schemas/LoginMethod"}
+    LoginMethod:
+      type: object
+      required: [id, label, kind]
+      properties:
+        id: {type: string, examples: [device]}
+        label: {type: string}
+        kind:
+          type: string
+          enum: [browser, device, paste]
+          description: |
+            browser: open the login's url, approve, and complete with the code
+            the page shows or the address the browser ends on. device: open the
+            url and enter userCode; complete with no input every pollSeconds
+            until done. paste: complete with a token or login file made
+            elsewhere; there is no url.
+        hint: {type: string, description: What to do, or where the pasted value comes from.}
     Accounts:
       type: object
       required: [observedAt, providers, accounts]
@@ -1084,19 +1108,35 @@ components:
       required: [provider]
       properties:
         provider: {type: string}
+        method: {type: string, description: One of the provider's method ids; empty is its first.}
     Login:
       type: object
-      required: [id, provider, url]
+      required: [id, provider, method]
       properties:
         id: {type: string}
         provider: {type: string}
-        url: {type: string, format: uri}
+        method: {$ref: "#/components/schemas/LoginMethod"}
+        url: {type: string, format: uri, description: The page to open; absent for a paste.}
+        userCode: {type: string, description: What to enter on the page, for a device sign-in.}
+        pollSeconds: {type: integer, description: How often to ask after a device sign-in.}
+    LoginProgress:
+      type: object
+      required: [done]
+      properties:
+        done: {type: boolean, description: False while a device sign-in waits for approval.}
+        account: {type: string, description: The signed-in account's name once done.}
     LoginCompletion:
       type: object
-      required: [provider, redirectUrl]
+      required: [provider]
       properties:
         provider: {type: string}
-        redirectUrl: {type: string}
+        input:
+          type: string
+          description: |
+            What the person pasted: the address the browser ended on, the code
+            the page showed, or a token or login file. Empty when asking after
+            a device sign-in.
+        redirectUrl: {type: string, description: Input's older name, read when input is empty.}
     AccountPatch:
       type: object
       properties:

@@ -10,15 +10,30 @@ import (
 	"time"
 
 	"charm.land/log/v2"
+
+	"github.com/tmih06/nightshift/internal/services/auth/providers"
 )
 
 // The wire types of nightshift-auth's API. Only nightshiftd calls it.
 
 // ProviderJSON is one agent.
 type ProviderJSON struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Secret string `json:"secret"`
+	ID      string       `json:"id"`
+	Name    string       `json:"name"`
+	Secret  string       `json:"secret"`
+	Methods []MethodJSON `json:"methods"`
+}
+
+// MethodJSON is one way to sign an agent's account in.
+type MethodJSON struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	Kind  string `json:"kind"`
+	Hint  string `json:"hint,omitempty"`
+}
+
+func methodJSON(m providers.Method) MethodJSON {
+	return MethodJSON{ID: m.ID, Label: m.Label, Kind: string(m.Kind), Hint: m.Hint}
 }
 
 // AccountJSON is one account, without its tokens.
@@ -46,9 +61,15 @@ type AccountsJSON struct {
 
 // LoginJSON is a started sign-in.
 type LoginJSON struct {
-	ID       string `json:"id"`
-	Provider string `json:"provider"`
-	URL      string `json:"url"`
+	ID       string     `json:"id"`
+	Provider string     `json:"provider"`
+	Method   MethodJSON `json:"method"`
+	// URL is the page to open; empty when the sign-in is a paste.
+	URL string `json:"url,omitempty"`
+	// UserCode is what to enter on URL's page, and PollSeconds how often to
+	// ask whether it was, for a device sign-in.
+	UserCode    string `json:"userCode,omitempty"`
+	PollSeconds int    `json:"pollSeconds,omitempty"`
 }
 
 // Handler serves the API, every route but /healthz behind key.
@@ -81,8 +102,13 @@ func (s *Service) Handler(key string) http.Handler {
 func (s *Service) handleProviders(w http.ResponseWriter, _ *http.Request) {
 	list := s.Providers()
 	out := make([]ProviderJSON, 0, len(list))
-	for _, p := range list {
-		out = append(out, ProviderJSON{ID: p.ID, Name: p.Name, Secret: p.Secret})
+	for i := range list {
+		p := &list[i]
+		pj := ProviderJSON{ID: p.ID, Name: p.Name, Secret: p.Secret, Methods: []MethodJSON{}}
+		for _, m := range p.Methods {
+			pj.Methods = append(pj.Methods, methodJSON(m))
+		}
+		out = append(out, pj)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -113,16 +139,20 @@ func (s *Service) nextRefresh(a *Account) time.Time {
 func (s *Service) handleStartLogin(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Provider string `json:"provider"`
+		Method   string `json:"method"`
 	}
 	if !readJSON(w, r, &req) {
 		return
 	}
-	pend, id, err := s.StartLogin(req.Provider)
+	pend, id, err := s.StartLogin(r.Context(), req.Provider, req.Method)
 	if err != nil {
 		writeError(w, statusOf(err), err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, LoginJSON{ID: id, Provider: pend.Provider, URL: pend.URL})
+	writeJSON(w, http.StatusCreated, LoginJSON{
+		ID: id, Provider: pend.Provider, Method: methodJSON(pend.Method), URL: pend.URL,
+		UserCode: pend.UserCode, PollSeconds: int((pend.Interval + time.Second - 1) / time.Second),
+	})
 }
 
 func (s *Service) handleCompleteLogin(w http.ResponseWriter, r *http.Request) {
@@ -133,6 +163,10 @@ func (s *Service) handleCompleteLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name, err := s.CompleteLogin(r.Context(), r.PathValue("id"), req.Input)
+	if errors.Is(err, providers.ErrPending) {
+		writeJSON(w, http.StatusAccepted, map[string]bool{"pending": true})
+		return
+	}
 	if err != nil {
 		writeError(w, statusOf(err), err)
 		return
@@ -187,6 +221,8 @@ func statusOf(err error) int {
 	switch {
 	case errors.Is(err, ErrUnknownProvider), errors.Is(err, ErrUnknownAccount), errors.Is(err, ErrUnknownLogin):
 		return http.StatusNotFound
+	case errors.Is(err, ErrLoginBusy):
+		return http.StatusConflict
 	default:
 		return http.StatusBadRequest
 	}

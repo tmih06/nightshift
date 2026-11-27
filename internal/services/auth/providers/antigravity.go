@@ -7,11 +7,12 @@ import (
 	"net/url"
 )
 
-// Antigravity's sign-in: Google OAuth with PKCE on Antigravity's own published
-// desktop client, which its refresh must use too. The browser ends on a
-// 127.0.0.1 address; pasting it finishes the sign-in. agy binds its own Cloud
-// Code project, so none is bound here. Ported from PiG's
-// ai/google_cloud_code_auth.go.
+// Antigravity's sign-ins: Google OAuth with PKCE on Antigravity's own
+// published desktop client, which its refresh must use too. The browser ends
+// on a 127.0.0.1 address; pasting it finishes the sign-in. Google offers this
+// client no device code, so the other way in is a login file pasted from a
+// machine where agy is signed in. agy binds its own Cloud Code project, so
+// none is bound here. Ported from PiG's ai/google_cloud_code_auth.go.
 const (
 	agyClientID     = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
 	agyClientSecret = "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"
@@ -40,10 +41,27 @@ func (*antigravity) Info() Info {
 		ID: "antigravity", Name: "Antigravity", Secret: "AGY_ACCESS_TOKEN",
 		Pool: "agy-pool", LoginFile: ".gemini/antigravity-cli/antigravity-oauth-token",
 		Hosts: []string{"cloudcode-pa.googleapis.com", "daily-cloudcode-pa.googleapis.com", "aicode.googleapis.com"},
+		Methods: []Method{
+			{
+				ID: methodBrowser, Label: "Google account, in the browser", Kind: KindBrowser,
+				Hint: "Approve, then paste the 127.0.0.1 address the browser ends on.",
+			},
+			{
+				ID: methodFile, Label: "Login file from agy", Kind: KindPaste,
+				Hint: "Paste ~/.gemini/antigravity-cli/antigravity-oauth-token from a machine where agy is signed in.",
+			},
+		},
 	}
 }
 
-func (a *antigravity) Begin() (Pending, error) {
+func (a *antigravity) Begin(_ context.Context, id string) (Pending, error) {
+	m, err := method(a, id)
+	if err != nil {
+		return Pending{}, err
+	}
+	if m.Kind == KindPaste {
+		return Pending{Provider: a.Info().ID, Method: m}, nil
+	}
 	verifier, challenge, err := pkce()
 	if err != nil {
 		return Pending{}, err
@@ -63,12 +81,15 @@ func (a *antigravity) Begin() (Pending, error) {
 	q.Set("prompt", "consent")
 	q.Set(paramState, state)
 	return Pending{
-		Provider: a.Info().ID, URL: a.authorizeURL + "?" + q.Encode(),
+		Provider: a.Info().ID, Method: m, URL: a.authorizeURL + "?" + q.Encode(),
 		State: state, Verifier: verifier, RedirectURI: agyRedirectURI,
 	}, nil
 }
 
 func (a *antigravity) Finish(ctx context.Context, p Pending, input string) (Credential, error) {
+	if p.Method.ID == methodFile {
+		return a.finishFile(ctx, input)
+	}
 	code, state := codeAndState(input)
 	if err := checkCode(code, state, p.State); err != nil {
 		return Credential{}, err
@@ -81,13 +102,40 @@ func (a *antigravity) Finish(ctx context.Context, p Pending, input string) (Cred
 	if err != nil {
 		return Credential{}, fmt.Errorf("antigravity sign-in: %w", err)
 	}
+	a.lookupEmail(ctx, &cred)
+	return cred, nil
+}
+
+// finishFile takes agy's pasted token file, renewing its token when it is
+// about to lapse.
+func (a *antigravity) finishFile(ctx context.Context, input string) (Credential, error) {
+	f, ok := loginFile(input)
+	if !ok {
+		return Credential{}, errNotLoginFile
+	}
+	cred := Credential{Access: f.Access, Refresh: f.Refresh, Expires: f.Expires, Email: f.Email}
+	if stale(cred) {
+		renewed, err := a.Refresh(ctx, cred)
+		if err != nil {
+			return Credential{}, err
+		}
+		cred = renewed
+	}
+	if cred.Email == "" || cred.Email == SandboxEmail {
+		cred.Email = ""
+		a.lookupEmail(ctx, &cred)
+	}
+	return cred, nil
+}
+
+// lookupEmail asks Google who signed in; a failed lookup keeps the login.
+func (a *antigravity) lookupEmail(ctx context.Context, cred *Credential) {
 	var info struct {
 		Email string `json:"email"`
 	}
 	if do(ctx, a.hc, call{method: http.MethodGet, url: a.userInfo, bearer: cred.Access}, &info) == nil {
 		cred.Email = info.Email
 	}
-	return cred, nil
 }
 
 func (a *antigravity) Refresh(ctx context.Context, old Credential) (Credential, error) {

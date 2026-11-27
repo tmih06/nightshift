@@ -2,15 +2,19 @@ package providers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
-// Claude Code's sign-in: OAuth with PKCE through claude.ai, finished by
-// pasting the code Anthropic's page shows, so no localhost address is needed.
-// Ported from PiG's ai/oauth_anthropic.go (copy-code login).
+// Claude Code's sign-ins: OAuth with PKCE through claude.ai, finished by
+// pasting the code Anthropic's page shows, so no localhost address is needed;
+// a long-lived token made by claude setup-token; or a login file pasted from
+// a machine where claude is signed in. Ported from PiG's ai/oauth_anthropic.go
+// (copy-code login).
 const (
 	claudeClientID     = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 	claudeAuthorizeURL = "https://claude.ai/oauth/authorize"
@@ -18,6 +22,8 @@ const (
 	claudeRedirectURI  = "https://platform.claude.com/oauth/code/callback"
 	claudeProfileURL   = "https://api.anthropic.com/api/oauth/profile"
 	claudeScopes       = "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
+	// claudeTokenLife is how long a token from claude setup-token lasts.
+	claudeTokenLife = 365 * 24 * time.Hour
 )
 
 type claude struct {
@@ -34,10 +40,32 @@ func (*claude) Info() Info {
 		ID: "claude", Name: "Claude Code", Secret: "CLAUDE_ACCESS_TOKEN",
 		Pool: "claude-code-pool", LoginFile: ".claude/.credentials.json",
 		Hosts: []string{"api.anthropic.com"},
+		Methods: []Method{
+			{
+				ID: methodBrowser, Label: "Claude account, in the browser", Kind: KindBrowser,
+				Hint: "Approve, then paste the code the page shows.",
+			},
+			{
+				ID: methodToken, Label: "Token from claude setup-token", Kind: KindPaste,
+				Hint: "Run claude setup-token where claude is installed and paste the sk-ant-oat token. It lasts a year and is not renewed.",
+			},
+			{
+				ID: methodFile, Label: "Login file from Claude Code", Kind: KindPaste,
+				Hint: "Paste ~/.claude/.credentials.json from a machine where claude is signed in " +
+					"(on a Mac: security find-generic-password -s 'Claude Code-credentials' -w).",
+			},
+		},
 	}
 }
 
-func (c *claude) Begin() (Pending, error) {
+func (c *claude) Begin(_ context.Context, id string) (Pending, error) {
+	m, err := method(c, id)
+	if err != nil {
+		return Pending{}, err
+	}
+	if m.Kind == KindPaste {
+		return Pending{Provider: c.Info().ID, Method: m}, nil
+	}
 	verifier, challenge, err := pkce()
 	if err != nil {
 		return Pending{}, err
@@ -52,12 +80,18 @@ func (c *claude) Begin() (Pending, error) {
 	q.Set("code_challenge_method", "S256")
 	q.Set(paramState, verifier)
 	return Pending{
-		Provider: c.Info().ID, URL: c.authorizeURL + "?" + q.Encode(),
+		Provider: c.Info().ID, Method: m, URL: c.authorizeURL + "?" + q.Encode(),
 		State: verifier, Verifier: verifier, RedirectURI: claudeRedirectURI,
 	}, nil
 }
 
 func (c *claude) Finish(ctx context.Context, p Pending, input string) (Credential, error) {
+	switch p.Method.ID {
+	case methodToken:
+		return c.finishToken(ctx, input)
+	case methodFile:
+		return c.finishFile(ctx, input)
+	}
 	code, state := codeAndState(input)
 	if err := checkCode(code, state, p.State); err != nil {
 		return Credential{}, err
@@ -71,6 +105,40 @@ func (c *claude) Finish(ctx context.Context, p Pending, input string) (Credentia
 	})
 	if err != nil {
 		return Credential{}, fmt.Errorf("claude sign-in: %w", err)
+	}
+	c.describe(ctx, &cred)
+	return cred, nil
+}
+
+// finishToken takes a token from claude setup-token. An API key is refused:
+// it is billed per use and travels in another header.
+func (c *claude) finishToken(ctx context.Context, input string) (Credential, error) {
+	tok := strings.TrimSpace(input)
+	switch {
+	case strings.HasPrefix(tok, "sk-ant-api"):
+		return Credential{}, errors.New("that is an API key, billed per use: paste a token from claude setup-token, or sign in with your Claude account")
+	case !strings.HasPrefix(tok, "sk-ant-oat"):
+		return Credential{}, errors.New("that is not a token from claude setup-token, which starts with sk-ant-oat")
+	}
+	cred := Credential{Access: tok, Expires: time.Now().Add(claudeTokenLife)}
+	c.describe(ctx, &cred)
+	return cred, nil
+}
+
+// finishFile takes a pasted .credentials.json, renewing its token when it is
+// about to lapse.
+func (c *claude) finishFile(ctx context.Context, input string) (Credential, error) {
+	f, ok := loginFile(input)
+	if !ok {
+		return Credential{}, errNotLoginFile
+	}
+	cred := Credential{Access: f.Access, Refresh: f.Refresh, Expires: f.Expires}
+	if stale(cred) {
+		renewed, err := c.Refresh(ctx, cred)
+		if err != nil {
+			return Credential{}, err
+		}
+		cred = renewed
 	}
 	c.describe(ctx, &cred)
 	return cred, nil

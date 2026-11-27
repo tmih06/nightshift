@@ -18,6 +18,32 @@ type Provider struct {
 	ID string `json:"id"`
 	// Name is what people call it.
 	Name string `json:"name"`
+	// Methods are the ways to sign one of its accounts in, the usual one
+	// first.
+	Methods []LoginMethod `json:"methods,omitempty"`
+}
+
+// The kinds of sign-in, the values of LoginMethod.Kind.
+const (
+	// LoginBrowser: open Login.URL, approve, and complete the sign-in with
+	// the code the page shows or the address the browser ends on.
+	LoginBrowser = "browser"
+	// LoginDevice: open Login.URL and enter Login.UserCode. Complete the
+	// sign-in with no input every Login.PollSeconds until it is done.
+	LoginDevice = "device"
+	// LoginPaste: complete the sign-in with something made elsewhere, such
+	// as a token or a CLI's login file. There is no URL.
+	LoginPaste = "paste"
+)
+
+// LoginMethod is one way to sign an agent's account in.
+type LoginMethod struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	// Kind is one of the Login kinds.
+	Kind string `json:"kind"`
+	// Hint says what to do, or where the pasted value comes from.
+	Hint string `json:"hint,omitempty"`
 }
 
 // Accounts is everything the accounts screen shows: GET /v1/accounts.
@@ -196,23 +222,44 @@ type Published struct {
 // LoginRequest starts signing an account in.
 type LoginRequest struct {
 	Provider string `json:"provider"`
+	// Method is one of the provider's LoginMethod IDs; empty is its first.
+	Method string `json:"method,omitempty"`
 }
 
-// Login is a sign-in in progress. The person opens URL in a browser and
-// approves; the browser then lands on an address that does not load, and that
-// address goes to CompleteLogin.
+// Login is a sign-in in progress; what to do with it depends on
+// Method.Kind. For a browser sign-in the person opens URL and approves, and
+// the browser then lands on an address that does not load, or the page shows
+// a code: either goes to CompleteLogin.
 type Login struct {
-	ID       string `json:"id"`
-	Provider string `json:"provider"`
-	URL      string `json:"url"`
+	ID       string      `json:"id"`
+	Provider string      `json:"provider"`
+	Method   LoginMethod `json:"method"`
+	// URL is the page to open; empty for a paste.
+	URL string `json:"url,omitempty"`
+	// UserCode is what to enter on URL's page, and PollSeconds how often to
+	// ask whether it was, for a device sign-in.
+	UserCode    string `json:"userCode,omitempty"`
+	PollSeconds int    `json:"pollSeconds,omitempty"`
 }
 
 // LoginCompletion finishes a sign-in.
 type LoginCompletion struct {
 	// Provider is Login.Provider.
 	Provider string `json:"provider"`
-	// RedirectURL is the address the browser ended on after approval.
-	RedirectURL string `json:"redirectUrl"`
+	// Input is what the person pasted: the address the browser ended on, the
+	// code the page showed, or a token or login file. It is empty when asking
+	// after a device sign-in.
+	Input string `json:"input,omitempty"`
+	// RedirectURL is Input's older name, read when Input is empty.
+	RedirectURL string `json:"redirectUrl,omitempty"`
+}
+
+// LoginProgress answers a completion. A device sign-in that is not approved
+// yet is not Done: ask again after Login.PollSeconds.
+type LoginProgress struct {
+	Done bool `json:"done"`
+	// Account is the signed-in account's name once Done.
+	Account string `json:"account,omitempty"`
 }
 
 // AccountPatch changes an account. Only the fields present change.

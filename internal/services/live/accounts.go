@@ -60,7 +60,11 @@ func (a *Accounts) Accounts(ctx context.Context) (v1.Accounts, error) {
 		PublishedAt: snap.PublishedAt.UTC(),
 	}
 	for _, p := range snap.Providers {
-		out.Providers = append(out.Providers, v1.Provider{ID: p.ID, Name: p.Name})
+		vp := v1.Provider{ID: p.ID, Name: p.Name}
+		for _, m := range p.Methods {
+			vp.Methods = append(vp.Methods, v1.LoginMethod(m))
+		}
+		out.Providers = append(out.Providers, vp)
 	}
 	if snap.UsageErr != nil {
 		out.UsageError = snap.UsageErr.Error()
@@ -170,18 +174,30 @@ func modelsOf(src map[string]accounts.ModelUsage) map[string]v1.ModelUsage {
 	return out
 }
 
-// StartLogin begins signing an account in.
-func (a *Accounts) StartLogin(ctx context.Context, provider string) (v1.Login, error) {
-	l, err := a.svc.StartLogin(ctx, provider)
+// StartLogin begins signing an account in by method.
+func (a *Accounts) StartLogin(ctx context.Context, provider, method string) (v1.Login, error) {
+	l, err := a.svc.StartLogin(ctx, provider, method)
 	if err != nil {
 		return v1.Login{}, fmt.Errorf("start login: %w", err)
 	}
-	return v1.Login{ID: l.State, Provider: l.Provider, URL: l.URL}, nil
+	return v1.Login{
+		ID: l.State, Provider: l.Provider, Method: v1.LoginMethod(l.Method), URL: l.URL,
+		UserCode: l.UserCode, PollSeconds: int(l.Poll / time.Second),
+	}, nil
 }
 
-// CompleteLogin finishes a sign-in with the address the browser ended on.
-func (a *Accounts) CompleteLogin(ctx context.Context, id string, c v1.LoginCompletion) error {
-	return wrapErr("complete the sign-in", a.svc.CompleteLogin(ctx, accounts.Login{Provider: c.Provider, State: id}, c.RedirectURL))
+// CompleteLogin finishes a sign-in with what the person pasted, or asks after
+// a device sign-in when the input is empty.
+func (a *Accounts) CompleteLogin(ctx context.Context, id string, c v1.LoginCompletion) (v1.LoginProgress, error) {
+	kind := ""
+	if c.Input == "" {
+		kind = accounts.KindDevice // only a device sign-in is asked after with nothing
+	}
+	p, err := a.svc.CompleteLogin(ctx, accounts.Login{Provider: c.Provider, State: id, Method: accounts.Method{Kind: kind}}, c.Input)
+	if err != nil {
+		return v1.LoginProgress{}, wrapErr("complete the sign-in", err)
+	}
+	return v1.LoginProgress{Done: p.Done, Account: p.Account}, nil
 }
 
 // CancelLogin abandons a sign-in.

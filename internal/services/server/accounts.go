@@ -61,7 +61,7 @@ func (s *Server) startLogin(w http.ResponseWriter, r *http.Request) error {
 	if req.Provider == "" {
 		return invalid("provider is required")
 	}
-	login, err := a.StartLogin(r.Context(), req.Provider)
+	login, err := a.StartLogin(r.Context(), req.Provider, req.Method)
 	if err != nil {
 		return fmt.Errorf("start login: %w", err)
 	}
@@ -69,15 +69,29 @@ func (s *Server) startLogin(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+// completeLogin answers with the sign-in's progress. An empty input asks
+// after a device sign-in; a browser or paste sign-in refuses it.
 func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request) error {
+	a, err := need(s.cfg.Accounts, "accounts")
+	if err != nil {
+		return err
+	}
 	var c v1.LoginCompletion
 	if err := decode(r, &c); err != nil {
 		return err
 	}
-	if c.Provider == "" || c.RedirectURL == "" {
-		return invalid("provider and redirectUrl are required")
+	if c.Provider == "" {
+		return invalid("provider is required")
 	}
-	return s.acct(w, func(a Accounts) error { return a.CompleteLogin(r.Context(), r.PathValue("id"), c) })
+	if c.Input == "" {
+		c.Input = c.RedirectURL
+	}
+	progress, err := a.CompleteLogin(r.Context(), r.PathValue("id"), c)
+	if err != nil {
+		return fmt.Errorf("complete login: %w", err)
+	}
+	writeJSON(w, http.StatusOK, progress)
+	return nil
 }
 
 func (s *Server) cancelLogin(w http.ResponseWriter, r *http.Request) error {

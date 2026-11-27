@@ -65,9 +65,41 @@ func redirect(p Pending, code string) string {
 	return p.RedirectURI + "?code=" + code + "&state=" + p.State
 }
 
+// browserMethod is p's browser sign-in, which every agent has first.
+func browserMethod(t *testing.T, p Provider) Method {
+	t.Helper()
+	ms := p.Info().Methods
+	if len(ms) == 0 || ms[0].Kind != KindBrowser {
+		t.Fatalf("%s: the first sign-in method is not the browser: %+v", p.Info().ID, ms)
+	}
+	return ms[0]
+}
+
+// Every way in is named and explained, and none is listed twice.
+func TestEverySignInMethodSaysWhatToDo(t *testing.T) {
+	for _, p := range All(nil) {
+		seen := map[string]bool{}
+		for _, m := range p.Info().Methods {
+			if m.ID == "" || m.Label == "" || m.Hint == "" || seen[m.ID] {
+				t.Errorf("%s: method %+v is unnamed, unexplained, or listed twice", p.Info().ID, m)
+			}
+			seen[m.ID] = true
+			if m.Kind != KindBrowser && m.Kind != KindDevice && m.Kind != KindPaste {
+				t.Errorf("%s: method %s has kind %q", p.Info().ID, m.ID, m.Kind)
+			}
+		}
+		if len(p.Info().Methods) < 2 {
+			t.Errorf("%s offers only %d way to sign in", p.Info().ID, len(p.Info().Methods))
+		}
+		if _, err := p.Begin(t.Context(), "no-such-method"); err == nil {
+			t.Errorf("%s began an unknown method", p.Info().ID)
+		}
+	}
+}
+
 func TestEveryAgentStartsASignInWithPKCE(t *testing.T) {
 	for _, p := range All(nil) {
-		pend, err := p.Begin()
+		pend, err := p.Begin(t.Context(), browserMethod(t, p).ID)
 		if err != nil {
 			t.Fatalf("%s: %v", p.Info().ID, err)
 		}
@@ -87,7 +119,7 @@ func TestEveryAgentStartsASignInWithPKCE(t *testing.T) {
 
 func TestAPasteFromAnotherSignInIsRefused(t *testing.T) {
 	for _, p := range All(nil) {
-		pend, err := p.Begin()
+		pend, err := p.Begin(t.Context(), "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -107,7 +139,7 @@ func TestCodexSignInReadsTheAccountFromItsTokens(t *testing.T) {
 		return map[string]any{"access_token": access, "refresh_token": "r1", "id_token": idToken, "expires_in": 3600}
 	})
 	c := &codex{hc: srv.Client(), authorizeURL: codexAuthorizeURL, tokenURL: srv.URL + "/oauth/token"}
-	pend, err := c.Begin()
+	pend, err := c.Begin(t.Context(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +186,7 @@ func TestClaudeSignInTakesTheCodeAnthropicShows(t *testing.T) {
 		return map[string]any{"access_token": "fake-access-1", "refresh_token": "fake-refresh-1", "expires_in": 28800}
 	})
 	c := &claude{hc: srv.Client(), authorizeURL: claudeAuthorizeURL, tokenURL: srv.URL + "/token", profile: srv.URL + "/profile"}
-	pend, err := c.Begin()
+	pend, err := c.Begin(t.Context(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +209,7 @@ func TestDevinSessionTokenTravelsWithItsPrefix(t *testing.T) {
 	session := jwt(t, map[string]any{"exp": float64(time.Now().Add(time.Hour).Unix()), "email": "d@example.com"})
 	srv := newOAuthServer(t, func(map[string]string) any { return map[string]any{"token": session} })
 	d := &devin{hc: srv.Client(), authorizeURL: devinAuthorizeURL, tokenURL: srv.URL}
-	pend, err := d.Begin()
+	pend, err := d.Begin(t.Context(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,5 +256,92 @@ func TestSandboxLoginsNameNoAccount(t *testing.T) {
 		if info.ID == "" || info.Name == "" || info.Secret == "" || info.Pool == "" || info.LoginFile == "" {
 			t.Errorf("incomplete info %+v", info)
 		}
+	}
+}
+
+// The device code sign-in: OpenAI hands out a code, says "not yet" until it
+// is entered, and then an authorization code bound to its device redirect.
+func TestCodexDeviceSignInWaitsForTheCode(t *testing.T) {
+	access := jwt(t, map[string]any{codexAuthClaim: map[string]any{"chatgpt_account_id": "acct-2"}})
+	asks := 0
+	srv := newOAuthServer(t, func(body map[string]string) any {
+		switch body["path"] {
+		case "/usercode":
+			return map[string]any{"device_auth_id": "dev-1", "user_code": "ABCD-1234", "interval": "2"}
+		case "/devicetoken":
+			asks++
+			if asks == 1 {
+				return map[string]any{"error": map[string]any{"code": "deviceauth_authorization_pending"}}
+			}
+			return map[string]any{"authorization_code": "auth-code", "code_verifier": "dev-verifier"}
+		}
+		return map[string]any{"access_token": access, "refresh_token": "r2", "expires_in": 3600}
+	})
+	c := &codex{hc: srv.Client(), tokenURL: srv.URL + "/oauth/token", deviceCodeURL: srv.URL + "/usercode", devicePollURL: srv.URL + "/devicetoken", device: codexDevicePage}
+	pend, err := c.Begin(t.Context(), methodDevice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pend.UserCode != "ABCD-1234" || pend.URL != codexDevicePage || pend.Interval != 5*time.Second {
+		t.Errorf("pending = %+v", pend)
+	}
+	if _, err := c.Finish(t.Context(), pend, ""); !errors.Is(err, ErrPending) {
+		t.Fatalf("before the code is entered: %v", err)
+	}
+	cred, err := c.Finish(t.Context(), pend, "")
+	if err != nil || cred.AccountID != "acct-2" || cred.Refresh != "r2" {
+		t.Fatalf("credential = %+v, %v", cred, err)
+	}
+	ex := srv.got[len(srv.got)-1]
+	if ex["code"] != "auth-code" || ex["code_verifier"] != "dev-verifier" || ex["redirect_uri"] != codexDeviceRedirect {
+		t.Errorf("exchange sent %v", ex)
+	}
+}
+
+// A pasted login file signs in as it is while its token is fresh, and is
+// renewed first when it is about to lapse.
+func TestALoginFileSignsIn(t *testing.T) {
+	fresh := jwt(t, map[string]any{"exp": float64(time.Now().Add(time.Hour).Unix()), codexAuthClaim: map[string]any{"chatgpt_account_id": "acct-3", "chatgpt_plan_type": "plus"}})
+	id := jwt(t, map[string]any{"email": "f@example.com"})
+	authJSON := `{"auth_mode":"chatgpt","tokens":{"id_token":"` + id + `","access_token":"` + fresh + `","refresh_token":"r3","account_id":"acct-3"}}`
+	c := newCodex(nil)
+	cred, err := c.Finish(t.Context(), Pending{Method: Method{ID: methodFile, Kind: KindPaste}}, authJSON)
+	if err != nil || cred.Email != "f@example.com" || cred.AccountID != "acct-3" || cred.Plan != "plus" || cred.Refresh != "r3" {
+		t.Errorf("codex file = %+v, %v", cred, err)
+	}
+	if _, err := c.Finish(t.Context(), Pending{Method: Method{ID: methodFile, Kind: KindPaste}}, "not json"); err == nil {
+		t.Error("a paste that is no file signed in")
+	}
+
+	srv := newOAuthServer(t, func(map[string]string) any { return map[string]any{"access_token": "renewed", "expires_in": 3599} })
+	a := &antigravity{hc: srv.Client(), tokenURL: srv.URL, userInfo: srv.URL + "/userinfo"}
+	exported := `{"type":"antigravity","access_token":"old","refresh_token":"keep","email":"g@example.com","expired":"2020-01-01T00:00:00Z"}`
+	cred, err = a.Finish(t.Context(), Pending{Method: Method{ID: methodFile, Kind: KindPaste}}, exported)
+	if err != nil || cred.Access != "renewed" || cred.Refresh != "keep" || cred.Email != "g@example.com" {
+		t.Errorf("antigravity file = %+v, %v", cred, err)
+	}
+}
+
+func TestClaudeTakesASetupTokenButNoAPIKey(t *testing.T) {
+	c := &claude{hc: http.DefaultClient, profile: "http://127.0.0.1:1/profile"}
+	p := Pending{Method: Method{ID: methodToken, Kind: KindPaste}}
+	cred, err := c.Finish(t.Context(), p, " sk-ant-oat01-abc ")
+	if err != nil || cred.Access != "sk-ant-oat01-abc" || cred.Refresh != "" || time.Until(cred.Expires) < 300*24*time.Hour {
+		t.Errorf("setup-token = %+v, %v", cred, err)
+	}
+	if _, err := c.Finish(t.Context(), p, "sk-ant-api03-abc"); err == nil {
+		t.Error("an API key signed in")
+	}
+}
+
+func TestDevinTakesTheCLIsCredentialsFile(t *testing.T) {
+	d := newDevin(nil)
+	p := Pending{Method: Method{ID: methodToken, Kind: KindPaste}}
+	cred, err := d.Finish(t.Context(), p, "# devin\nwindsurf_api_key = \"sk-ws-xyz\"\n")
+	if err != nil || cred.Access != "sk-ws-xyz" {
+		t.Errorf("credentials.toml = %+v, %v", cred, err)
+	}
+	if _, err := d.Finish(t.Context(), p, "hello"); err == nil {
+		t.Error("a paste that is no key signed in")
 	}
 }

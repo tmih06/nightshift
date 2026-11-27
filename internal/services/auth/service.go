@@ -30,6 +30,7 @@ var (
 	ErrUnknownProvider = errors.New("unknown agent")
 	ErrUnknownAccount  = errors.New("no such account")
 	ErrUnknownLogin    = errors.New("no such sign-in; it may have timed out, so start again")
+	ErrLoginBusy       = errors.New("this sign-in is already being finished")
 )
 
 // retryAfter is how long a failed renewal waits before the next try.
@@ -62,6 +63,9 @@ func (c *Config) defaults() {
 type pendingLogin struct {
 	providers.Pending
 	started time.Time
+	// busy is set while a Finish runs, so two answers to one sign-in cannot
+	// both spend its code.
+	busy bool
 }
 
 // Service owns the vault. Every change goes through one lock, so no two
@@ -122,13 +126,14 @@ func (s *Service) View() View {
 	return v
 }
 
-// StartLogin begins signing an account in to provider.
-func (s *Service) StartLogin(provider string) (providers.Pending, string, error) {
+// StartLogin begins signing an account in to provider by method, its usual
+// method when method is empty.
+func (s *Service) StartLogin(ctx context.Context, provider, method string) (providers.Pending, string, error) {
 	p, ok := providers.ByID(s.providers, provider)
 	if !ok {
 		return providers.Pending{}, "", fmt.Errorf("%w %q", ErrUnknownProvider, provider)
 	}
-	pend, err := p.Begin()
+	pend, err := p.Begin(ctx, method)
 	if err != nil {
 		return providers.Pending{}, "", fmt.Errorf("start the %s sign-in: %w", provider, err)
 	}
@@ -139,8 +144,8 @@ func (s *Service) StartLogin(provider string) (providers.Pending, string, error)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
-	for k, l := range s.logins {
-		if now.Sub(l.started) > s.cfg.LoginTTL {
+	for k := range s.logins {
+		if now.Sub(s.logins[k].started) > s.cfg.LoginTTL {
 			delete(s.logins, k)
 		}
 	}
@@ -150,22 +155,23 @@ func (s *Service) StartLogin(provider string) (providers.Pending, string, error)
 
 // CompleteLogin finishes sign-in id with what the person pasted, saves the
 // account, and publishes. Signing the same account in again replaces its
-// tokens.
+// tokens. A device sign-in takes no input and answers providers.ErrPending
+// until it is approved. A failed answer leaves the sign-in open to try again.
 func (s *Service) CompleteLogin(ctx context.Context, id, input string) (string, error) {
-	s.mu.Lock()
-	l, ok := s.logins[id]
-	if ok {
-		delete(s.logins, id)
-	}
-	s.mu.Unlock()
-	if !ok || time.Since(l.started) > s.cfg.LoginTTL {
-		return "", ErrUnknownLogin
+	l, err := s.claimLogin(id)
+	if err != nil {
+		return "", err
 	}
 	p, ok := providers.ByID(s.providers, l.Provider)
 	if !ok {
+		s.releaseLogin(id, false)
 		return "", fmt.Errorf("%w %q", ErrUnknownProvider, l.Provider)
 	}
 	cred, err := p.Finish(ctx, l.Pending, input)
+	s.releaseLogin(id, err == nil)
+	if errors.Is(err, providers.ErrPending) {
+		return "", providers.ErrPending
+	}
 	if err != nil {
 		return "", fmt.Errorf("finish the sign-in: %w", err)
 	}
@@ -177,6 +183,39 @@ func (s *Service) CompleteLogin(ctx context.Context, id, input string) (string, 
 	}
 	s.publishLocked(ctx)
 	return name, nil
+}
+
+// claimLogin marks sign-in id busy and returns it.
+func (s *Service) claimLogin(id string) (pendingLogin, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	l, ok := s.logins[id]
+	switch {
+	case !ok || time.Since(l.started) > s.cfg.LoginTTL:
+		delete(s.logins, id)
+		return pendingLogin{}, ErrUnknownLogin
+	case l.busy:
+		return pendingLogin{}, ErrLoginBusy
+	}
+	l.busy = true
+	s.logins[id] = l
+	return l, nil
+}
+
+// releaseLogin ends a Finish of sign-in id: done drops the sign-in, and
+// otherwise it is open again.
+func (s *Service) releaseLogin(id string, done bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	l, ok := s.logins[id]
+	switch {
+	case !ok:
+	case done:
+		delete(s.logins, id)
+	default:
+		l.busy = false
+		s.logins[id] = l
+	}
 }
 
 // upsert saves cred as provider's account named after who signed in.

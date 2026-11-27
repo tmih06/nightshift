@@ -57,6 +57,8 @@ func schemaTypes() map[string]reflect.Type {
 		"LoginRequest":     reflect.TypeFor[v1.LoginRequest](),
 		"Login":            reflect.TypeFor[v1.Login](),
 		"LoginCompletion":  reflect.TypeFor[v1.LoginCompletion](),
+		"LoginMethod":      reflect.TypeFor[v1.LoginMethod](),
+		"LoginProgress":    reflect.TypeFor[v1.LoginProgress](),
 		"AccountPatch":     reflect.TypeFor[v1.AccountPatch](),
 		"ActiveAccount":    reflect.TypeFor[v1.ActiveAccount](),
 		"AccountChain":     reflect.TypeFor[v1.AccountChain](),

@@ -14,16 +14,18 @@ func (c *Client) Accounts(ctx context.Context) (v1.Accounts, error) {
 	return fetch[v1.Accounts](ctx, c, request{method: http.MethodGet, path: "/v1/accounts"})
 }
 
-// StartLogin begins signing an account in. Open the login's URL in a browser,
-// approve, and hand the address the browser ends on to CompleteLogin.
-func (c *Client) StartLogin(ctx context.Context, provider string) (v1.Login, error) {
-	return fetch[v1.Login](ctx, c, request{method: http.MethodPost, path: "/v1/accounts/logins", body: v1.LoginRequest{Provider: provider}})
+// StartLogin begins signing an account in to provider by one of its methods,
+// the first when method is empty. What to do next depends on the login's
+// Method.Kind (see v1.LoginBrowser, v1.LoginDevice, v1.LoginPaste).
+func (c *Client) StartLogin(ctx context.Context, provider, method string) (v1.Login, error) {
+	return fetch[v1.Login](ctx, c, request{method: http.MethodPost, path: "/v1/accounts/logins", body: v1.LoginRequest{Provider: provider, Method: method}})
 }
 
-// CompleteLogin finishes a sign-in with the address the browser ended on.
-func (c *Client) CompleteLogin(ctx context.Context, l v1.Login, redirectURL string) error {
-	body := v1.LoginCompletion{Provider: l.Provider, RedirectURL: redirectURL}
-	return c.json(ctx, request{method: http.MethodPost, path: "/v1/accounts/logins/" + esc(l.ID) + "/complete", body: body}, nil)
+// CompleteLogin finishes a sign-in with what the person pasted, or asks after
+// a device sign-in when input is empty; it is not Done until approved.
+func (c *Client) CompleteLogin(ctx context.Context, l v1.Login, input string) (v1.LoginProgress, error) {
+	body := v1.LoginCompletion{Provider: l.Provider, Input: input}
+	return fetch[v1.LoginProgress](ctx, c, request{method: http.MethodPost, path: "/v1/accounts/logins/" + esc(l.ID) + "/complete", body: body})
 }
 
 // CancelLogin abandons a sign-in that was started.

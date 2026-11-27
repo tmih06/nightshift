@@ -72,16 +72,20 @@ func (f *fakeAccounts) Accounts(context.Context) (v1.Accounts, error) {
 		Accounts:  []v1.Account{{Name: "claude-a.json", Provider: "claude", Email: "a@example.com", Active: true, State: v1.AccountOK}},
 	}, nil
 }
-func (*fakeAccounts) StartLogin(context.Context, string) (v1.Login, error)  { return v1.Login{}, nil }
-func (*fakeAccounts) CompleteLogin(context.Context, v1.Login, string) error { return nil }
-func (*fakeAccounts) CancelLogin(context.Context, v1.Login) error           { return nil }
-func (*fakeAccounts) SetDisabled(context.Context, string, bool) error       { return nil }
-func (*fakeAccounts) RemoveAccount(context.Context, string) error           { return nil }
-func (*fakeAccounts) RefreshAccount(context.Context, string) error          { return nil }
-func (*fakeAccounts) SetActive(context.Context, string, string) error       { return nil }
-func (*fakeAccounts) SetChain(context.Context, string, []string) error      { return nil }
-func (*fakeAccounts) Publish(context.Context) (string, error)               { return "", nil }
-func (*fakeAccounts) RefreshQuotas(context.Context) error                   { return nil }
+func (*fakeAccounts) StartLogin(context.Context, string, string) (v1.Login, error) {
+	return v1.Login{}, nil
+}
+func (*fakeAccounts) CompleteLogin(context.Context, v1.Login, string) (v1.LoginProgress, error) {
+	return v1.LoginProgress{Done: true}, nil
+}
+func (*fakeAccounts) CancelLogin(context.Context, v1.Login) error      { return nil }
+func (*fakeAccounts) SetDisabled(context.Context, string, bool) error  { return nil }
+func (*fakeAccounts) RemoveAccount(context.Context, string) error      { return nil }
+func (*fakeAccounts) RefreshAccount(context.Context, string) error     { return nil }
+func (*fakeAccounts) SetActive(context.Context, string, string) error  { return nil }
+func (*fakeAccounts) SetChain(context.Context, string, []string) error { return nil }
+func (*fakeAccounts) Publish(context.Context) (string, error)          { return "", nil }
+func (*fakeAccounts) RefreshQuotas(context.Context) error              { return nil }
 
 func (*fakeAccounts) Fleet(context.Context, ...string) (v1.Fleet, error) { return v1.Fleet{}, nil }
 func (*fakeAccounts) PodLogs(context.Context, string, string, int) ([]string, error) {

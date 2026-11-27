@@ -14,10 +14,26 @@ import (
 // Provider is an agent whose accounts Nightshift manages, as nightshift-auth
 // lists it.
 type Provider struct {
-	ID     string `json:"id"`     // the name in every request
-	Name   string `json:"name"`   // what people call it
-	Secret string `json:"secret"` // the egress secret its access token travels as
+	ID      string   `json:"id"`      // the name in every request
+	Name    string   `json:"name"`    // what people call it
+	Secret  string   `json:"secret"`  // the egress secret its access token travels as
+	Methods []Method `json:"methods"` // the ways to sign in, the usual one first
 }
+
+// Method is one way to sign an account in, as nightshift-auth lists it.
+type Method struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	Kind  string `json:"kind"` // browser, device, or paste
+	Hint  string `json:"hint,omitempty"`
+}
+
+// The kinds of Method.
+const (
+	KindBrowser = "browser"
+	KindDevice  = "device"
+	KindPaste   = "paste"
+)
 
 // providerByID finds a provider in list.
 func providerByID(list []Provider, id string) (Provider, bool) {

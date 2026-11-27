@@ -123,10 +123,12 @@ func (f *fake) Accounts(context.Context) (v1.Accounts, error) {
 	return v1.Accounts{ObservedAt: time.Now().UTC(), Providers: []v1.Provider{{ID: "claude", Name: "Claude Code"}}, Accounts: []v1.Account{}}, f.err
 }
 
-func (f *fake) StartLogin(_ context.Context, p string) (v1.Login, error) {
+func (f *fake) StartLogin(_ context.Context, p, _ string) (v1.Login, error) {
 	return v1.Login{ID: "st1", Provider: p, URL: "https://example.com/auth"}, f.err
 }
-func (f *fake) CompleteLogin(context.Context, string, v1.LoginCompletion) error { return f.err }
+func (f *fake) CompleteLogin(context.Context, string, v1.LoginCompletion) (v1.LoginProgress, error) {
+	return v1.LoginProgress{Done: true}, f.err
+}
 func (f *fake) CancelLogin(context.Context, string, string) error               { return f.err }
 func (f *fake) SetDisabled(_ context.Context, name string, _ bool) error {
 	f.patched = name
@@ -538,7 +540,7 @@ func TestAccountsActionsAndTheirChecks(t *testing.T) {
 		t.Errorf("login = %d %s", resp.StatusCode, raw)
 	}
 	for _, tc := range []struct{ method, path, body string }{
-		{"POST", "/v1/accounts/logins/st1/complete", `{"provider":"claude"}`},
+		{"POST", "/v1/accounts/logins/st1/complete", `{"input":"code"}`},
 		{"DELETE", "/v1/accounts/logins/st1", ""},
 		{"PATCH", "/v1/accounts/a.json", `{}`},
 		{"PUT", "/v1/accounts/active/claude", `{}`},
@@ -546,6 +548,12 @@ func TestAccountsActionsAndTheirChecks(t *testing.T) {
 	} {
 		resp, raw := call(t, ts, tc.method, tc.path, tc.body)
 		problem(t, resp, raw, 400, v1.CodeInvalid)
+	}
+	resp, raw = call(t, ts, "POST", "/v1/accounts/logins/st1/complete", `{"provider":"claude"}`)
+	var progress v1.LoginProgress
+	strict(t, raw, &progress)
+	if resp.StatusCode != 200 || !progress.Done {
+		t.Errorf("asking after a device sign-in = %d %s", resp.StatusCode, raw)
 	}
 	if resp, _ := call(t, ts, "PATCH", "/v1/accounts/a.json", `{"disabled":true}`); resp.StatusCode != 204 || f.patched != "a.json" {
 		t.Errorf("patch = %d %q", resp.StatusCode, f.patched)

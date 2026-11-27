@@ -78,8 +78,8 @@ type Terminals interface {
 // Accounts manages the coding-agent accounts.
 type Accounts interface {
 	Accounts(ctx context.Context) (v1.Accounts, error)
-	StartLogin(ctx context.Context, provider string) (v1.Login, error)
-	CompleteLogin(ctx context.Context, id string, c v1.LoginCompletion) error
+	StartLogin(ctx context.Context, provider, method string) (v1.Login, error)
+	CompleteLogin(ctx context.Context, id string, c v1.LoginCompletion) (v1.LoginProgress, error)
 	CancelLogin(ctx context.Context, id, provider string) error
 	SetDisabled(ctx context.Context, name string, disabled bool) error
 	Remove(ctx context.Context, name string) error

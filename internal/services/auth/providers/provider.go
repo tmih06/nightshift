@@ -10,6 +10,7 @@ package providers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 )
@@ -29,6 +30,33 @@ type Info struct {
 	LoginFile string
 	// Hosts are the API hosts where the egress proxy swaps Secret in.
 	Hosts []string
+	// Methods are the ways to sign an account in, the usual one first.
+	Methods []Method
+}
+
+// Kind says what a person does to finish a sign-in.
+type Kind string
+
+// The kinds of sign-in.
+const (
+	// KindBrowser: open the link, approve, and paste the code the page shows
+	// or the address the browser ends on.
+	KindBrowser Kind = "browser"
+	// KindDevice: open the link and enter the code shown; the sign-in
+	// finishes by itself once approved.
+	KindDevice Kind = "device"
+	// KindPaste: paste something made elsewhere, such as a token or a CLI's
+	// login file. There is no link.
+	KindPaste Kind = "paste"
+)
+
+// Method is one way to sign an account in.
+type Method struct {
+	ID    string
+	Label string
+	Kind  Kind
+	// Hint says what to do, or where the pasted value comes from.
+	Hint string
 }
 
 // Credential is one signed-in login as nightshift-auth stores it. It never
@@ -48,20 +76,31 @@ type Credential struct {
 
 // Pending is a sign-in started and not yet finished.
 type Pending struct {
-	Provider    string
+	Provider string
+	Method   Method
+	// URL is the page to open; empty for KindPaste.
 	URL         string
 	State       string
 	Verifier    string
 	RedirectURI string
+	// UserCode is what to enter on URL's page, for KindDevice.
+	UserCode string
+	// Device names the sign-in to the provider while it waits, for
+	// KindDevice; Interval is how often to ask whether it was approved.
+	Device   string
+	Interval time.Duration
 }
 
 // Provider is one agent's sign-in flow.
 type Provider interface {
 	Info() Info
-	// Begin starts a sign-in: open Pending.URL and approve.
-	Begin() (Pending, error)
+	// Begin starts a sign-in by one of Info().Methods, the first when method
+	// is empty.
+	Begin(ctx context.Context, method string) (Pending, error)
 	// Finish completes it from what the person pastes: the address the
-	// browser ended on, or the code the provider showed.
+	// browser ended on, the code the provider showed, or a token or login
+	// file. A device sign-in takes no input and answers ErrPending until it
+	// is approved.
 	Finish(ctx context.Context, p Pending, input string) (Credential, error)
 	// Refresh renews the access token; ErrNoRefresh when the login cannot be
 	// renewed and must be signed in again.
@@ -77,6 +116,24 @@ type Provider interface {
 
 // ErrNoRefresh says a login cannot be renewed and must be signed in again.
 var ErrNoRefresh = errors.New("this login cannot be renewed: sign it in again")
+
+// ErrPending says a device sign-in has not been approved yet: ask again after
+// Pending.Interval.
+var ErrPending = errors.New("waiting for the sign-in to be approved")
+
+// method is the one of p's methods named id, the first when id is empty.
+func method(p Provider, id string) (Method, error) {
+	ms := p.Info().Methods
+	if id == "" && len(ms) > 0 {
+		return ms[0], nil
+	}
+	for _, m := range ms {
+		if m.ID == id {
+			return m, nil
+		}
+	}
+	return Method{}, fmt.Errorf("%s has no sign-in method %q", p.Info().Name, id)
+}
 
 // All is every agent nightshift-auth signs in, in the order the Accounts tab
 // shows them. Adding one is a file with its Provider and a line here.

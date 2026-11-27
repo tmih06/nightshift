@@ -205,6 +205,13 @@ Prune rules that no longer apply. Past about 200 lines, move older detail into
     job, and Devin could not be added to it at all.
   - **Enforced by**: `TestEveryAgentIsSwappedByTheProxy`.
 
+- **Rule**: Drop a started sign-in only once it succeeds; a failed answer or
+  a device code not yet approved leaves it open.
+  - **Why**: nightshift-auth deleted a sign-in before finishing it, so the
+    Accounts tab's "try again" after a mistyped paste always failed.
+  - **Enforced by**: `TestAFailedAnswerLeavesTheSignInOpen`,
+    `TestADeviceSignInWaitsForApproval`.
+
 - **Rule**: List an account's models as its CLI offers them, never as the
   provider's raw catalog.
   - **Why**: agy's catalog holds some thirty internal, retired, and disabled

@@ -33,12 +33,25 @@ func NewClient(base, key string, httpClient *http.Client) *Client {
 	return &Client{base: strings.TrimRight(base, "/"), key: key, http: httpClient}
 }
 
-// Login is a sign-in in progress: open URL, approve, and hand what the
-// browser ends on (or the code the page shows) to Complete.
+// Login is a sign-in in progress. For a browser sign-in: open URL, approve,
+// and hand what the browser ends on (or the code the page shows) to Complete.
+// For a device sign-in: open URL, enter UserCode, and call Complete with no
+// input every Poll until it is done. For a paste: hand the token or login file
+// to Complete.
 type Login struct {
 	Provider string
+	Method   Method
 	URL      string
 	State    string // the sign-in's id
+	UserCode string
+	Poll     time.Duration
+}
+
+// Progress is how far a sign-in got: a device sign-in is not Done until it
+// is approved.
+type Progress struct {
+	Done    bool
+	Account string
 }
 
 // call is one API request.
@@ -173,30 +186,45 @@ func (c *Client) Vault(ctx context.Context) (Vault, error) {
 	return v, nil
 }
 
-// StartLogin begins signing an account in to provider.
-func (c *Client) StartLogin(ctx context.Context, provider string) (Login, error) {
+// StartLogin begins signing an account in to provider by method, its usual
+// one when method is empty.
+func (c *Client) StartLogin(ctx context.Context, provider, method string) (Login, error) {
 	var resp struct {
-		ID  string `json:"id"`
-		URL string `json:"url"`
+		ID          string `json:"id"`
+		Method      Method `json:"method"`
+		URL         string `json:"url"`
+		UserCode    string `json:"userCode"`
+		PollSeconds int    `json:"pollSeconds"`
 	}
-	if err := c.do(ctx, call{method: http.MethodPost, path: "/v1/logins", body: map[string]string{"provider": provider}}, &resp); err != nil {
+	body := map[string]string{"provider": provider, "method": method}
+	if err := c.do(ctx, call{method: http.MethodPost, path: "/v1/logins", body: body}, &resp); err != nil {
 		return Login{}, err
 	}
-	if resp.URL == "" || resp.ID == "" {
+	if resp.ID == "" || (resp.URL == "" && resp.Method.Kind != KindPaste) {
 		return Login{}, errors.New("nightshift-auth returned no sign-in link")
 	}
-	return Login{Provider: provider, URL: resp.URL, State: resp.ID}, nil
+	return Login{
+		Provider: provider, Method: resp.Method, URL: resp.URL, State: resp.ID,
+		UserCode: resp.UserCode, Poll: time.Duration(resp.PollSeconds) * time.Second,
+	}, nil
 }
 
-// Complete finishes a sign-in with what the browser ended on, or the code
-// the provider's page showed, and returns once the account is saved and
-// published. It reports why when the sign-in fails.
-func (c *Client) Complete(ctx context.Context, l Login, input string) error {
+// Complete finishes a sign-in with what the person pasted, and returns once
+// the account is saved and published; a device sign-in takes no input and is
+// not Done until it is approved. It reports why when the sign-in fails.
+func (c *Client) Complete(ctx context.Context, l Login, input string) (Progress, error) {
 	input = strings.TrimSpace(input)
-	if input == "" {
-		return errors.New("paste the whole address the browser ended on, or the code the page showed")
+	if input == "" && l.Method.Kind != KindDevice {
+		return Progress{}, errors.New("paste the whole address the browser ended on, the code the page showed, or the token")
 	}
-	return c.do(ctx, call{method: http.MethodPost, path: "/v1/logins/" + url.PathEscape(l.State), body: map[string]string{"input": input}}, nil)
+	var resp struct {
+		Account string `json:"account"`
+		Pending bool   `json:"pending"`
+	}
+	if err := c.do(ctx, call{method: http.MethodPost, path: "/v1/logins/" + url.PathEscape(l.State), body: map[string]string{"input": input}}, &resp); err != nil {
+		return Progress{}, err
+	}
+	return Progress{Done: !resp.Pending, Account: resp.Account}, nil
 }
 
 // Cancel abandons a sign-in that was started but not completed.

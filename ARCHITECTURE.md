@@ -144,7 +144,9 @@ fail until the three agree.
 `S` on a pull request, issue, or repository/branch in the GitHub tab gives it a
 volume that outlives any sandbox. gh-dash or the Repo view sends the target to
 the root model, which asks for a pool (and a branch name for an issue or
-repository), forks a right-side model submenu for that pool's harness, and
+repository), offering only the pools the cluster keeps warm (an agent with no
+signed-in account has its pool at zero, and its sandbox could not reach its
+provider), forks a right-side model submenu for that pool's harness, and
 hands the checkout—along with the chosen harness and model—to the sandbox tab.
 
 ```mermaid
@@ -233,11 +235,20 @@ rotate, so exactly one process holds the refresh tokens: `nightshift-auth`
 by `k8s/auth-setup.sh`). It is a small static program of its own, one replica
 on a private volume, and it never serves model traffic.
 
-- **Sign-in.** The Accounts tab asks it for a link, the person approves in
-  their browser, and pastes back what the browser ends on: the code
-  Anthropic's page shows, or the localhost address that will not load in a
-  cluster. It exchanges the code with PKCE and keeps the tokens in its vault
-  (`/data/accounts.json`, mode 0600, replaced atomically).
+- **Sign-in.** Each agent lists its ways in, and the Accounts tab offers them
+  all. A browser sign-in gives a link; the person approves and pastes back
+  what the browser ends on: the code Anthropic's page shows, or the
+  localhost address that will not load in a cluster. A device sign-in
+  (Codex) shows a code to enter on the provider's page, and the tab asks
+  after it until it is approved. A paste takes something made elsewhere:
+  a CLI's login file (Codex's `auth.json`, Claude Code's
+  `.credentials.json`, agy's token file), a `claude setup-token` token, or
+  a Devin key. It exchanges codes with PKCE, renews a pasted login that is
+  about to lapse, and keeps the tokens in its vault (`/data/accounts.json`,
+  mode 0600, replaced atomically). A failed answer leaves the sign-in open
+  to try again. Claude and Codex API keys are refused: they are billed per
+  use and travel in other headers than the subscription tokens they would
+  share a chain with.
 - **Renewal.** Every minute it renews tokens within ten minutes of lapsing,
   saving the new refresh token before using it. A failed renewal waits five
   minutes; a login that can no longer be renewed (Devin's session tokens have
@@ -271,7 +282,7 @@ The services reach nightshift-auth's API through a `kubectl port-forward`
 that they own and restart, and the egress proxy's admin port through another;
 in the cluster they use the Services' addresses instead, so on a laptop nothing
 is needed but the kubeconfig Nightshift already uses. It lists every signed-in account per agent, runs the
-sign-in (the link, then the pasted code or address), disables, removes, and
+sign-in (the agent, then the way in, then the link, code, or paste), disables, removes, and
 renews accounts, and publishes after each change. A change that would move an
 agent's traffic to another account asks first, because prompt caches belong to
 one account. The account marked active is the one the proxy's `/pools` reports,

@@ -12,8 +12,8 @@ import (
 // satisfies it, and a test can stand in for it.
 type API interface {
 	Accounts(ctx context.Context) (v1.Accounts, error)
-	StartLogin(ctx context.Context, provider string) (v1.Login, error)
-	CompleteLogin(ctx context.Context, l v1.Login, redirectURL string) error
+	StartLogin(ctx context.Context, provider, method string) (v1.Login, error)
+	CompleteLogin(ctx context.Context, l v1.Login, input string) (v1.LoginProgress, error)
 	CancelLogin(ctx context.Context, l v1.Login) error
 	SetDisabled(ctx context.Context, name string, disabled bool) error
 	RemoveAccount(ctx context.Context, name string) error

@@ -2,24 +2,30 @@ package providers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 )
 
-// Devin's sign-in: a browser PKCE flow against app.devin.ai that yields a
+// Devin's sign-ins: a browser PKCE flow against app.devin.ai that yields a
 // session token, sent to Devin's server as devin-session-token$<token>. The
 // browser ends on a 127.0.0.1 address; pasting it finishes the sign-in. A
-// Devin API key pasted instead is kept as it is. Neither can be renewed.
-// Ported from PiG's ai/oauth_devin.go and ai/devin_proto.go.
+// Devin API key, a Windsurf key, or the CLI's credentials.toml can be pasted
+// instead. None can be renewed. Ported from PiG's ai/oauth_devin.go (browser
+// and CLI-credential logins) and ai/devin_proto.go.
 const (
 	devinAuthorizeURL = "https://app.devin.ai/auth/cli/continue"
 	devinExchangeURL  = "https://api.devin.ai/auth/cli/token"
 	devinRedirectURI  = "http://127.0.0.1:59653/callback"
 	devinSession      = "devin-session-token$"
 )
+
+// devinKeyLine is the key line of the CLI's credentials.toml.
+var devinKeyLine = regexp.MustCompile(`(?m)^\s*windsurf_api_key\s*=\s*"([^"]+)"`)
 
 type devin struct {
 	hc                     *http.Client
@@ -35,10 +41,28 @@ func (*devin) Info() Info {
 		ID: "devin", Name: "Devin", Secret: "DEVIN_ACCESS_TOKEN",
 		Pool: "devin-pool", LoginFile: ".local/share/devin/credentials.toml",
 		Hosts: []string{"server.codeium.com"},
+		Methods: []Method{
+			{
+				ID: methodBrowser, Label: "Devin account, in the browser", Kind: KindBrowser,
+				Hint: "Approve, then paste the 127.0.0.1 address the browser ends on.",
+			},
+			{
+				ID: methodToken, Label: "API key, or the CLI's credentials.toml", Kind: KindPaste,
+				Hint: "Paste a Devin API key (apk_, cog_), a Windsurf key (sk-ws-), or " +
+					"~/.local/share/devin/credentials.toml from a machine where devin is signed in.",
+			},
+		},
 	}
 }
 
-func (d *devin) Begin() (Pending, error) {
+func (d *devin) Begin(_ context.Context, id string) (Pending, error) {
+	m, err := method(d, id)
+	if err != nil {
+		return Pending{}, err
+	}
+	if m.Kind == KindPaste {
+		return Pending{Provider: d.Info().ID, Method: m}, nil
+	}
 	verifier, challenge, err := pkce()
 	if err != nil {
 		return Pending{}, err
@@ -55,15 +79,21 @@ func (d *devin) Begin() (Pending, error) {
 	q.Set(paramState, state)
 	q.Set("prompt", "select_account")
 	return Pending{
-		Provider: d.Info().ID, URL: d.authorizeURL + "?" + q.Encode(),
+		Provider: d.Info().ID, Method: m, URL: d.authorizeURL + "?" + q.Encode(),
 		State: state, Verifier: verifier, RedirectURI: devinRedirectURI,
 	}, nil
 }
 
 func (d *devin) Finish(ctx context.Context, p Pending, input string) (Credential, error) {
 	input = strings.TrimSpace(input)
+	if m := devinKeyLine.FindStringSubmatch(input); m != nil {
+		input = m[1]
+	}
 	if isDevinKey(input) {
-		return Credential{Access: input}, nil
+		return devinKey(input), nil
+	}
+	if p.Method.Kind == KindPaste {
+		return Credential{}, errors.New("that is not a Devin key: paste a key starting apk_, cog_, sk-ws-, or devin-session-token$, or the whole credentials.toml")
 	}
 	code, state := codeAndState(input)
 	if err := checkCode(code, state, p.State); err != nil {
@@ -86,6 +116,17 @@ func (d *devin) Finish(ctx context.Context, p Pending, input string) (Credential
 		Email:     claim(claims, "email"),
 		AccountID: claim(claims, "sub"),
 	}, nil
+}
+
+// devinKey is a pasted key as a credential; a session token says who it is
+// and when it lapses.
+func devinKey(key string) Credential {
+	session, ok := strings.CutPrefix(key, devinSession)
+	if !ok {
+		return Credential{Access: key}
+	}
+	claims := jwtClaims(session)
+	return Credential{Access: key, Expires: jwtExpiry(session), Email: claim(claims, "email"), AccountID: claim(claims, "sub")}
 }
 
 // isDevinKey is whether input is a key rather than a redirect or a code: a

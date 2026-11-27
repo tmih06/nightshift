@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -28,6 +29,14 @@ const (
 	paramState        = "state"
 	grantCode         = "authorization_code"
 	grantRefresh      = "refresh_token"
+)
+
+// The ids of the sign-in methods the agents share.
+const (
+	methodBrowser = "browser" // approve in a browser, paste what it ends on
+	methodDevice  = "device"  // enter a code on the provider's page
+	methodFile    = "file"    // paste a CLI's login file
+	methodToken   = "token"   // paste a long-lived token or key
 )
 
 // SandboxEmail is the identity a sandbox login names where its CLI wants an
@@ -207,6 +216,84 @@ func do(ctx context.Context, hc *http.Client, c call, out any) error {
 		return fmt.Errorf("read %s's reply: %w", req.URL.Host, err)
 	}
 	return nil
+}
+
+// post sends body as JSON and returns the status and reply, whatever the
+// status: a device sign-in reads "not yet" from an error status.
+func post(ctx context.Context, hc *http.Client, u string, body any) (status int, reply []byte, err error) {
+	req, err := newRequest(ctx, &call{method: http.MethodPost, url: u, json: body})
+	if err != nil {
+		return 0, nil, err
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return 0, nil, fmt.Errorf("reach %s: %w", req.URL.Host, err)
+	}
+	raw, rerr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if cerr := resp.Body.Close(); rerr == nil {
+		rerr = cerr
+	}
+	if rerr != nil {
+		return 0, nil, fmt.Errorf("read %s: %w", req.URL.Host, rerr)
+	}
+	return resp.StatusCode, raw, nil
+}
+
+// deviceWaiting is whether a device sign-in's error reply means "not yet":
+// {"error": "authorization_pending"} or {"error": {"code": ...}}, or a
+// request to slow down.
+func deviceWaiting(raw []byte) bool {
+	var body struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(raw, &body) != nil || len(body.Error) == 0 {
+		return false
+	}
+	var code string
+	if json.Unmarshal(body.Error, &code) != nil {
+		var obj struct {
+			Code string `json:"code"`
+		}
+		if json.Unmarshal(body.Error, &obj) != nil {
+			return false
+		}
+		code = obj.Code
+	}
+	switch code {
+	case "authorization_pending", "deviceauth_authorization_pending", "slow_down":
+		return true
+	}
+	return false
+}
+
+// seconds reads a JSON number of seconds, or a string holding one, falling
+// back to def.
+func seconds(v any, def time.Duration) time.Duration {
+	var n float64
+	switch t := v.(type) {
+	case float64:
+		n = t
+	case string:
+		f, err := strconv.ParseFloat(strings.TrimSpace(t), 64)
+		if err != nil {
+			return def
+		}
+		n = f
+	}
+	if n <= 0 || n > 600 {
+		return def
+	}
+	return time.Duration(n * float64(time.Second))
+}
+
+// firstTime is the first of ts that is set.
+func firstTime(ts ...time.Time) time.Time {
+	for _, t := range ts {
+		if !t.IsZero() {
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 func firstChars(s string, n int) string {

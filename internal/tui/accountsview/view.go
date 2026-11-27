@@ -423,6 +423,8 @@ func (m Model) modalBox() string {
 	switch m.modal.kind {
 	case modalProvider:
 		return m.providerBox()
+	case modalMethod:
+		return m.methodBox()
 	case modalLink:
 		return m.linkBox()
 	case modalConfirm:
@@ -453,7 +455,41 @@ func (m Model) providerBox() string {
 	return dialog.Box(m.theme, lines)
 }
 
+// methodBox lists the ways to sign in to the chosen agent, with what the
+// selected one asks of you.
+func (m Model) methodBox() string {
+	s := m.st
+	inner := m.modalInner()
+	p := m.modal.provider
+	lines := []string{s.title.Render("Sign in to " + p.Name), ""}
+	for i, meth := range p.Methods {
+		row := "  " + meth.Label
+		if i == m.modal.choice {
+			row = s.selected.Render(dialog.Line(s.text.Bold(true), "▸ "+meth.Label, inner))
+		}
+		lines = append(lines, row)
+	}
+	if m.modal.choice < len(p.Methods) {
+		lines = append(lines, "")
+		for _, l := range wrap(p.Methods[m.modal.choice].Hint, inner) {
+			lines = append(lines, s.faint.Render(l))
+		}
+	}
+	if m.modal.busy {
+		lines = append(lines, "", s.faint.Render("asking nightshift-auth to start…"))
+	} else {
+		lines = append(lines, "", s.faint.Render("⏎ continue • esc back"))
+	}
+	return dialog.Box(m.theme, lines)
+}
+
 func (m Model) linkBox() string {
+	switch m.modal.login.Method.Kind {
+	case v1.LoginDevice:
+		return m.deviceBox()
+	case v1.LoginPaste:
+		return m.pasteBox()
+	}
 	s := m.st
 	inner := m.modalInner()
 	p := providerByID(m.snap, m.modal.login.Provider)
@@ -480,6 +516,56 @@ func (m Model) linkBox() string {
 	return dialog.Box(m.theme, lines)
 }
 
+// deviceBox shows the page to open and the code to enter there; the sign-in
+// finishes by itself once the code is approved.
+func (m Model) deviceBox() string {
+	s := m.st
+	inner := m.modalInner()
+	l := m.modal.login
+	p := providerByID(m.snap, l.Provider)
+	lines := []string{s.title.Render("Sign in to " + p.Name), "", s.text.Render("1. Open this page:"), ""}
+	for _, w := range wrap(l.URL, inner) {
+		lines = append(lines, s.ok.Render(w))
+	}
+	lines = append(lines, "", s.text.Render("2. Enter this code there and approve:"), "",
+		"   "+s.ok.Bold(true).Render(l.UserCode), "")
+	if m.modal.err != "" {
+		for _, w := range wrap(m.modal.err, inner) {
+			lines = append(lines, s.bad.Render(w))
+		}
+		lines = append(lines, "", s.faint.Render("⏎ ask again • ctrl+o open • ctrl+y copy code • esc cancel"))
+		return dialog.Box(m.theme, lines)
+	}
+	lines = append(lines, s.faint.Render("waiting for approval; this finishes by itself"), "",
+		s.faint.Render("ctrl+o open page • ctrl+y copy code • esc cancel"))
+	return dialog.Box(m.theme, lines)
+}
+
+// pasteBox asks for a token or login file made elsewhere.
+func (m Model) pasteBox() string {
+	s := m.st
+	inner := m.modalInner()
+	l := m.modal.login
+	p := providerByID(m.snap, l.Provider)
+	lines := []string{s.title.Render("Sign in to " + p.Name + ": " + l.Method.Label), ""}
+	for _, w := range wrap(l.Method.Hint, inner) {
+		lines = append(lines, s.text.Render(w))
+	}
+	lines = append(lines, "", m.modal.input.View(), "")
+	switch {
+	case m.modal.busy:
+		lines = append(lines, s.faint.Render("signing in…"))
+	case m.modal.err != "":
+		for _, w := range wrap(m.modal.err, inner) {
+			lines = append(lines, s.bad.Render(w))
+		}
+		lines = append(lines, "", s.faint.Render("⏎ try again • esc cancel"))
+	default:
+		lines = append(lines, s.faint.Render("⏎ finish • esc cancel"))
+	}
+	return dialog.Box(m.theme, lines)
+}
+
 func (m Model) confirmBox() string {
 	s := m.st
 	text := s.text.Width(m.modalInner())
@@ -499,7 +585,7 @@ func (m Model) helpBox() string {
 		s.title.Render("Accounts"), "",
 		row("u, enter", "use this account: all of this agent's traffic moves to it"),
 		row("K/J", "move this account up or down in its fallback chain"),
-		row("a", "sign an account in (opens a link, paste the code or address back)"),
+		row("a", "sign an account in: browser, device code, token, or login file"),
 		row("d", "disable or enable the account"),
 		row("x", "remove the account and its tokens"),
 		row("r", "read everything again, live quotas included"),

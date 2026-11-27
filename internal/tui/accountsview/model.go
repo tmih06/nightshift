@@ -41,15 +41,20 @@ type modalKind int
 const (
 	modalNone modalKind = iota
 	modalProvider
-	modalLink
+	modalMethod // how to sign in to the chosen agent
+	modalLink   // the sign-in itself: a link, a device code, or a paste
 	modalConfirm
 )
+
+// pasteLimit is how much a paste may hold: a whole login file.
+const pasteLimit = 64 << 10
 
 type modal struct {
 	kind modalKind
 
-	// provider picker
-	choice int
+	// provider and method pickers
+	choice   int
+	provider v1.Provider
 
 	// sign-in link
 	login v1.Login
@@ -125,14 +130,18 @@ type (
 	}
 	loginDoneMsg struct {
 		label string
+		id    string
+		done  bool // false while a device sign-in waits for approval
 		err   error
 	}
+	// loginPollMsg asks after the device sign-in id again.
+	loginPollMsg struct{ id string }
 )
 
 // Owns reports whether the tab handles msg itself.
 func Owns(msg tea.Msg) bool {
 	switch msg.(type) {
-	case snapshotMsg, tickMsg, noteMsg, doneMsg, loginStartedMsg, loginDoneMsg:
+	case snapshotMsg, tickMsg, noteMsg, doneMsg, loginStartedMsg, loginDoneMsg, loginPollMsg:
 		return true
 	}
 	return false
@@ -215,6 +224,8 @@ func (m Model) data(msg tea.Msg) (Model, tea.Cmd) {
 		return m.loginStarted(msg)
 	case loginDoneMsg:
 		return m.loginDone(msg)
+	case loginPollMsg:
+		return m.pollLogin(msg)
 	}
 	return m, nil
 }
@@ -245,7 +256,7 @@ func (m Model) onDone(msg doneMsg) (Model, tea.Cmd) {
 }
 
 func (m Model) paste(msg tea.PasteMsg) (Model, tea.Cmd) {
-	if m.modal.kind != modalLink || m.modal.busy {
+	if m.modal.kind != modalLink || m.modal.busy || m.modal.login.Method.Kind == v1.LoginDevice {
 		return m, nil
 	}
 	var cmd tea.Cmd
@@ -303,6 +314,8 @@ func (m Model) key(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch m.modal.kind {
 	case modalProvider:
 		return m.keyProvider(msg)
+	case modalMethod:
+		return m.keyMethod(msg)
 	case modalLink:
 		return m.keyLink(msg)
 	case modalConfirm:
@@ -403,20 +416,51 @@ func (m Model) keyProvider(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.modal.choice = (m.modal.choice + n - 1) % n
 	case keyEnter:
 		p := m.snap.Providers[m.modal.choice]
-		m.modal.busy = true
-		svc := m.svc
-		return m, func() tea.Msg {
-			ctx, cancel := context.WithTimeout(context.Background(), fetchWindow)
-			defer cancel()
-			l, err := svc.StartLogin(ctx, p.ID)
-			return loginStartedMsg{login: l, err: err}
+		if len(p.Methods) > 1 {
+			m.modal = modal{kind: modalMethod, provider: p}
+			return m, nil
 		}
+		m.modal.busy, m.modal.provider = true, p
+		return m, m.startLogin(p.ID, "")
 	}
 	return m, nil
 }
 
+// keyMethod answers the list of ways to sign in to the chosen agent.
+func (m Model) keyMethod(msg tea.KeyPressMsg) (Model, tea.Cmd) {
+	if m.modal.busy {
+		return m, nil
+	}
+	n := len(m.modal.provider.Methods)
+	switch msg.String() {
+	case keyEsc, "q", "backspace":
+		return m.openProviderPicker(), nil
+	case keyCtrlC:
+		m.modal = modal{}
+	case "j", "down", "tab":
+		m.modal.choice = (m.modal.choice + 1) % n
+	case "k", "up", "shift+tab":
+		m.modal.choice = (m.modal.choice + n - 1) % n
+	case keyEnter:
+		m.modal.busy = true
+		return m, m.startLogin(m.modal.provider.ID, m.modal.provider.Methods[m.modal.choice].ID)
+	}
+	return m, nil
+}
+
+// startLogin asks the services to begin signing in to provider by method.
+func (m Model) startLogin(provider, method string) tea.Cmd {
+	svc := m.svc
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), fetchWindow)
+		defer cancel()
+		l, err := svc.StartLogin(ctx, provider, method)
+		return loginStartedMsg{login: l, err: err}
+	}
+}
+
 func (m Model) loginStarted(msg loginStartedMsg) (Model, tea.Cmd) {
-	if m.modal.kind != modalProvider {
+	if m.modal.kind != modalProvider && m.modal.kind != modalMethod {
 		return m, nil // the picker was closed while the link was fetched
 	}
 	if msg.err != nil {
@@ -424,11 +468,53 @@ func (m Model) loginStarted(msg loginStartedMsg) (Model, tea.Cmd) {
 		cmd := m.say("Could not start sign-in: "+msg.err.Error(), true)
 		return m, cmd
 	}
-	ti := dialog.TextInput(m.theme, "▸ ", "paste the code, or the address the browser ends on", 4096)
+	m.modal = modal{kind: modalLink, login: msg.login, input: m.loginInput(msg.login.Method.Kind)}
+	if msg.login.Method.Kind == v1.LoginDevice {
+		return m, pollAfter(msg.login)
+	}
+	return m, nil
+}
+
+// loginInput is where the person pastes what finishes a sign-in of kind. A
+// paste may be a whole login file, and is a secret, so it is not shown.
+func (m Model) loginInput(kind string) textinput.Model {
+	placeholder, limit := "paste the code, or the address the browser ends on", 4096
+	if kind == v1.LoginPaste {
+		placeholder, limit = "paste it here", pasteLimit
+	}
+	ti := dialog.TextInput(m.theme, "▸ ", placeholder, limit)
+	if kind == v1.LoginPaste {
+		ti.EchoMode = textinput.EchoPassword
+	}
 	ti.Focus()
 	ti.SetWidth(min(70, max(24, m.width-16)))
-	m.modal = modal{kind: modalLink, login: msg.login, input: ti}
-	return m, nil
+	return ti
+}
+
+// pollAfter asks after device sign-in l once its interval has passed.
+func pollAfter(l v1.Login) tea.Cmd {
+	every := time.Duration(max(l.PollSeconds, 2)) * time.Second
+	return tea.Tick(every, func(time.Time) tea.Msg { return loginPollMsg{id: l.ID} })
+}
+
+// pollLogin asks whether the device sign-in on screen was approved.
+func (m Model) pollLogin(msg loginPollMsg) (Model, tea.Cmd) {
+	if m.modal.kind != modalLink || m.modal.login.ID != msg.id || m.modal.busy || m.modal.err != "" {
+		return m, nil // cancelled, finished, or failed
+	}
+	m.modal.busy = true
+	return m, m.completeLogin("")
+}
+
+// completeLogin finishes the sign-in on screen with input.
+func (m Model) completeLogin(input string) tea.Cmd {
+	l, svc := m.modal.login, m.svc
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		p, err := svc.CompleteLogin(ctx, l, input)
+		return loginDoneMsg{label: l.Provider, id: l.ID, done: p.Done, err: err}
+	}
 }
 
 func (m Model) keyLink(msg tea.KeyPressMsg) (Model, tea.Cmd) {
@@ -448,36 +534,65 @@ func (m Model) keyLink(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			return doneMsg{}
 		}
 	case "ctrl+o":
-		return m, openBrowser(m.modal.login.URL)
-	case "ctrl+y":
-		return m, tea.Batch(tea.SetClipboard(m.modal.login.URL), m.say("Sign-in link copied", false))
-	case keyEnter:
-		redirect := strings.TrimSpace(m.modal.input.Value())
-		if redirect == "" {
+		if m.modal.login.URL == "" {
 			return m, nil
 		}
-		m.modal.busy, m.modal.err = true, ""
-		l, svc := m.modal.login, m.svc
-		return m, func() tea.Msg {
-			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-			defer cancel()
-			err := svc.CompleteLogin(ctx, l, redirect)
-			return loginDoneMsg{label: l.Provider, err: err}
-		}
+		return m, openBrowser(m.modal.login.URL)
+	case "ctrl+y":
+		return m.copyLogin()
+	case keyEnter:
+		return m.submitLogin()
+	}
+	if m.modal.login.Method.Kind == v1.LoginDevice {
+		return m, nil // nothing to type: the code is entered on the provider's page
 	}
 	var cmd tea.Cmd
 	m.modal.input, cmd = m.modal.input.Update(msg)
 	return m, cmd
 }
 
+// copyLogin copies the device code, or else the sign-in link.
+func (m Model) copyLogin() (Model, tea.Cmd) {
+	l := m.modal.login
+	switch {
+	case l.Method.Kind == v1.LoginDevice && l.UserCode != "":
+		return m, tea.Batch(tea.SetClipboard(l.UserCode), m.say("Code copied", false))
+	case l.URL != "":
+		return m, tea.Batch(tea.SetClipboard(l.URL), m.say("Sign-in link copied", false))
+	}
+	return m, nil
+}
+
+// submitLogin sends what was pasted. On a device sign-in that failed, it
+// starts asking again.
+func (m Model) submitLogin() (Model, tea.Cmd) {
+	if m.modal.login.Method.Kind == v1.LoginDevice {
+		if m.modal.err == "" {
+			return m, nil
+		}
+		m.modal.err, m.modal.busy = "", true
+		return m, m.completeLogin("")
+	}
+	input := strings.TrimSpace(m.modal.input.Value())
+	if input == "" {
+		return m, nil
+	}
+	m.modal.busy, m.modal.err = true, ""
+	return m, m.completeLogin(input)
+}
+
 func (m Model) loginDone(msg loginDoneMsg) (Model, tea.Cmd) {
-	if m.modal.kind != modalLink {
+	if m.modal.kind != modalLink || (msg.id != "" && msg.id != m.modal.login.ID) {
 		return m, nil
 	}
 	if msg.err != nil {
 		m.modal.busy = false
 		m.modal.err = msg.err.Error()
 		return m, nil
+	}
+	if !msg.done {
+		m.modal.busy = false
+		return m, pollAfter(m.modal.login)
 	}
 	m.modal = modal{}
 	p := providerByID(m.snap, msg.label)

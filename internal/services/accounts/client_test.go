@@ -41,7 +41,7 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.accounts(w)
 	case r.URL.Path == "/v1/logins":
 		w.WriteHeader(http.StatusCreated)
-		f.say(w, `{"id":"abc","provider":"claude","url":"https://claude.ai/oauth/authorize?state=abc"}`)
+		f.say(w, `{"id":"abc","provider":"claude","method":{"id":"browser","label":"browser","kind":"browser"},"url":"https://claude.ai/oauth/authorize?state=abc"}`)
 	case strings.HasPrefix(r.URL.Path, "/v1/logins/") && r.Method == http.MethodPost && f.reject != "":
 		w.WriteHeader(http.StatusBadRequest)
 		f.say(w, `{"error":"`+f.reject+`"}`)
@@ -119,15 +119,15 @@ func TestWrongKeyIsReported(t *testing.T) {
 
 func TestLoginRoundTrip(t *testing.T) {
 	c, api := newTestClient(t)
-	l, err := c.StartLogin(t.Context(), "claude")
-	if err != nil || l.State != "abc" || !strings.HasPrefix(l.URL, "https://claude.ai/") {
+	l, err := c.StartLogin(t.Context(), "claude", "")
+	if err != nil || l.State != "abc" || !strings.HasPrefix(l.URL, "https://claude.ai/") || l.Method.Kind != KindBrowser {
 		t.Fatalf("StartLogin = %+v, %v", l, err)
 	}
-	if err := c.Complete(t.Context(), l, "   "); err == nil {
+	if _, err := c.Complete(t.Context(), l, "   "); err == nil {
 		t.Error("an empty paste must be refused before anything is sent")
 	}
-	if err := c.Complete(t.Context(), l, " the-code#abc "); err != nil {
-		t.Fatalf("Complete: %v", err)
+	if p, err := c.Complete(t.Context(), l, " the-code#abc "); err != nil || !p.Done || p.Account != "claude-a@example.com" {
+		t.Fatalf("Complete = %+v, %v", p, err)
 	}
 	if got := api.bodies[len(api.bodies)-1]; got != `{"input":"the-code#abc"}` {
 		t.Errorf("Complete sent %s", got)
@@ -137,7 +137,7 @@ func TestLoginRoundTrip(t *testing.T) {
 func TestLoginFailureCarriesTheServersReason(t *testing.T) {
 	c, api := newTestClient(t)
 	api.reject = "account is on a free plan"
-	err := c.Complete(t.Context(), Login{Provider: "claude", State: "abc"}, "code#abc")
+	_, err := c.Complete(t.Context(), Login{Provider: "claude", State: "abc"}, "code#abc")
 	if err == nil || !strings.Contains(err.Error(), "free plan") {
 		t.Errorf("Complete = %v, want the reason from nightshift-auth", err)
 	}

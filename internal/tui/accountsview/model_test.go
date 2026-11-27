@@ -44,14 +44,28 @@ func (f *fakeService) Accounts(context.Context) (v1.Accounts, error) {
 	return f.snap, f.fetchErr
 }
 
-func (f *fakeService) StartLogin(_ context.Context, p string) (v1.Login, error) {
-	f.note("start " + p)
-	return v1.Login{Provider: p, URL: "https://claude.ai/oauth/authorize?state=abc", ID: "abc"}, f.loginErr
+func (f *fakeService) StartLogin(_ context.Context, p, method string) (v1.Login, error) {
+	f.note(strings.TrimSpace("start " + p + " " + method))
+	switch method {
+	case "device":
+		return v1.Login{Provider: p, ID: "abc", Method: v1.LoginMethod{ID: method, Kind: v1.LoginDevice},
+			URL: "https://auth.openai.com/codex/device", UserCode: "ABCD-1234", PollSeconds: 5}, f.loginErr
+	case "token":
+		return v1.Login{Provider: p, ID: "abc", Method: v1.LoginMethod{ID: method, Kind: v1.LoginPaste,
+			Label: "Token from claude setup-token", Hint: "Run claude setup-token and paste the token."}}, f.loginErr
+	}
+	return v1.Login{Provider: p, URL: "https://claude.ai/oauth/authorize?state=abc", ID: "abc",
+		Method: v1.LoginMethod{ID: "browser", Kind: v1.LoginBrowser}}, f.loginErr
 }
 
-func (f *fakeService) CompleteLogin(_ context.Context, _ v1.Login, redirect string) error {
-	f.note("complete " + redirect)
-	return f.loginErr
+// CompleteLogin finishes at once, except a device sign-in, which is approved
+// on the second ask.
+func (f *fakeService) CompleteLogin(_ context.Context, l v1.Login, input string) (v1.LoginProgress, error) {
+	f.note("complete " + input)
+	if l.Method.Kind == v1.LoginDevice && strings.Count(f.log(), "complete") < 2 {
+		return v1.LoginProgress{}, f.loginErr
+	}
+	return v1.LoginProgress{Done: true, Account: "new"}, f.loginErr
 }
 func (f *fakeService) CancelLogin(context.Context, v1.Login) error {
 	f.note("cancel")
@@ -370,6 +384,65 @@ func TestSigningInAnAccount(t *testing.T) {
 	}
 	if m.Capturing() {
 		t.Error("the dialog must close once the sign-in succeeds")
+	}
+}
+
+// methodSnapshot is sampleSnapshot whose agents offer more than the browser.
+func methodSnapshot() v1.Accounts {
+	s := sampleSnapshot()
+	s.Providers[0].Methods = []v1.LoginMethod{
+		{ID: "browser", Label: "Claude account, in the browser", Kind: v1.LoginBrowser, Hint: "Approve, then paste the code."},
+		{ID: "token", Label: "Token from claude setup-token", Kind: v1.LoginPaste, Hint: "Run claude setup-token and paste the token."},
+	}
+	s.Providers[1].Methods = []v1.LoginMethod{
+		{ID: "browser", Label: "ChatGPT account, in the browser", Kind: v1.LoginBrowser, Hint: "Approve."},
+		{ID: "device", Label: "ChatGPT account, with a device code", Kind: v1.LoginDevice, Hint: "Enter the code on OpenAI's page."},
+	}
+	return s
+}
+
+func TestSigningInWithAPastedTokenHidesIt(t *testing.T) {
+	svc := &fakeService{snap: methodSnapshot()}
+	m := shown(t, svc)
+	m = press(t, m, "a", "enter")
+	view := plain(m)
+	for _, want := range []string{"Claude account, in the browser", "Token from claude setup-token", "Approve, then paste the code."} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the ways to sign in lack %q:\n%s", want, view)
+		}
+	}
+	m = press(t, m, "j", "enter")
+	if !strings.Contains(svc.log(), "start claude token") || !strings.Contains(plain(m), "Run claude setup-token") {
+		t.Fatalf("calls %s, view:\n%s", svc.log(), plain(m))
+	}
+	m, _ = m.Update(tea.PasteMsg{Content: "sk-ant-oat01-secret"})
+	if strings.Contains(plain(m), "sk-ant-oat01-secret") {
+		t.Errorf("a pasted token is shown on screen:\n%s", plain(m))
+	}
+	m = press(t, m, "enter")
+	if !strings.Contains(svc.log(), "complete sk-ant-oat01-secret") || m.Capturing() {
+		t.Errorf("the token was not handed over and the dialog closed: %s", svc.log())
+	}
+}
+
+func TestADeviceSignInShowsTheCodeAndFinishesByItself(t *testing.T) {
+	svc := &fakeService{snap: methodSnapshot()}
+	m := shown(t, svc)
+	m = press(t, m, "j", "j") // the Codex account
+	m = press(t, m, "a", "enter", "j", "enter")
+	view := plain(m)
+	if !strings.Contains(svc.log(), "start codex device") || !strings.Contains(view, "ABCD-1234") || !strings.Contains(view, "https://auth.openai.com/codex/device") {
+		t.Fatalf("calls %s, view:\n%s", svc.log(), view)
+	}
+	next, cmd := m.Update(loginPollMsg{id: "abc"})
+	m = drain(t, next, cmd)
+	if !m.Capturing() || !strings.Contains(plain(m), "waiting for approval") {
+		t.Fatalf("an unapproved code must keep waiting:\n%s", plain(m))
+	}
+	next, cmd = m.Update(loginPollMsg{id: "abc"})
+	m = drain(t, next, cmd)
+	if m.Capturing() || strings.Count(svc.log(), "complete") != 2 {
+		t.Errorf("the approved sign-in must close the dialog (calls: %s)", svc.log())
 	}
 }
 

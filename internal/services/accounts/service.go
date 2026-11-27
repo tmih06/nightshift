@@ -12,8 +12,8 @@ import (
 // can be tested without a cluster.
 type Service interface {
 	Fetch(ctx context.Context) (Snapshot, error)
-	StartLogin(ctx context.Context, provider string) (Login, error)
-	CompleteLogin(ctx context.Context, l Login, redirect string) error
+	StartLogin(ctx context.Context, provider, method string) (Login, error)
+	CompleteLogin(ctx context.Context, l Login, input string) (Progress, error)
 	CancelLogin(ctx context.Context, l Login) error
 	SetDisabled(ctx context.Context, name string, disabled bool) error
 	Remove(ctx context.Context, name string) error
@@ -172,22 +172,23 @@ func matchesProxyAccount(proxyName, proxyLabel, acctName, secret, acctLabel stri
 	return proxyName == acctName || (proxyName == secret && proxyLabel == acctLabel)
 }
 
-// StartLogin begins signing an account in.
-func (l *Live) StartLogin(ctx context.Context, provider string) (Login, error) {
+// StartLogin begins signing an account in by method.
+func (l *Live) StartLogin(ctx context.Context, provider, method string) (Login, error) {
 	c, err := l.client(ctx)
 	if err != nil {
 		return Login{}, err
 	}
-	return c.StartLogin(ctx, provider)
+	return c.StartLogin(ctx, provider, method)
 }
 
-// CompleteLogin finishes a sign-in with the address the browser ended on.
-func (l *Live) CompleteLogin(ctx context.Context, lg Login, redirect string) error {
+// CompleteLogin finishes a sign-in with what the person pasted, or asks after
+// a device sign-in.
+func (l *Live) CompleteLogin(ctx context.Context, lg Login, input string) (Progress, error) {
 	c, err := l.client(ctx)
 	if err != nil {
-		return err
+		return Progress{}, err
 	}
-	return c.Complete(ctx, lg, redirect)
+	return c.Complete(ctx, lg, input)
 }
 
 // CancelLogin abandons a sign-in.
