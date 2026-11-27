@@ -175,6 +175,11 @@ Prune rules that no longer apply. Past about 200 lines, move older detail into
     real ones and failed with "selected workspace missing from routing
     discovery".
   - **Enforced by**: `TestShippedPolicyAnswersCodexWorkspaceDiscovery`.
+- **Rule**: Refuse a protocol the egress proxy cannot carry with the status
+  that makes clients fall back, never forward a stripped request.
+  - **Why**: Codex's WebSocket upgrade reached `chatgpt.com` as a plain `GET`,
+    and its `405` made Codex retry and print errors before using HTTP.
+  - **Enforced by**: `TestProxyRefusesWebSocketsSoClientsUseHTTP`.
 - **Rule**: Mark an account active only from the proxy's live pool state, never
   from the chain order.
   - **Why**: The Accounts tab called a cooling first account the one in use

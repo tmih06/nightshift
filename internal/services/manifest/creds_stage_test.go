@@ -141,8 +141,8 @@ func TestCredsStageSwapsEveryAgentLogin(t *testing.T) {
 	}
 	// Codex refuses to start on a config.toml that overrides a built-in
 	// provider, and releases have disagreed about which overrides are
-	// allowed, so no config is shipped: Codex retries its WebSocket against
-	// the proxy and falls back to HTTPS by itself.
+	// allowed, so no config is shipped: the egress proxy refuses its WebSocket
+	// with 426 and Codex switches to HTTPS by itself.
 	if _, err := stage.Stat(".codex/config.toml"); err == nil {
 		t.Error("a config.toml can stop a Codex release from starting; none may be distributed")
 	}

@@ -195,7 +195,9 @@ and would be told the real account. The proxy answers that itself with
 `www.googleapis.com`, and injects no login there. Codex looks its
 `account_id` up in `chatgpt.com`'s `/backend-api/wham/accounts/check` and
 refuses to run when it is missing, so the proxy answers that path with the
-placeholder id. The `sandbox-egress-env`
+placeholder id. The proxy carries
+no WebSockets: it answers an upgrade with `426 Upgrade Required`, on which
+Codex switches to HTTP without retrying. The `sandbox-egress-env`
 ConfigMap sets `CLAUDE_CODE_OAUTH_TOKEN` and never `ANTHROPIC_API_KEY`,
 which Claude Code gives precedence over every OAuth path.
 

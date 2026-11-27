@@ -534,13 +534,13 @@ func (p *Proxy) handleMITM(w http.ResponseWriter, r *http.Request, host string, 
 			continue
 		}
 
-		if body, ok := rule.answer(req.URL.Path); ok {
+		if own, ok := rule.localReply(req); ok {
 			p.record(r.Context(), AuditEvent{
-				Action: "ALLOW", Mode: "mitm", Client: r.RemoteAddr,
+				Action: own.action, Mode: "mitm", Client: r.RemoteAddr,
 				Method: req.Method, Host: host, Port: port, Path: req.URL.Path,
-				Rule: rule.Name, Status: http.StatusOK, Reason: "answered by the proxy",
+				Rule: rule.Name, Status: own.status, Reason: own.reason,
 			})
-			werr := writeResponse(tlsConn, req, http.StatusOK, "application/json", body)
+			werr := writeResponse(tlsConn, req, own.status, own.contentType, own.body)
 			cerr := req.Body.Close()
 			if werr != nil || cerr != nil || req.Close {
 				return
@@ -594,6 +594,29 @@ func (p *Proxy) handleMITM(w http.ResponseWriter, r *http.Request, host string, 
 			return
 		}
 	}
+}
+
+// localReply is a response the proxy gives itself, and how to audit it.
+type localReply struct {
+	action, reason, contentType, body string
+	status                            int
+}
+
+// localReply is the proxy's reply to a request it does not forward. A WebSocket
+// upgrade cannot pass, since the Upgrade header is stripped on the way out; 426
+// tells Codex to use HTTP at once instead of retrying.
+func (r *Rule) localReply(req *http.Request) (localReply, bool) {
+	if strings.EqualFold(req.Header.Get("Upgrade"), "websocket") {
+		return localReply{
+			action: "DENY", reason: "websocket not supported", status: http.StatusUpgradeRequired,
+			contentType: "text/plain; charset=utf-8", body: "egress proxy carries no websockets; use HTTP\n",
+		}, true
+	}
+	body, ok := r.answer(req.URL.Path)
+	return localReply{
+		action: "ALLOW", reason: "answered by the proxy", status: http.StatusOK,
+		contentType: "application/json", body: body,
+	}, ok
 }
 
 type forwardReq struct {
