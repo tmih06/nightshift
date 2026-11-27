@@ -1348,7 +1348,7 @@ func TestNavScrollDebouncesFetches(t *testing.T) {
 
 func TestTrimReadmePreviewAndFullView(t *testing.T) {
 	short := "# Short\n\nJust two lines.\n"
-	got, trimmed := trimReadmePreview(short, 48)
+	got, trimmed := trimReadmePreview(short)
 	if trimmed || got != short {
 		t.Fatalf("short readme should not be trimmed: trimmed=%v", trimmed)
 	}
@@ -1362,7 +1362,7 @@ func TestTrimReadmePreviewAndFullView(t *testing.T) {
 	sb.WriteString("```\n\nTAIL_MARKER_ONLY_IN_FULL_README\n")
 	longMD := sb.String()
 
-	preview, trimmed := trimReadmePreview(longMD, 48)
+	preview, trimmed := trimReadmePreview(longMD)
 	if !trimmed {
 		t.Fatal("expected long readme to be trimmed")
 	}

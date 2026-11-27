@@ -810,7 +810,7 @@ func (m *Model) ensureRepoOverviewCmd(repo string) tea.Cmd {
 		defer cancel()
 		r, err := c.GetRepoOverview(ctx, repo)
 		if err == nil && r.Readme != "" && detailsW > 0 {
-			preview, _ := trimReadmePreview(r.Readme, readmePreviewMaxLines)
+			preview, _ := trimReadmePreview(r.Readme)
 			_, _ = ghmd.Render(preview, max(20, detailsW-2), nil)
 		}
 		return repoOverviewLoadedMsg{repo: repo, data: r, err: err}

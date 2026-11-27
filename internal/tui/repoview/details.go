@@ -173,8 +173,8 @@ func (m *Model) renderMutedPill(text string) string {
 	return m.ui.mutedPill.Render(text)
 }
 
-func trimReadmePreview(md string, maxLines int) (trimmed string, wasTrimmed bool) {
-	if md == "" || maxLines <= 0 {
+func trimReadmePreview(md string) (trimmed string, wasTrimmed bool) {
+	if md == "" {
 		return md, false
 	}
 	lines := 0
@@ -195,7 +195,7 @@ func trimReadmePreview(md string, maxLines int) (trimmed string, wasTrimmed bool
 			nextPos = len(md)
 		}
 
-		if lines >= maxLines || (pos > 0 && pos+len(line) > readmePreviewMaxBytes) {
+		if lines >= readmePreviewMaxLines || (pos > 0 && pos+len(line) > readmePreviewMaxBytes) {
 			out := md[:pos]
 			if inFence {
 				if len(out) > 0 && out[len(out)-1] != '\n' {
@@ -331,7 +331,7 @@ func (m *Model) renderRepoOverviewDetails(repoName string, width int, fullReadme
 		md := r.Readme
 		trimmed := false
 		if !fullReadme {
-			md, trimmed = trimReadmePreview(r.Readme, readmePreviewMaxLines)
+			md, trimmed = trimReadmePreview(r.Readme)
 		}
 		out = append(out, m.renderMarkdownLines(md, width)...)
 		if trimmed {
