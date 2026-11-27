@@ -169,6 +169,12 @@ Prune rules that no longer apply. Past about 200 lines, move older detail into
     proxy, and a blank answer then left its `/usage` loading forever.
   - **Enforced by**: `TestShippedPolicyNeverAsksGoogleWhoTheAccountIs`,
     `TestProxyAnswersAListedPathWithoutForwardingIt`.
+- **Rule**: Answer in the egress proxy any endpoint whose reply a CLI compares
+  with a value that is a placeholder in its sandbox login.
+  - **Why**: Codex 0.171 did not find its placeholder `account_id` among the
+    real ones and failed with "selected workspace missing from routing
+    discovery".
+  - **Enforced by**: `TestShippedPolicyAnswersCodexWorkspaceDiscovery`.
 - **Rule**: Mark an account active only from the proxy's live pool state, never
   from the chain order.
   - **Why**: The Accounts tab called a cooling first account the one in use

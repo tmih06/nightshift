@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -118,6 +119,48 @@ func TestShippedPolicySwapsEveryRegisteredLogin(t *testing.T) {
 				t.Errorf("%s: rule %q does not bind %s on %s", p.ID, r.Name, p.Secret, host)
 			}
 		}
+	}
+}
+
+// Codex looks its login's account_id up in this list and refuses to run when it
+// is missing. A sandbox's account_id is a placeholder, which the real list never
+// holds, and the real list names the account.
+func TestShippedPolicyAnswersCodexWorkspaceDiscovery(t *testing.T) {
+	const id = "nightshift:secret:CODEX_ACCOUNT_ID"
+	const path = "/backend-api/wham/accounts/check"
+	cfg := shippedPolicy(t)
+	r, ok := cfg.MatchHostPort("chatgpt.com", 443)
+	if !ok {
+		t.Fatal("no rule for chatgpt.com")
+	}
+	body, answered := r.answer(path)
+	if !answered || !r.AllowsRequest("GET", path) {
+		t.Fatalf("%s is not answered by the proxy", path)
+	}
+	var got struct {
+		Accounts []struct {
+			ID       string `json:"id"`
+			Origin   string `json:"workspace_backend_origin"`
+			Override string `json:"account_routing_override"`
+		} `json:"accounts"`
+	}
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatalf("%s: %v", path, err)
+	}
+	if len(got.Accounts) != 1 || got.Accounts[0].ID != id {
+		t.Fatalf("accounts = %+v, want only %s", got.Accounts, id)
+	}
+	// Codex also refuses an entry without both routing fields.
+	if a := got.Accounts[0]; a.Origin != "NO_CONSTRAINT" || a.Override != "NO_CONSTRAINT" {
+		t.Errorf("routing = %q %q, want NO_CONSTRAINT", a.Origin, a.Override)
+	}
+	// The id must be the one creds-stage writes into a sandbox's auth.json.
+	providers, err := os.ReadFile("../../../k8s/creds-providers.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(providers), id) {
+		t.Errorf("creds-providers.json no longer gives Codex account_id %s", id)
 	}
 }
 

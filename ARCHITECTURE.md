@@ -192,7 +192,10 @@ identity is not enough on its own: agy asks Google who its token belongs to,
 and would be told the real account. The proxy answers that itself with
 `nightshift@proxy.local` (a rule's `answers`; with a blank email agy's
 `/usage` loads forever), forwards nothing under
-`www.googleapis.com`, and injects no login there. The `sandbox-egress-env`
+`www.googleapis.com`, and injects no login there. Codex looks its
+`account_id` up in `chatgpt.com`'s `/backend-api/wham/accounts/check` and
+refuses to run when it is missing, so the proxy answers that path with the
+placeholder id. The `sandbox-egress-env`
 ConfigMap sets `CLAUDE_CODE_OAUTH_TOKEN` and never `ANTHROPIC_API_KEY`,
 which Claude Code gives precedence over every OAuth path.
 

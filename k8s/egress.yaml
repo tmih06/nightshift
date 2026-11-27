@@ -25,11 +25,22 @@ data:
         ports: [443]
         mode: mitm
         secrets: ["ANTHROPIC_API_KEY", "CLAUDE_ACCESS_TOKEN"]
+      # Codex refuses to run unless this list holds its login's account_id.
+      # A sandbox's is a placeholder, and the real list names the account, so
+      # the proxy answers with the placeholder and forwards nothing.
       - name: chatgpt
         hosts: ["chatgpt.com"]
         ports: [443]
         mode: mitm
         secrets: ["CODEX_ACCESS_TOKEN"]
+        answers:
+          /backend-api/wham/accounts/check: >-
+            {"accounts": [{"id": "nightshift:secret:CODEX_ACCOUNT_ID",
+            "plan_type": "pro", "structure": "personal",
+            "workspace_backend_origin": "NO_CONSTRAINT",
+            "account_routing_override": "NO_CONSTRAINT"}],
+            "account_ordering": ["nightshift:secret:CODEX_ACCOUNT_ID"],
+            "default_account_id": "nightshift:secret:CODEX_ACCOUNT_ID"}
       - name: antigravity
         hosts:
           - "cloudcode-pa.googleapis.com"
