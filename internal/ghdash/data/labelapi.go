@@ -88,11 +88,3 @@ func ClearRepoLabelCache(repoNameWithOwner string) {
 	defer labelCacheMu.Unlock()
 	delete(repoLabelCache, repoNameWithOwner)
 }
-
-func LabelNames(labels []Label) []string {
-	names := make([]string, len(labels))
-	for i, label := range labels {
-		names[i] = label.Name
-	}
-	return names
-}

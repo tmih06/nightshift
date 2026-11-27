@@ -318,15 +318,6 @@ func (m *BaseModel) UpdateProgramContext(ctx *context.ProgramContext) {
 	m.SearchBar.UpdateProgramContext(ctx)
 }
 
-type SectionRowsFetchedMsg struct {
-	SectionId int
-	Issues    []data.RowData
-}
-
-func (msg SectionRowsFetchedMsg) GetSectionId() int {
-	return msg.SectionId
-}
-
 func (m *BaseModel) GetId() int {
 	return m.Id
 }

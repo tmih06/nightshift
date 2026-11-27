@@ -33,7 +33,6 @@ type viewCache struct {
 }
 
 type Model struct {
-	sections      []section.Section
 	sectionTabs   []SectionTab
 	carousel      carousel.Model
 	ctx           *context.ProgramContext

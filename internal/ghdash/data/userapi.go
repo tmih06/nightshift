@@ -111,11 +111,3 @@ func ClearRepoUserCache(repoNameWithOwner string) {
 	defer userCacheMu.Unlock()
 	delete(repoUserCache, repoNameWithOwner)
 }
-
-func UserLogins(users []User) []string {
-	logins := make([]string, len(users))
-	for i, user := range users {
-		logins[i] = user.Login
-	}
-	return logins
-}

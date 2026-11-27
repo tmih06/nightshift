@@ -168,27 +168,6 @@ func WithSeparators(sep ...string) Option {
 	}
 }
 
-// WithFocused sets the focus state of the carousel.
-func WithFocused(f bool) Option {
-	return func(m *Model) {
-		m.focus = f
-	}
-}
-
-// WithStyles sets the carousel styles.
-func WithStyles(s Styles) Option {
-	return func(m *Model) {
-		m.styles = s
-	}
-}
-
-// WithKeyMap sets the key map.
-func WithKeyMap(km KeyMap) Option {
-	return func(m *Model) {
-		m.KeyMap = km
-	}
-}
-
 // Update is the Bubble Tea update loop.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	if !m.focus {

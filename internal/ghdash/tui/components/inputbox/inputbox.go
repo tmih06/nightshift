@@ -58,20 +58,6 @@ func DefaultTextArea(ctx *context.ProgramContext) textarea.Model {
 	return ta
 }
 
-func DefaultTextInput(ctx *context.ProgramContext) textinput.Model {
-	ti := textinput.New()
-	ti.Prompt = ""
-	ti.CharLimit = 65536
-	base := lipgloss.NewStyle()
-	ti.SetStyles(textinput.Styles{
-		Focused: textinput.StyleState{
-			Text:        base.Foreground(ctx.Theme.PrimaryText),
-			Placeholder: base.Foreground(ctx.Theme.FaintText),
-		},
-	})
-	return ti
-}
-
 type ModelOpts struct {
 	TextArea  *textarea.Model
 	TextInput *textinput.Model

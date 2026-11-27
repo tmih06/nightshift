@@ -114,35 +114,6 @@ type PreviewConfig struct {
 	Position string  `yaml:"position,omitempty"`
 }
 
-type NullableBool struct {
-	Value *bool
-}
-
-func (nb NullableBool) MarshalJSON() ([]byte, error) {
-	log.Error("marshalling", "nb", nb)
-	if nb.Value != nil {
-		return json.Marshal(nb.Value)
-	}
-
-	return json.Marshal(false)
-}
-
-func (nullBool *NullableBool) UnmarshalJSON(b []byte) error {
-	var unmarshalledJson bool
-	nb := NullableBool{}
-	if nullBool == nil {
-		return nil
-	}
-
-	err := json.Unmarshal(b, &unmarshalledJson)
-	if err != nil {
-		return err
-	}
-	nb.Value = &unmarshalledJson
-	*nullBool = nb
-	return nil
-}
-
 type ColumnConfig struct {
 	Width  *int  `yaml:"width,omitempty"  validate:"omitempty,gt=0"`
 	Hidden *bool `yaml:"hidden,omitempty"`

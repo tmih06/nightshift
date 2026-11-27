@@ -82,8 +82,6 @@ func BoolPtr(b bool) *bool { return &b }
 
 func StringPtr(s string) *string { return &s }
 
-func UintPtr(u uint) *uint { return &u }
-
 func IntPtr(u int) *int { return &u }
 
 func ShortNumber(n int) string {
@@ -111,15 +109,6 @@ func GetStylePrefix(s lipgloss.Style) string {
 		return rendered[:len(rendered)-3]
 	}
 	return rendered
-}
-
-func Clamp(mn, wanted, mx int) int {
-	return min(mx, max(mn, wanted))
-}
-
-// Remove all ANSI reset codes
-func RemoveReset(s string) string {
-	return strings.ReplaceAll(s, "\x1b[m", "")
 }
 
 // Remove last ANSI reset code
