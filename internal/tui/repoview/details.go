@@ -179,57 +179,80 @@ func trimReadmePreview(md string) (trimmed string, wasTrimmed bool) {
 	}
 	lines := 0
 	pos := 0
-	inFence := false
-	fenceChar := byte(0)
-	fenceLen := 0
+	var f fence
 
 	for pos < len(md) {
-		nl := strings.IndexByte(md[pos:], '\n')
-		var line string
-		var nextPos int
-		if nl >= 0 {
-			line = md[pos : pos+nl]
-			nextPos = pos + nl + 1
-		} else {
-			line = md[pos:]
-			nextPos = len(md)
-		}
-
+		line, nextPos := scanLine(md, pos)
 		if lines >= readmePreviewMaxLines || (pos > 0 && pos+len(line) > readmePreviewMaxBytes) {
-			out := md[:pos]
-			if inFence {
-				if len(out) > 0 && out[len(out)-1] != '\n' {
-					out += "\n"
-				}
-				out += strings.Repeat(string(fenceChar), fenceLen) + "\n"
-			}
-			return out, true
+			return f.close(md[:pos]), true
 		}
-
-		t := strings.TrimLeft(line, " \t")
-		if len(t) >= 3 && (t[0] == '`' || t[0] == '~') {
-			ch := t[0]
-			n := 0
-			for n < len(t) && t[n] == ch {
-				n++
-			}
-			if n >= 3 {
-				if !inFence {
-					inFence = true
-					fenceChar = ch
-					fenceLen = n
-				} else if ch == fenceChar && n >= fenceLen && strings.TrimSpace(t[n:]) == "" {
-					inFence = false
-					fenceChar = 0
-					fenceLen = 0
-				}
-			}
-		}
-
+		f.scan(line)
 		pos = nextPos
 		lines++
 	}
 	return md, false
+}
+
+// scanLine reads the line at pos without its newline, and where the next
+// line starts.
+func scanLine(s string, pos int) (line string, next int) {
+	nl := strings.IndexByte(s[pos:], '\n')
+	if nl < 0 {
+		return s[pos:], len(s)
+	}
+	return s[pos : pos+nl], pos + nl + 1
+}
+
+// fence is where one markdown scan sits inside a code fence: the marker that
+// opened it, so the preview can close it where the cut falls.
+type fence struct {
+	open  bool
+	ch    byte
+	width int
+}
+
+// scan tracks one line. A fence opens on any marker and closes on a marker
+// of the same character, at least as wide, with nothing after it.
+func (f *fence) scan(line string) {
+	ch, width, ok := fenceMark(line)
+	if !ok {
+		return
+	}
+	if !f.open {
+		f.open, f.ch, f.width = true, ch, width
+		return
+	}
+	t := strings.TrimLeft(line, " \t")
+	if ch == f.ch && width >= f.width && strings.TrimSpace(t[width:]) == "" {
+		f.open, f.ch, f.width = false, 0, 0
+	}
+}
+
+// close ends a fence left open where the preview cuts off.
+func (f fence) close(out string) string {
+	if !f.open {
+		return out
+	}
+	if out != "" && out[len(out)-1] != '\n' {
+		out += "\n"
+	}
+	return out + strings.Repeat(string(f.ch), f.width) + "\n"
+}
+
+// fenceMark reads one line's code-fence marker: at least three backticks or
+// tildes after leading spaces or tabs.
+func fenceMark(line string) (ch byte, width int, ok bool) {
+	t := strings.TrimLeft(line, " \t")
+	if len(t) < 3 || (t[0] != '`' && t[0] != '~') {
+		return 0, 0, false
+	}
+	for width < len(t) && t[width] == t[0] {
+		width++
+	}
+	if width < 3 {
+		return 0, 0, false
+	}
+	return t[0], width, true
 }
 
 func (m *Model) renderMarkdownLines(md string, width int) []string {
