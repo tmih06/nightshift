@@ -9,7 +9,7 @@
       "vendored": 0
     },
     "golangci/cyclop": {
-      "first": 57,
+      "first": 56,
       "vendored": 78
     },
     "golangci/dupl": {
@@ -45,7 +45,7 @@
       "vendored": 2
     },
     "golangci/gocognit": {
-      "first": 51,
+      "first": 50,
       "vendored": 56
     },
     "golangci/goconst": {
@@ -69,7 +69,7 @@
       "vendored": 0
     },
     "golangci/nestif": {
-      "first": 17,
+      "first": 16,
       "vendored": 26
     },
     "golangci/nilerr": {
