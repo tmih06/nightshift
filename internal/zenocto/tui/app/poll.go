@@ -14,11 +14,6 @@ type pollTickMsg struct{ at time.Time }
 
 type checksTickMsg struct{ at time.Time }
 
-type sectionPollFailedMsg struct {
-	index int
-	err   error
-}
-
 type pageFailedMsg struct {
 	id  string
 	err error

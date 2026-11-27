@@ -109,8 +109,6 @@ const diffMeasure = 80
 
 const contentLead = 1
 
-const titleMin = 24
-
 const headGutter = 1
 
 const headRoom = 3
