@@ -129,7 +129,7 @@ func (f *fake) StartLogin(_ context.Context, p, _ string) (v1.Login, error) {
 func (f *fake) CompleteLogin(context.Context, string, v1.LoginCompletion) (v1.LoginProgress, error) {
 	return v1.LoginProgress{Done: true}, f.err
 }
-func (f *fake) CancelLogin(context.Context, string, string) error               { return f.err }
+func (f *fake) CancelLogin(context.Context, string, string) error { return f.err }
 func (f *fake) SetDisabled(_ context.Context, name string, _ bool) error {
 	f.patched = name
 	return f.err

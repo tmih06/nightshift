@@ -31,6 +31,7 @@ import (
 	"github.com/tmih06/nightshift/internal/ghdash/tui/keys"
 	"github.com/tmih06/nightshift/internal/ghdash/tui/theme"
 )
+
 func TestGetCurrentViewSections_RepoViewWithNilRepo(t *testing.T) {
 	// This test verifies that getCurrentViewSections returns an empty slice
 	// when in RepoView but m.repo is nil (before data is loaded).
