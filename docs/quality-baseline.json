@@ -1,11 +1,11 @@
 {
   "rules": {
     "deadcode/unreachable-func": {
-      "first": 3,
+      "first": 0,
       "vendored": 113
     },
     "golangci/contextcheck": {
-      "first": 3,
+      "first": 2,
       "vendored": 0
     },
     "golangci/cyclop": {
@@ -17,7 +17,7 @@
       "vendored": 8
     },
     "golangci/errcheck": {
-      "first": 192,
+      "first": 187,
       "vendored": 86
     },
     "golangci/errorlint": {
@@ -45,11 +45,11 @@
       "vendored": 2
     },
     "golangci/gocognit": {
-      "first": 52,
+      "first": 51,
       "vendored": 56
     },
     "golangci/goconst": {
-      "first": 82,
+      "first": 81,
       "vendored": 66
     },
     "golangci/gocritic": {
@@ -69,7 +69,7 @@
       "vendored": 0
     },
     "golangci/nestif": {
-      "first": 18,
+      "first": 17,
       "vendored": 26
     },
     "golangci/nilerr": {
@@ -109,7 +109,7 @@
       "vendored": 3
     },
     "golangci/unparam": {
-      "first": 4,
+      "first": 0,
       "vendored": 36
     },
     "golangci/unused": {
@@ -117,7 +117,7 @@
       "vendored": 69
     },
     "golangci/wrapcheck": {
-      "first": 45,
+      "first": 44,
       "vendored": 82
     },
     "jscpd/duplicated-lines": {
@@ -125,11 +125,11 @@
       "vendored": 269
     },
     "semgrep/slop-background-context-in-request-path": {
-      "first": 1,
+      "first": 0,
       "vendored": 0
     },
     "semgrep/slop-error-assigned-to-blank": {
-      "first": 40,
+      "first": 38,
       "vendored": 8
     },
     "semgrep/slop-floating-goroutine": {
