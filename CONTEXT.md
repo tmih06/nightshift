@@ -225,6 +225,9 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
   footer, as it does in gh-dash.
 - The sidebar takes half the width and resizes by dragging its rule. Under
   90 columns it moves under the table, as gh-dash's bottom preview does.
+- Each account's status rows on the Accounts tab sit beside its provider's
+  color logo, pixel art of one size (12 by 5 cells); a pane too narrow for a row
+  beside it puts the logo above the rows.
 - The Accounts tab marks as `active` the account the egress proxy is using. `u` or
   `enter` makes the selected account first for its agent, and `K`/`J` reorder
   the fallback chain. A change that moves traffic (these, or disabling or

@@ -15,6 +15,7 @@ const (
 	familyOther   = "Other"
 
 	providerClaude      = "claude"
+	providerCodex       = "codex"
 	providerAntigravity = "antigravity"
 )
 

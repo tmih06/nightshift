@@ -66,10 +66,12 @@ func (m Model) detailBody(a v1.Account, width int) []string {
 	for _, r := range rows {
 		w = max(w, lipgloss.Width(r[0]))
 	}
-	out := make([]string, 0, 64)
+	status := make([]string, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, s.faint.Render(pad(r[0], w))+"  "+r[1])
+		status = append(status, s.faint.Render(pad(r[0], w))+"  "+r[1])
 	}
+	out := make([]string, 0, 64)
+	out = append(out, besideLogo(a.Provider, status, width)...)
 	out = append(out, "")
 	out = append(out, m.quotaBlock(a, width)...)
 	out = append(out, "")
