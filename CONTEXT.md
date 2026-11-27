@@ -230,7 +230,8 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
   the fallback chain. A change that moves traffic (these, or disabling or
   removing the active account) warns of the prompt cache miss and waits for
   `y`. Every change publishes itself and reaches the proxy within about two
-  minutes; until then the new first account reads `pending`. `a` signs one in,
+  minutes; until then the new first account reads `pending`. The selected
+  account's details list the models its agent's CLI offers. `a` signs one in,
   `d` disables or enables, `x` removes, `r` rereads everything including live
   quotas, and `t` renews a token.
 - Usage refreshes every 2 seconds. A claimed sandbox's numbers come from its

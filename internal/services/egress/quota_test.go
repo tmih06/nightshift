@@ -161,6 +161,10 @@ func TestActiveQuotaFetcherFetchesAllThreeProviders(t *testing.T) {
 			Codex:           srv.URL + "/codex",
 			Antigravity:     srv.URL + "/agy",
 			AntigravityLoad: srv.URL + "/agy-load",
+
+			ClaudeModels:      srv.URL + "/claude-models",
+			CodexModels:       srv.URL + "/codex-models",
+			AntigravityModels: srv.URL + "/agy-models",
 		},
 	})
 	if err != nil {

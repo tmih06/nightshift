@@ -180,6 +180,12 @@ Prune rules that no longer apply. Past about 200 lines, move older detail into
     something that does not happen: the proxy picks an account per request.
   - **Enforced by**: `TestTheTabNeverSaysASandboxUsesAnAccount`.
 
+- **Rule**: List an account's models as its CLI offers them, never as the
+  provider's raw catalog.
+  - **Why**: agy's catalog holds some thirty internal, retired, and disabled
+    entries where `agy models` offers ten.
+  - **Enforced by**: `TestModelsAreWhatTheCLIOffers`.
+
 ## Commit messages
 
 Every commit message follows [Conventional Commits 1.0.0](https://www.conventionalcommits.org/). The format is `type(scope): subject`.

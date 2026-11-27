@@ -199,6 +199,16 @@ type Quota struct {
 	NextResetAt    time.Time
 	Windows        []QuotaWindow
 	Error          string
+	// Models are what the account's CLI offers; ModelsError says why they
+	// could not be listed.
+	Models      []Model
+	ModelsError string
+}
+
+// Model is one model an account can be asked for.
+type Model struct {
+	ID   string
+	Name string
 }
 
 // Analytics aggregates requests, tokens, latency, and per-model usage across

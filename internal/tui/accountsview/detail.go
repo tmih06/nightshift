@@ -73,6 +73,9 @@ func (m Model) detailBody(a v1.Account, width int) []string {
 	out = append(out, "")
 	out = append(out, m.quotaBlock(a, width)...)
 	out = append(out, "")
+	if models := m.modelsBlock(a, width); len(models) > 0 {
+		out = append(append(out, models...), "")
+	}
 	out = append(out, m.activityBlock(a, width)...)
 	out = append(out, "")
 	out = append(out, m.usageBlock(a, width)...)

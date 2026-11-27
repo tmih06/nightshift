@@ -134,6 +134,13 @@ type wireQuota struct {
 	NextResetAt    time.Time         `json:"next_reset_at"`
 	Windows        []wireQuotaWindow `json:"windows"`
 	Error          string            `json:"error"`
+	Models         []wireModel       `json:"models"`
+	ModelsError    string            `json:"models_error"`
+}
+
+type wireModel struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 func (w wireQuota) quota() *Quota {
@@ -144,6 +151,10 @@ func (w wireQuota) quota() *Quota {
 		FetchedAt:      w.FetchedAt,
 		NextResetAt:    w.NextResetAt,
 		Error:          w.Error,
+		ModelsError:    w.ModelsError,
+	}
+	for _, m := range w.Models {
+		out.Models = append(out.Models, Model(m))
 	}
 	if len(w.Windows) > 0 {
 		out.Windows = make([]QuotaWindow, len(w.Windows))

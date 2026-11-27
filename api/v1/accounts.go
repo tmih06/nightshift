@@ -155,6 +155,16 @@ type AccountQuota struct {
 	NextResetAt    time.Time     `json:"nextResetAt,omitzero"`
 	Windows        []QuotaWindow `json:"windows,omitempty"`
 	Error          string        `json:"error,omitempty"`
+	// Models are what the account's CLI offers, in its order; ModelsError says
+	// why they could not be listed.
+	Models      []AccountModel `json:"models,omitempty"`
+	ModelsError string         `json:"modelsError,omitempty"`
+}
+
+// AccountModel is one model an account can be asked for.
+type AccountModel struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
 }
 
 // AnalyticsSummary aggregates requests, tokens, latency, and per-model usage

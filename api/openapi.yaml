@@ -1041,6 +1041,17 @@ components:
           type: array
           items: {$ref: "#/components/schemas/QuotaWindow"}
         error: {type: string}
+        models:
+          type: array
+          description: What the account's CLI offers, in its order.
+          items: {$ref: "#/components/schemas/AccountModel"}
+        modelsError: {type: string}
+    AccountModel:
+      type: object
+      required: [id]
+      properties:
+        id: {type: string}
+        name: {type: string}
     AnalyticsSummary:
       type: object
       required: [requests, ok, clientError, rateLimited, serverError]

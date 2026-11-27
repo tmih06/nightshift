@@ -524,7 +524,7 @@ func TestQuotaAndTokenAnalyticsRenderAndRefresh(t *testing.T) {
 
 	svc := &fakeService{snap: snap}
 	m := shown(t, svc)
-	m, _ = m.Update(tea.WindowSizeMsg{Width: 130, Height: 45})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 130, Height: 55})
 	view := plain(m)
 	for _, want := range []string{
 		"Quota", "5-hour window", "42%", "next reset in 2h15m",

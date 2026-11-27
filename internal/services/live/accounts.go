@@ -130,6 +130,10 @@ func quotaOf(q *accounts.Quota) *v1.AccountQuota {
 		FetchedAt:      q.FetchedAt.UTC(),
 		NextResetAt:    q.NextResetAt.UTC(),
 		Error:          q.Error,
+		ModelsError:    q.ModelsError,
+	}
+	for _, m := range q.Models {
+		out.Models = append(out.Models, v1.AccountModel(m))
 	}
 	if len(q.Windows) > 0 {
 		out.Windows = make([]v1.QuotaWindow, len(q.Windows))

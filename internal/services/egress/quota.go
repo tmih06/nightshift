@@ -57,6 +57,10 @@ type AccountQuota struct {
 	NextResetAt    time.Time     `json:"next_reset_at,omitempty"`
 	Windows        []QuotaWindow `json:"windows,omitempty"`
 	Error          string        `json:"error,omitempty"`
+	// Models are what the account can be asked for; ModelsError says why the
+	// last attempt to list them failed.
+	Models      []Model `json:"models,omitempty"`
+	ModelsError string  `json:"models_error,omitempty"`
 }
 
 // QuotaEndpoints overrides provider quota URLs (used in tests).
@@ -65,6 +69,10 @@ type QuotaEndpoints struct {
 	Codex           string
 	Antigravity     string
 	AntigravityLoad string
+
+	ClaudeModels      string
+	CodexModels       string
+	AntigravityModels string
 }
 
 func (q QuotaEndpoints) withDefaults() QuotaEndpoints {
@@ -80,6 +88,9 @@ func (q QuotaEndpoints) withDefaults() QuotaEndpoints {
 	if q.AntigravityLoad == "" {
 		q.AntigravityLoad = antigravityLoadURL
 	}
+	q.ClaudeModels = cmp.Or(q.ClaudeModels, claudeModelsURL)
+	q.CodexModels = cmp.Or(q.CodexModels, codexModelsURL)
+	q.AntigravityModels = cmp.Or(q.AntigravityModels, antigravityModelsURL)
 	return q
 }
 
@@ -141,8 +152,13 @@ func (qs *quotaStore) putFetched(res AccountQuota) {
 	now := qs.now().UTC()
 	k := poolKey{secret: res.Binding, account: res.Name}
 	prev := qs.records[k]
+	// A failed listing keeps the last good one.
+	if res.ModelsError != "" && prev != nil {
+		res.Models = prev.Models
+	}
 	if res.Error != "" && prev != nil {
 		prev.Error = res.Error
+		prev.Models, prev.ModelsError = res.Models, res.ModelsError
 		prev.FetchedAt = now
 		return
 	}
@@ -195,6 +211,7 @@ func (qs *quotaStore) snapshot(eng *SecretEngine) []AccountQuota {
 func copyQuota(rec *AccountQuota, now time.Time) AccountQuota {
 	cp := *rec
 	cp.Windows = append([]QuotaWindow(nil), rec.Windows...)
+	cp.Models = append([]Model(nil), rec.Models...)
 	cp.NextResetAt = earliestFutureReset(now, cp.Windows)
 	return cp
 }
@@ -268,6 +285,11 @@ func (qs *quotaStore) fetchOne(ctx context.Context, binding string, acct resolve
 	}
 	if err != nil {
 		base.Error = err.Error()
+	}
+	models, err := qs.fetchModels(ctx, binding, acct)
+	base.Models = models
+	if err != nil {
+		base.ModelsError = err.Error()
 	}
 	return base
 }

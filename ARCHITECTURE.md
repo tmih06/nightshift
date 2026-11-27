@@ -254,7 +254,10 @@ and actively fetches provider quota windows and next reset times from Claude,
 Codex, and Antigravity at `/quota` and `POST /quota/refresh` (triggered with
 `r` in the Accounts tab or periodically in the background). Antigravity's
 reading is the grouped weekly and five-hour pool summary its own `/usage`
-shows, not the per-model availability catalog. Cooldowns and the quota cache
+shows, not the per-model availability catalog. The same refresh lists each
+account's models (`internal/services/egress/models.go`) as its CLI offers them:
+agy's picker (`agentModelSorts` without the disabled), Codex's models marked
+`list`, and Anthropic's `/v1/models`. Cooldowns and the quota cache
 live in the proxy's memory and start over when it restarts.
 
 Usage is durable. Every allowed upstream attempt is committed to a SQLite

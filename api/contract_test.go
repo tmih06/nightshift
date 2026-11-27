@@ -51,6 +51,7 @@ func schemaTypes() map[string]reflect.Type {
 		"DayUsage":         reflect.TypeFor[v1.DayUsage](),
 		"QuotaWindow":      reflect.TypeFor[v1.QuotaWindow](),
 		"AccountQuota":     reflect.TypeFor[v1.AccountQuota](),
+		"AccountModel":     reflect.TypeFor[v1.AccountModel](),
 		"AnalyticsSummary": reflect.TypeFor[v1.AnalyticsSummary](),
 		"Published":        reflect.TypeFor[v1.Published](),
 		"LoginRequest":     reflect.TypeFor[v1.LoginRequest](),
