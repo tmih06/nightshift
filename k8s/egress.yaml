@@ -39,7 +39,8 @@ data:
         mode: mitm
         secrets: ["AGY_ACCESS_TOKEN"]
       # agy asks who its token belongs to, and Google would name the real
-      # account. The proxy answers with no identity and forwards nothing.
+      # account. The proxy answers with the fixed sandbox identity and
+      # forwards nothing. agy's /usage hangs when the email is blank.
       - name: antigravity-userinfo
         hosts: ["www.googleapis.com"]
         ports: [443]
@@ -47,8 +48,12 @@ data:
         methods: ["GET"]
         path_prefixes: ["/oauth2/v2/userinfo", "/oauth2/v3/userinfo"]
         answers:
-          /oauth2/v2/userinfo: "{}"
-          /oauth2/v3/userinfo: "{}"
+          /oauth2/v2/userinfo: >-
+            {"id": "0", "email": "nightshift@proxy.local",
+            "verified_email": true}
+          /oauth2/v3/userinfo: >-
+            {"sub": "0", "email": "nightshift@proxy.local",
+            "email_verified": true}
       - name: openai
         hosts: ["api.openai.com"]
         ports: [443]

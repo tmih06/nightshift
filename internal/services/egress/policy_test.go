@@ -133,8 +133,18 @@ func TestShippedPolicyNeverAsksGoogleWhoTheAccountIs(t *testing.T) {
 		t.Errorf("rule %q injects %v, which would let a sandbox ask Google who it is", r.Name, r.Secrets)
 	}
 	for _, path := range []string{"/oauth2/v2/userinfo", "/oauth2/v3/userinfo"} {
-		if body, answered := r.answer(path); !answered || body != "{}" || !r.AllowsRequest("GET", path) {
-			t.Errorf("%s = %q (answered %v), want an empty answer from the proxy", path, body, answered)
+		body, answered := r.answer(path)
+		if !answered || !r.AllowsRequest("GET", path) {
+			t.Errorf("%s is not answered by the proxy", path)
+			continue
+		}
+		var who map[string]any
+		if err := json.Unmarshal([]byte(body), &who); err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		// agy's /usage loads forever without an email.
+		if who["email"] != "nightshift@proxy.local" {
+			t.Errorf("%s email = %v, want the fixed sandbox identity", path, who["email"])
 		}
 	}
 	for _, path := range []string{"/oauth2/v3/tokeninfo", "/drive/v3/files"} {

@@ -1,5 +1,5 @@
 {
-  "_comment": "One entry per coding agent whose login Nightshift hands to sandboxes. file: where the agent keeps its login, relative to $HOME. access: jq path of the access token in that file. filter: jq building the sandbox copy from the login ($ph is the placeholder for secret, $far a far-future timestamp). It must construct the result from a named list of fields, never copy the rest of the file or of an object in it: a login file can hold other credentials, such as Claude Code's MCP server tokens, and values that name the account, such as an email, an account UUID, or an id_token, none of which may reach a sandbox. hosts: the API hosts that must swap that secret (checked against k8s/egress.yaml). pool: the warm pool kept only while this login exists. exercise: command that makes the agent refresh an expiring token. cpa: how to rebuild this login file from a CLIProxyAPI credential (type is its provider name, build a jq program over the credential), so a CLIProxyAPI login can stand in for logging in with the CLI itself.",
+  "_comment": "One entry per coding agent whose login Nightshift hands to sandboxes. file: where the agent keeps its login, relative to $HOME. access: jq path of the access token in that file. filter: jq building the sandbox copy from the login ($ph is the placeholder for secret, $far a far-future timestamp). It must construct the result from a named list of fields, never copy the rest of the file or of an object in it: a login file can hold other credentials, such as Claude Code's MCP server tokens, and values that name the account, such as an email, an account UUID, or an id_token, none of which may reach a sandbox. Where an agent expects an email, write the fixed nightshift@proxy.local. hosts: the API hosts that must swap that secret (checked against k8s/egress.yaml). pool: the warm pool kept only while this login exists. exercise: command that makes the agent refresh an expiring token. cpa: how to rebuild this login file from a CLIProxyAPI credential (type is its provider name, build a jq program over the credential), so a CLIProxyAPI login can stand in for logging in with the CLI itself.",
   "providers": [
     {
       "id": "claude-code",
@@ -26,7 +26,7 @@
       "companions": {
         "CODEX_ACCOUNT_ID": ".tokens.account_id"
       },
-      "filter": "{auth_mode: .auth_mode, OPENAI_API_KEY: null, tokens: {id_token: \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9wbGFuX3R5cGUiOiJwcm8ifX0.c2ln\", access_token: $ph, refresh_token: \"nightshift:secret:CODEX_REFRESH_TOKEN_UNUSABLE\", account_id: (if .tokens.account_id then \"nightshift:secret:CODEX_ACCOUNT_ID\" else null end)}, last_refresh: $far}",
+      "filter": "{auth_mode: .auth_mode, OPENAI_API_KEY: null, tokens: {id_token: \"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJlbWFpbCI6Im5pZ2h0c2hpZnRAcHJveHkubG9jYWwiLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9wbGFuX3R5cGUiOiJwcm8ifX0.c2ln\", access_token: $ph, refresh_token: \"nightshift:secret:CODEX_REFRESH_TOKEN_UNUSABLE\", account_id: (if .tokens.account_id then \"nightshift:secret:CODEX_ACCOUNT_ID\" else null end)}, last_refresh: $far}",
       "hosts": [
         "chatgpt.com"
       ],
@@ -43,7 +43,7 @@
       "secret": "AGY_ACCESS_TOKEN",
       "file": ".gemini/antigravity-cli/antigravity-oauth-token",
       "access": ".token.access_token",
-      "filter": "{token: {access_token: $ph, token_type: .token.token_type, expiry: $far, expires_in: 99999999}, auth_method: .auth_method}",
+      "filter": "{token: {access_token: $ph, token_type: .token.token_type, expiry: $far, expires_in: 99999999}, auth_method: .auth_method, id_token_email: \"nightshift@proxy.local\"}",
       "hosts": [
         "cloudcode-pa.googleapis.com",
         "daily-cloudcode-pa.googleapis.com",

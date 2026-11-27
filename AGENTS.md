@@ -164,9 +164,9 @@ Prune rules that no longer apply. Past about 200 lines, move older detail into
     (an email) and Claude's account UUIDs into sandboxes.
   - **Enforced by**: `TestCredsStageSwapsEveryAgentLogin`.
 - **Rule**: Never forward an endpoint that names a login's account; have the
-  egress proxy answer it with no identity.
+  egress proxy answer it as `nightshift@proxy.local`, never with a blank email.
   - **Why**: agy fetched the real email from Google's `userinfo` through the
-    proxy, although its login file held none.
+    proxy, and a blank answer then left its `/usage` loading forever.
   - **Enforced by**: `TestShippedPolicyNeverAsksGoogleWhoTheAccountIs`,
     `TestProxyAnswersAListedPathWithoutForwardingIt`.
 - **Rule**: Mark an account active only from the proxy's live pool state, never

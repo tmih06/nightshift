@@ -156,8 +156,8 @@ func TestCredsStageSwapsEveryAgentLogin(t *testing.T) {
 	if agy["expiry"] != "2099-01-01T00:00:00Z" {
 		t.Errorf("agy expiry = %v, want far future", agy["expiry"])
 	}
-	if got, ok := readJSON(t, stage, ".gemini/antigravity-cli/antigravity-oauth-token")["id_token_email"]; ok {
-		t.Errorf("agy id_token_email = %v, want no identity at all", got)
+	if got := readJSON(t, stage, ".gemini/antigravity-cli/antigravity-oauth-token")["id_token_email"]; got != "nightshift@proxy.local" {
+		t.Errorf("agy id_token_email = %v, want the fixed sandbox identity, not the account's", got)
 	}
 	assertAnonymousIDToken(t, codex["id_token"])
 	claude := object(t, readJSON(t, stage, ".claude/.credentials.json"), "claudeAiOauth")
@@ -174,7 +174,7 @@ func TestCredsStageSwapsEveryAgentLogin(t *testing.T) {
 }
 
 // assertAnonymousIDToken checks the id_token Codex needs to start: a JWT whose
-// claims name a plan and no account.
+// claims name a plan and the fixed sandbox identity, no account.
 func assertAnonymousIDToken(t *testing.T, token any) {
 	t.Helper()
 	s, ok := token.(string)
@@ -189,7 +189,7 @@ func assertAnonymousIDToken(t *testing.T, token any) {
 	if err != nil {
 		t.Fatalf("codex id_token claims: %v", err)
 	}
-	const want = `{"https://api.openai.com/auth":{"chatgpt_plan_type":"pro"}}`
+	const want = `{"email":"nightshift@proxy.local","https://api.openai.com/auth":{"chatgpt_plan_type":"pro"}}`
 	if string(raw) != want {
 		t.Errorf("codex id_token claims = %s, want %s", raw, want)
 	}

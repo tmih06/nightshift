@@ -173,17 +173,19 @@ login file: the access token becomes a placeholder
 `AGY_ACCESS_TOKEN`), the expiry moves far into the future so the agent never
 tries to refresh, and the refresh token is dropped (Codex insists on one, so
 it gets an inert string). Each copy is built from a named list
-of fields, and none of them names an account: no email, account or
-organization UUID, or real `id_token` (Codex needs one to start, so it gets a
-fixed unsigned one that names only a plan). Which account carries a request is
+of fields, and none of them names an account: no real email, account or
+organization UUID, or real `id_token`. Where an agent expects an email it
+gets the fixed `nightshift@proxy.local` (Codex needs an `id_token` to start,
+so it gets an unsigned one naming that and a plan). Which account carries a request is
 the proxy's per-attempt decision, so the sandbox is told none. The TUI shows
 it instead, from the proxy's live pool state. `gh`'s `hosts.yml` gets the
 `GITHUB_TOKEN` placeholder. A login with no swap is never distributed. The proxy swaps each
 placeholder for the real token on that agent's hosts: `api.anthropic.com`,
 `chatgpt.com`, and `cloudcode-pa.googleapis.com`. A login file with no
 identity is not enough on its own: agy asks Google who its token belongs to,
-and would be told the real account. The proxy answers that itself with an
-empty object (a rule's `answers`), forwards nothing under
+and would be told the real account. The proxy answers that itself with
+`nightshift@proxy.local` (a rule's `answers`; with a blank email agy's
+`/usage` loads forever), forwards nothing under
 `www.googleapis.com`, and injects no login there. The `sandbox-egress-env`
 ConfigMap sets `CLAUDE_CODE_OAUTH_TOKEN` and never `ANTHROPIC_API_KEY`,
 which Claude Code gives precedence over every OAuth path.
