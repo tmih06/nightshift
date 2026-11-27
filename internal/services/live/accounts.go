@@ -59,7 +59,7 @@ func (a *Accounts) Accounts(ctx context.Context) (v1.Accounts, error) {
 		Accounts:    make([]v1.Account, 0, len(snap.Accounts)),
 		PublishedAt: snap.PublishedAt.UTC(),
 	}
-	for _, p := range accounts.Providers() {
+	for _, p := range snap.Providers {
 		out.Providers = append(out.Providers, v1.Provider{ID: p.ID, Name: p.Name})
 	}
 	if snap.UsageErr != nil {

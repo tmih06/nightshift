@@ -424,7 +424,7 @@ func (m Model) loginStarted(msg loginStartedMsg) (Model, tea.Cmd) {
 		cmd := m.say("Could not start sign-in: "+msg.err.Error(), true)
 		return m, cmd
 	}
-	ti := dialog.TextInput(m.theme, "▸ ", "paste the address the browser ends on", 4096)
+	ti := dialog.TextInput(m.theme, "▸ ", "paste the code, or the address the browser ends on", 4096)
 	ti.Focus()
 	ti.SetWidth(min(70, max(24, m.width-16)))
 	m.modal = modal{kind: modalLink, login: msg.login, input: ti}

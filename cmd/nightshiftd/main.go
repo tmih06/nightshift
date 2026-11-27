@@ -54,7 +54,7 @@ func run() error {
 	flag.BoolVar(&cfg.PlainHTTP, "plain-http", false, "allow plain HTTP on a non-loopback address: something else protects the traffic (kubectl port-forward, or an ingress that terminates TLS)")
 	flag.Var(&hosts, "allow-host", "a Host header name to accept besides loopback (repeatable)")
 	flag.BoolVar(&cfg.AnyHost, "any-host", false, "accept every Host header; the token is still required")
-	flag.StringVar(&cfg.CPAURL, "cpa-url", "", "where CLIProxyAPI is reached; empty uses kubectl port-forward")
+	flag.StringVar(&cfg.AuthURL, "auth-url", "", "where nightshift-auth is reached; empty uses kubectl port-forward")
 	flag.StringVar(&cfg.ProxyURL, "proxy-url", "", "where the egress proxy's admin port is reached; empty uses kubectl port-forward")
 	flag.BoolVar(&cfg.NoAccounts, "no-accounts", false, "leave the accounts endpoints out")
 	flag.Parse()

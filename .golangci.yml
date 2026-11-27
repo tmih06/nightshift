@@ -121,10 +121,19 @@ linters:
         # api/client. internal/architecture_test.go enforces the same; these
         # rules show it in the editor.
         leaf-packages:
-          files: ["**/internal/services/cluster/**", "**/internal/services/egress/**", "**/internal/services/manifest/**"]
+          files: ["**/internal/services/agent/**", "**/internal/services/auth/providers/**", "**/internal/services/cluster/**", "**/internal/services/egress/**", "**/internal/services/manifest/**"]
           deny:
             - pkg: github.com/tmih06/nightshift/internal
               desc: This package is a leaf. Move shared code here instead of importing upward.
+        auth:
+          files: ["**/internal/services/auth/*.go"]
+          deny:
+            - pkg: github.com/tmih06/nightshift/internal/tui
+              desc: nightshift-auth is its own program and imports only its providers.
+            - pkg: github.com/tmih06/nightshift/internal/services/cluster
+              desc: nightshift-auth is its own program and imports only its providers.
+            - pkg: github.com/tmih06/nightshift/internal/services/accounts
+              desc: nightshift-auth is its own program and imports only its providers.
         session:
           files: ["**/internal/services/session/**"]
           deny:
@@ -194,3 +203,10 @@ linters:
       # Table-driven tests are long and repetitive by design.
       - path: _test\.go
         linters: [funlen, gocognit, cyclop, dupl, goconst, wrapcheck]
+      # Antigravity's OAuth client is a published desktop client: its ID and
+      # "secret" ship in every copy of the CLI, and Google refreshes its
+      # grants only on that client. They are not credentials. Approved by a
+      # human, scoped to this one file and this one check.
+      - path: internal/services/auth/providers/antigravity\.go
+        linters: [gosec]
+        text: "G101:"

@@ -1,5 +1,13 @@
 # A login surface for agent accounts
 
+> **Superseded on 2026-11-27.** Nightshift no longer runs CLIProxyAPI. It
+> signs accounts in with its own small service, nightshift-auth
+> (`cmd/nightshift-auth`, see ARCHITECTURE.md), whose flows are ported from
+> ompig-slim's PiG. CLIProxyAPI was a whole program run for one slice of it,
+> needed a separate shell refresher and image to turn its credentials into
+> sandbox logins, and had no Devin login. The note below is kept for the
+> research behind the first choice.
+
 Nightshift's sandboxes run the official Claude Code, Codex, and Antigravity
 CLIs. Each needs a browser-approved OAuth login that nobody can script, and
 the tokens it yields expire and rotate. This note records which open-source

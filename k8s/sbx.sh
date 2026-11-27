@@ -14,7 +14,7 @@
 #
 # Env overrides: NIGHTSHIFT_CONTEXT or CTX (default kind-agent-sandbox), NS (default nightshift),
 #                POOL (default pi-pool; also codex-pool, claude-code-pool,
-#                agy-pool, ompig-slim-pool, opencode-pool),
+#                agy-pool, ompig-slim-pool, opencode-pool, devin-pool),
 #                SBX_NO_EXEC=1 to skip the shell.
 set -euo pipefail
 

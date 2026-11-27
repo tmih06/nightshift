@@ -80,6 +80,7 @@ func TestWarmPools(t *testing.T) {
 		{"agy-pool", "agy-template", "agy", quantities{"100m", "128Mi"}, quantities{"1000m", "2Gi"}, "Always"},
 		{"ompig-slim-pool", "ompig-slim-template", "ompig-slim", quantities{"100m", "128Mi"}, quantities{"1000m", "2Gi"}, "Always"},
 		{"opencode-pool", "opencode-template", "opencode", quantities{"100m", "512Mi"}, quantities{"1000m", "2Gi"}, "Always"},
+		{"devin-pool", "devin-template", "devin", quantities{"100m", "128Mi"}, quantities{"1000m", "2Gi"}, "Always"},
 	}
 	if len(pools) != len(agents) || len(templates) != len(agents) {
 		t.Fatalf("got %d pools and %d templates, want %d each", len(pools), len(templates), len(agents))

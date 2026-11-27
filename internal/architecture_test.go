@@ -29,18 +29,22 @@ const module = "github.com/tmih06/nightshift/"
 // library. A package not listed here may import none of them.
 func services() map[string][]string {
 	return map[string][]string{
-		"internal/services/cluster":  {},
-		"internal/services/egress":   {},
-		"internal/services/manifest": {},
-		"internal/services/session":  {"internal/services/cluster"},
-		"internal/services/accounts": {"internal/services/cluster"},
-		"internal/services/checkout": {"internal/services/cluster", "internal/services/session"},
-		"internal/services/runs":     {"internal/services/checkout", "internal/services/cluster", "internal/services/session"},
+		"internal/services/agent": {},
+		// nightshift-auth: its own program, a leaf like the egress proxy.
+		"internal/services/auth":           {"internal/services/auth/providers"},
+		"internal/services/auth/providers": {},
+		"internal/services/cluster":        {},
+		"internal/services/egress":         {},
+		"internal/services/manifest":       {},
+		"internal/services/session":        {"internal/services/cluster"},
+		"internal/services/accounts":       {"internal/services/cluster"},
+		"internal/services/checkout":       {"internal/services/agent", "internal/services/cluster", "internal/services/session"},
+		"internal/services/runs":           {"internal/services/checkout", "internal/services/cluster", "internal/services/session"},
 		// The HTTP layer knows nothing of Kubernetes: it serves the contract
 		// over interfaces, and knows only the errors the checkouts raise.
 		"internal/services/server": {"api", "internal/services/checkout"},
 		"internal/services/live": {
-			"internal/services/accounts", "internal/services/checkout", "internal/services/cluster",
+			"internal/services/accounts", "internal/services/agent", "internal/services/checkout", "internal/services/cluster",
 			"internal/services/runs", "internal/services/server", "internal/services/session",
 		},
 		"internal/services/daemon": {

@@ -40,10 +40,10 @@ type Config struct {
 	Hosts []string
 	// AnyHost accepts every Host header.
 	AnyHost bool
-	// CPAURL and ProxyURL are where CLIProxyAPI and the egress proxy's admin
-	// port are reached. Empty means a kubectl port-forward to each, which is
-	// how a daemon on a laptop reaches them.
-	CPAURL, ProxyURL string
+	// AuthURL and ProxyURL are where nightshift-auth and the egress proxy's
+	// admin port are reached. Empty means a kubectl port-forward to each,
+	// which is how a daemon on a laptop reaches them.
+	AuthURL, ProxyURL string
 	// NoAccounts leaves the accounts endpoints out.
 	NoAccounts bool
 	// Version is the build, for bug reports.
@@ -125,8 +125,8 @@ func (c Config) accounts() accounts.Service {
 		return nil
 	}
 	l := accounts.NewLive()
-	if c.CPAURL != "" {
-		l.CPA = accounts.Static(c.CPAURL)
+	if c.AuthURL != "" {
+		l.Auth = accounts.Static(c.AuthURL)
 	}
 	if c.ProxyURL != "" {
 		l.Proxy = accounts.Static(c.ProxyURL)

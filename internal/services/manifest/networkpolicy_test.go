@@ -12,8 +12,8 @@ import (
 
 // A NetworkPolicy with an empty podSelector isolates every pod in the
 // namespace for the policy's types. sandbox-egress-proxy-access once selected
-// everything, which silently cut the creds refresher off from DNS and the
-// internet. Policies in nightshift must name the pods they cover.
+// everything, which silently cut the credential refresher off from DNS and
+// the internet. Policies in nightshift must name the pods they cover.
 func TestNamespacePoliciesNeverSelectEveryPod(t *testing.T) {
 	root, err := os.OpenRoot("../../../k8s")
 	if err != nil {
@@ -24,7 +24,7 @@ func TestNamespacePoliciesNeverSelectEveryPod(t *testing.T) {
 			t.Errorf("close k8s root: %v", err)
 		}
 	})
-	for _, file := range []string{"egress.yaml", "creds.yaml", "cpa.yaml", "warmpool.yaml", "nightshiftd.yaml"} {
+	for _, file := range []string{"egress.yaml", "auth.yaml", "warmpool.yaml", "nightshiftd.yaml"} {
 		raw, err := root.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)

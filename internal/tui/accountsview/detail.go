@@ -121,7 +121,7 @@ func (m *Model) scrollDetail(delta int) {
 	m.scroll = max(0, min(last, min(m.scroll, last)+delta))
 }
 
-// nextCheck says when CLIProxyAPI will next look at the account's token.
+// nextCheck says when nightshift-auth will next renew the account's token.
 func nextCheck(now time.Time, a v1.Account) string {
 	if !a.NextRefreshAt.After(now) {
 		return ""

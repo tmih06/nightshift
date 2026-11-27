@@ -23,10 +23,15 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
 ## What lives here
 
 - `k8s/` holds the Kubernetes manifests and cluster scripts: `warmpool.yaml`
-  creates the namespace `nightshift` and six template/pool pairs, each keeping
+  creates the namespace `nightshift` and seven template/pool pairs, each keeping
   one Pi, Codex, Claude Code, Antigravity (`agy`), OMPi slim
-  (`ompig-slim`), or OpenCode sandbox warm. An agy sandbox boots with its
-  first-run setup done, its folders trusted, and approvals off. Each pod is capped at
+  (`ompig-slim`), OpenCode, or Devin sandbox warm. `warmpool.sh` generates it
+  (`make warmpool`) from the agent directories under `images/agent/agents`;
+  never edit it by hand. An agy sandbox boots with its
+  first-run setup done, its folders trusted, and approvals off, and a Devin
+  sandbox with approvals and self-updates off; the egress proxy swaps Devin's
+  token in inside its protobuf requests too (`proto_bodies` in
+  `egress.yaml`). Each pod is capped at
   1000m CPU and 2Gi memory. `claim.yaml` claims a Pi sandbox by default.
   `sbx.sh` wraps that loop in one command and is installed as `sbx` through
   a symlink in `~/.local/bin`. `egress.yaml` and `egress-setup.sh` deploy the
@@ -34,15 +39,12 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
   `nightshift-egress` namespace with default-deny `NetworkPolicy` enforcement.
   The proxy records all usage in a SQLite database on the `egress-usage`
   volume.
-  `creds-providers.json` lists the agents whose logins reach sandboxes;
-  `creds-publish.sh` reads each master login, `creds-stage.sh` swaps its
-  access token for a placeholder, and the real tokens go into the egress
-  proxy's secrets while the placeholder copies go into the `agent-creds`
-  secret every sandbox untars into `$HOME` at boot. Warm pools are sized to
-  the logins that exist. `cpa.yaml` runs CLIProxyAPI, the page where accounts
-  are signed in, and `creds.yaml` runs the `creds-refresher` that reads it
-  (`creds-setup.sh` installs both); `--watch` does it from a laptop instead.
-  `docs/login-surface.md` records why.
+  `auth.yaml` and `auth-setup.sh` deploy nightshift-auth, the login service:
+  it signs Claude Code, Codex, Antigravity, and Devin accounts in from the
+  Accounts tab, renews their tokens, and publishes them. The real tokens go
+  into the egress proxy's secrets and placeholder logins into the
+  `agent-creds` secret every sandbox untars into `$HOME` at boot. Warm pools
+  are sized to the accounts that exist. `docs/login-surface.md` records why.
   `NIGHTSHIFT_CONTEXT` points every script and the TUI at any cluster.
   Sandboxes reach the proxy by its ClusterIP, which `egress-setup.sh` writes
   into the ConfigMap (their DNS is external, so service names never resolve), and the `sandbox-egress-env` ConfigMap wires the
@@ -50,13 +52,16 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
   The Claude Code and Codex templates use `imagePullPolicy:
   IfNotPresent` because their large images stall on slow registry networks.
 - `images/base/` defines the common sandbox tools and Herdr; `images/agent/`
-  adds one versioned Pi, Codex, Claude Code, Antigravity, OMPi slim, or
-  OpenCode agent and stamps it into `/etc/nightshift-agent`; `images/egress/`
-  builds the static distroless container for `cmd/egress-proxy`; `images/creds/`
-  builds the credential refresher (the login-capable agent CLIs, `kubectl`, and the
-  publish scripts). The image
-  workflow watches stable npm releases and the agy and ompig-slim release
-  feeds, and publishes to GHCR. Check
+  adds one versioned Pi, Codex, Claude Code, Antigravity, OMPi slim,
+  OpenCode, or Devin agent and stamps it into `/etc/nightshift-agent`. Each
+  agent is one directory under `images/agent/agents` that `agent.sh` reads to
+  install it, find its latest release, and list it for the image workflows;
+  `internal/services/agent` is the services' matching catalogue (the pool
+  names, models, and task command). `images/agent/README.md` says how to add
+  one; `images/egress/` and `images/auth/` build the static distroless
+  containers for `cmd/egress-proxy` and `cmd/nightshift-auth`. The image
+  workflow watches stable npm releases and the agy, ompig-slim, and Devin
+  release feeds, and publishes to GHCR. Check
   registry access before applying `k8s/warmpool.yaml`; see
   `images/agent/README.md`.
 - Nightshift is two programs with one contract between them
@@ -71,14 +76,16 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
   import a frontend, and the HTTP layer may not import the cluster.
 - The services: `internal/services/cluster` reads and changes the fleet with
   `kubectl`, `session` owns the Herdr terminal sessions, `accounts` is the
-  coding-agent accounts' data layer (CLIProxyAPI client, port-forwards, the
-  active-account ConfigMap, proxy usage), `checkout` is the pipeline that puts
+  coding-agent accounts' data layer (nightshift-auth client, port-forwards,
+  proxy usage), `checkout` is the pipeline that puts
   a pull request, issue, or branch on its own volume and a sandbox on it,
   `runs` hands a task to a coding agent in such a sandbox and records how it
   ended (the `/v1/runs` endpoints, for issue tracker adapters; see
   `docs/api.md`),
   `server` is the HTTP layer that implements the contract over interfaces,
-  `live` answers it from the cluster, `daemon` runs it, and `egress` is the
+  `live` answers it from the cluster, `daemon` runs it, `auth` is the library
+  behind `cmd/nightshift-auth` (one file per agent's sign-in under
+  `auth/providers`), and `egress` is the
   library behind `cmd/egress-proxy`, the standalone outbound egress +
   secret-injection proxy. `manifest` pins the cluster manifests' resource
   budget in its tests. The services log through charm's log.
@@ -163,7 +170,7 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
   Repo view names the volume and lists the pools with their templates;
   `↑`/`↓` or `j`/`k` picks the pool, and `enter`, `→`/`l`, a number, or a click
   forks a cascading model submenu to the right of the selected pool for that
-  harness (`claude`, `codex`, `pi`, or `opencode`). Inside the model submenu,
+  harness (`claude`, `codex`, `pi`, `opencode`, `devin`, and so on). Inside the model submenu,
   `↑`/`↓`/`j`/`k` moves through models, `←`/`h`/`esc` returns to the pool list,
   and `enter`, a number, or a click starts the sandbox and launches the harness
   with `--model <selected>` (or the harness default). On an issue or
@@ -293,14 +300,14 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
   if nothing answers on `PORT` (7777), port-forwards the API until the
   dashboard closes. `make once` prints one frame the same way. Pass flags in
   `ARGS`, as in `make tui ARGS=-repos`.
-- `make redeploy` rebuilds the egress, refresher, and services images from
+- `make redeploy` rebuilds the egress, nightshift-auth, and services images from
   the checkout, loads them into kind, and restarts them. It leaves secrets,
   replica counts, and warm pools alone, and applies
-  `k8s/egress.yaml` and `k8s/nightshiftd.yaml`.
+  `k8s/egress.yaml`, `k8s/auth.yaml`, and `k8s/nightshiftd.yaml`.
 - `make up` installs or updates everything after the kind cluster and the
   agent-sandbox controller exist. It runs the three setup scripts and applies
   `k8s/warmpool.yaml`, so it copies API keys from your environment into the
-  egress proxy, starts the credential refresher, and resets warm pool sizes.
+  egress proxy, starts nightshift-auth, and resets warm pool sizes.
   Use it for a first install or when those manifests change.
 - `make status`, `make logs`, and `make forward` show the fleet, follow the
   services' log, and keep the API forwarded for another frontend.

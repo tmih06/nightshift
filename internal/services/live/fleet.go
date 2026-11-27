@@ -10,6 +10,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	v1 "github.com/tmih06/nightshift/api/v1"
+	"github.com/tmih06/nightshift/internal/services/agent"
 	"github.com/tmih06/nightshift/internal/services/checkout"
 	"github.com/tmih06/nightshift/internal/services/cluster"
 	"github.com/tmih06/nightshift/internal/services/server"
@@ -295,7 +296,7 @@ func (f *Fleet) probe(ctx context.Context, boxes []cluster.Sandbox) {
 		return
 	}
 	got, err := shared(ctx, &f.reading, "versions of "+strings.Join(unprobed, " "), func() (map[string]string, error) {
-		return cluster.AgentVersions(unprobed), nil
+		return cluster.AgentVersions(unprobed, agent.Commands()), nil
 	})
 	if err != nil {
 		return

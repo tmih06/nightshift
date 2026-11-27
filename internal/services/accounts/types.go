@@ -1,36 +1,27 @@
 // Package accounts is the data behind the Accounts tab: the coding-agent
-// accounts signed in to CLIProxyAPI, which one each agent's sandboxes use, how
-// much each has been used through the egress proxy, and the actions that
-// change them. It talks to the cluster through kubectl and to CLIProxyAPI over
-// a port-forward, and imports nothing above internal/cluster.
+// accounts signed in to nightshift-auth, the order each agent's are tried in,
+// how much each has been used through the egress proxy, and the actions that
+// change them. It talks to nightshift-auth and the proxy over HTTP (through
+// port-forwards when run outside the cluster), and imports nothing above
+// internal/cluster.
 package accounts
 
 import (
-	"sort"
 	"strings"
 	"time"
 )
 
-// Provider is an agent whose accounts Nightshift manages.
+// Provider is an agent whose accounts Nightshift manages, as nightshift-auth
+// lists it.
 type Provider struct {
-	ID     string // CLIProxyAPI's provider name
-	Name   string // what people call it
-	Secret string // the egress secret its access token travels as
+	ID     string `json:"id"`     // the name in every request
+	Name   string `json:"name"`   // what people call it
+	Secret string `json:"secret"` // the egress secret its access token travels as
 }
 
-// Providers lists the agents in the order the tab shows them. The secrets
-// must match k8s/creds-providers.json; TestProvidersMatchTheRegistry checks.
-func Providers() []Provider {
-	return []Provider{
-		{ID: "claude", Name: "Claude Code", Secret: "CLAUDE_ACCESS_TOKEN"},
-		{ID: "codex", Name: "Codex", Secret: "CODEX_ACCESS_TOKEN"},
-		{ID: "antigravity", Name: "Antigravity", Secret: "AGY_ACCESS_TOKEN"},
-	}
-}
-
-// ProviderByID finds a provider by CLIProxyAPI's name for it.
-func ProviderByID(id string) (Provider, bool) {
-	for _, p := range Providers() {
+// providerByID finds a provider in list.
+func providerByID(list []Provider, id string) (Provider, bool) {
+	for _, p := range list {
 		if p.ID == id {
 			return p, true
 		}
@@ -66,7 +57,7 @@ func (s State) String() string {
 
 // Account is one signed-in login.
 type Account struct {
-	Name     string // CLIProxyAPI's credential file name, the key for every action
+	Name     string // nightshift-auth's name for it, the key for every action
 	Provider string
 	Email    string
 	Disabled bool
@@ -230,16 +221,17 @@ type Analytics struct {
 	ByModel         map[string]ModelUsage
 }
 
-// Published is what the refresher last put into the cluster for one agent.
+// Published is what nightshift-auth last put into the cluster for one agent.
 type Published struct {
-	Name    string
-	Label   string
-	Expires time.Time
+	Name    string    `json:"name"`
+	Label   string    `json:"label"`
+	Expires time.Time `json:"expires"`
 }
 
 // Snapshot is everything the tab draws.
 type Snapshot struct {
 	At          time.Time
+	Providers   []Provider
 	Accounts    []Account
 	Chains      map[string][]string // by provider ID: ordered enabled account names
 	PublishedAt time.Time
@@ -247,52 +239,4 @@ type Snapshot struct {
 	Analytics   *Analytics
 	// UsageErr says why proxy usage is missing; the accounts still show.
 	UsageErr error
-}
-
-// Chain returns the ordered enabled accounts for provider: configured entries
-// that are still enabled (or active first when configured is empty), followed
-// by any remaining enabled accounts sorted by name. k8s/creds-publish.sh
-// applies the same rule, so the tab shows the exact fallback order published.
-func Chain(accounts []Account, provider string, configured []string, active string) []string {
-	enabled := make([]string, 0, len(accounts))
-	allowed := map[string]bool{}
-	for i := range accounts {
-		if accounts[i].Provider == provider && !accounts[i].Disabled {
-			enabled = append(enabled, accounts[i].Name)
-			allowed[accounts[i].Name] = true
-		}
-	}
-	if len(enabled) == 0 {
-		return nil
-	}
-	sort.Strings(enabled)
-	pref := configured
-	if len(pref) == 0 && active != "" {
-		pref = []string{active}
-	}
-	seen := make(map[string]bool, len(enabled))
-	out := make([]string, 0, len(enabled))
-	for _, name := range pref {
-		if allowed[name] && !seen[name] {
-			seen[name] = true
-			out = append(out, name)
-		}
-	}
-	for _, name := range enabled {
-		if !seen[name] {
-			seen[name] = true
-			out = append(out, name)
-		}
-	}
-	return out
-}
-
-// Chosen is the primary credential an agent's sandboxes get: the one picked as
-// active if it is still enabled, else the first enabled one by name.
-func Chosen(accounts []Account, provider, active string) (string, bool) {
-	chain := Chain(accounts, provider, nil, active)
-	if len(chain) == 0 {
-		return "", false
-	}
-	return chain[0], true
 }

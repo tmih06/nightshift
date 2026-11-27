@@ -2,7 +2,6 @@ package accounts
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -26,10 +25,11 @@ type Service interface {
 	Close()
 }
 
-// Live is the Service backed by a cluster: CLIProxyAPI behind a port-forward,
-// the egress proxy's admin port behind another, and kubectl for the rest.
+// Live is the Service backed by a cluster: nightshift-auth and the egress
+// proxy's admin port, each behind a port-forward unless reached directly, and
+// kubectl for nightshift-auth's key.
 type Live struct {
-	CPA   Endpoint
+	Auth  Endpoint
 	Proxy Endpoint
 	Kube  Kube
 }
@@ -37,76 +37,70 @@ type Live struct {
 // NewLive returns the Service for the cluster kubectl points at.
 func NewLive() *Live {
 	return &Live{
-		CPA:   &Forward{Namespace: "nightshift", Target: "svc/cpa", Port: 8317},
+		Auth:  &Forward{Namespace: "nightshift", Target: "svc/nightshift-auth", Port: 8318},
 		Proxy: &Forward{Namespace: "nightshift-egress", Target: "deploy/egress-proxy", Port: 9090},
 	}
 }
 
 // Close ends the port-forwards.
 func (l *Live) Close() {
-	l.CPA.Close()
+	l.Auth.Close()
 	l.Proxy.Close()
 }
 
 func (l *Live) client(ctx context.Context) (*Client, error) {
-	base, err := l.CPA.URL(ctx)
+	base, err := l.Auth.URL(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("reach CLIProxyAPI: %w", err)
+		return nil, fmt.Errorf("reach nightshift-auth: %w", err)
 	}
-	key, err := l.Kube.ManagementKey(ctx)
+	key, err := l.Kube.AuthKey(ctx)
 	if err != nil {
 		return nil, err
 	}
 	return NewClient(base, key, nil), nil
 }
 
-// Fetch gathers the accounts, which one is active, and the proxy's usage. A
+// Fetch gathers the accounts, each agent's chain, and the proxy's usage. A
 // failure to read usage does not hide the accounts.
 func (l *Live) Fetch(ctx context.Context) (Snapshot, error) {
 	c, err := l.client(ctx)
 	if err != nil {
 		return Snapshot{}, err
 	}
-	accounts, err := c.List(ctx)
+	provs, err := c.Providers(ctx)
 	if err != nil {
 		return Snapshot{}, err
 	}
-	data, err := l.Kube.ReadAccounts(ctx)
+	v, err := c.Vault(ctx)
 	if err != nil {
 		return Snapshot{}, err
 	}
 	snap := Snapshot{
 		At:          time.Now(),
-		Accounts:    accounts,
-		Chains:      map[string][]string{},
-		PublishedAt: data.PublishedAt,
-		Published:   data.Published,
+		Providers:   provs,
+		Accounts:    v.Accounts,
+		Chains:      v.Chains,
+		PublishedAt: v.PublishedAt,
+		Published:   v.Published,
 	}
-	for _, p := range Providers() {
-		chain := Chain(accounts, p.ID, data.Chains[p.ID], data.Active[p.ID])
-		if len(chain) == 0 {
-			continue
-		}
-		snap.Chains[p.ID] = chain
-		rank := make(map[string]int, len(chain))
-		for idx, name := range chain {
-			rank[name] = idx + 1
-		}
-		for i := range snap.Accounts {
-			if snap.Accounts[i].Provider != p.ID {
-				continue
-			}
-			if pos, ok := rank[snap.Accounts[i].Name]; ok {
-				snap.Accounts[i].Priority = pos
-				snap.Accounts[i].Active = pos == 1
-			}
-		}
-	}
-	snap.Analytics, snap.UsageErr = l.attachUsage(ctx, snap.Accounts)
+	rankAccounts(snap.Accounts, snap.Chains)
+	snap.Analytics, snap.UsageErr = l.attachUsage(ctx, provs, snap.Accounts)
 	return snap, nil
 }
 
-func (l *Live) attachUsage(ctx context.Context, accounts []Account) (*Analytics, error) {
+// rankAccounts marks each account's place in its agent's chain.
+func rankAccounts(accounts []Account, chains map[string][]string) {
+	for i := range accounts {
+		a := &accounts[i]
+		for idx, name := range chains[a.Provider] {
+			if name == a.Name {
+				a.Priority, a.Active = idx+1, idx == 0
+			}
+		}
+	}
+}
+
+func (l *Live) attachUsage(ctx context.Context, provs []Provider, accounts []Account) (*Analytics, error) {
 	base, err := l.Proxy.URL(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("reach the egress proxy: %w", err)
@@ -128,7 +122,7 @@ func (l *Live) attachUsage(ctx context.Context, accounts []Account) (*Analytics,
 		log.Debug("accounts: fetch proxy history", "err", herr)
 	}
 	for i := range accounts {
-		p, ok := ProviderByID(accounts[i].Provider)
+		p, ok := providerByID(provs, accounts[i].Provider)
 		if !ok {
 			continue
 		}
@@ -232,24 +226,42 @@ func (l *Live) Refresh(ctx context.Context, name string) error {
 	return c.Refresh(ctx, name)
 }
 
-// SetActive chooses which account leads an agent's fallback chain.
+// SetActive moves name to the head of its agent's fallback chain.
 func (l *Live) SetActive(ctx context.Context, provider, name string) error {
-	if _, ok := ProviderByID(provider); !ok {
-		return errors.New("unknown agent " + provider)
+	c, err := l.client(ctx)
+	if err != nil {
+		return err
 	}
-	return l.Kube.SetActive(ctx, provider, name)
+	v, err := c.Vault(ctx)
+	if err != nil {
+		return err
+	}
+	chain := []string{name}
+	for _, n := range v.Chains[provider] {
+		if n != name {
+			chain = append(chain, n)
+		}
+	}
+	return c.SetChain(ctx, provider, chain)
 }
 
 // SetChain sets the ordered fallback chain for an agent's accounts.
 func (l *Live) SetChain(ctx context.Context, provider string, names []string) error {
-	if _, ok := ProviderByID(provider); !ok {
-		return errors.New("unknown agent " + provider)
+	c, err := l.client(ctx)
+	if err != nil {
+		return err
 	}
-	return l.Kube.SetChain(ctx, provider, names)
+	return c.SetChain(ctx, provider, names)
 }
 
-// PublishNow has the refresher publish immediately.
-func (l *Live) PublishNow(ctx context.Context) (string, error) { return l.Kube.PublishNow(ctx) }
+// PublishNow has nightshift-auth publish immediately.
+func (l *Live) PublishNow(ctx context.Context) (string, error) {
+	c, err := l.client(ctx)
+	if err != nil {
+		return "", err
+	}
+	return c.Publish(ctx)
+}
 
 // RefreshQuotas asks the egress proxy to actively fetch provider quotas now.
 func (l *Live) RefreshQuotas(ctx context.Context) error {

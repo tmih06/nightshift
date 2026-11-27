@@ -162,7 +162,7 @@ Prune rules that no longer apply. Past about 200 lines, move older detail into
   names the real account.
   - **Why**: Filters that copied the rest of a login sent Codex's `id_token`
     (an email) and Claude's account UUIDs into sandboxes.
-  - **Enforced by**: `TestCredsStageSwapsEveryAgentLogin`.
+  - **Enforced by**: `TestSandboxLoginsNameNoAccount`.
 - **Rule**: Never forward an endpoint that names a login's account; have the
   egress proxy answer it as `nightshift@proxy.local`, never with a blank email.
   - **Why**: agy fetched the real email from Google's `userinfo` through the
@@ -190,6 +190,20 @@ Prune rules that no longer apply. Past about 200 lines, move older detail into
   - **Why**: "in use by sandboxes", then an account line on each pod, described
     something that does not happen: the proxy picks an account per request.
   - **Enforced by**: `TestTheTabNeverSaysASandboxUsesAnAccount`.
+
+- **Rule**: Swap a credential a CLI sends inside a protobuf body through a
+  rule with `proto_bodies`, never by replacing its bytes in place.
+  - **Why**: Devin sends its key in Connect RPC metadata, behind length
+    prefixes a byte-for-byte swap of a longer real key would corrupt.
+  - **Enforced by**: `TestProxySwapsAKeyInsideProtobufAndHidesTheAccount`,
+    `TestShippedPolicyProxiesDevinsKeyAndHidesItsAccount`.
+
+- **Rule**: Add a sign-in only as a `Provider` in
+  `internal/services/auth/providers`, with its secret bound and swapped in
+  `k8s/egress.yaml`; never run another login program beside nightshift-auth.
+  - **Why**: CLIProxyAPI plus a shell refresher and its own image did one
+    job, and Devin could not be added to it at all.
+  - **Enforced by**: `TestEveryAgentIsSwappedByTheProxy`.
 
 - **Rule**: List an account's models as its CLI offers them, never as the
   provider's raw catalog.

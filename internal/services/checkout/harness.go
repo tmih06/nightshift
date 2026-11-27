@@ -2,22 +2,10 @@ package checkout
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 
 	v1 "github.com/tmih06/nightshift/api/v1"
-)
-
-// Names and notes the catalogue repeats.
-const (
-	labelDefault        = "default"
-	noteDefault         = "harness default"
-	noteAnthropic       = "anthropic"
-	noteOpenAI          = "openai"
-	nameOpencode        = "opencode"
-	modelClaudeSonnetPi = "anthropic/claude-sonnet"
-	modelCodexOpenAI    = "openai/gpt-5.3-codex"
-	modelGemini         = "google/gemini-2.5-pro"
+	"github.com/tmih06/nightshift/internal/services/agent"
 )
 
 // LaunchCommand builds the shell command to run command with an optional model.
@@ -37,31 +25,24 @@ func modelFlag(model string) string {
 	return " --model " + Quote(model)
 }
 
-// TaskCommand is the shell command that has an agent run the prompt in $p and
-// exit, and whether the agent has such a mode. Approvals are off: nobody is
-// there to answer them, and the sandbox is what contains the agent.
-func TaskCommand(agent, model string) (string, bool) {
-	format, ok := map[string]string{
-		harnessClaudeCode().Command: `claude --dangerously-skip-permissions%s --print -- "$p"`,
-		harnessCodex().Command:      `codex exec --dangerously-bypass-approvals-and-sandbox%s -- "$p"`,
-		harnessOpencode().Command:   `opencode run --auto%s -- "$p"`,
-		harnessAgy().Command:        `agy --dangerously-skip-permissions%s --print="$p"`,
-		harnessPi().Command:         `pi%s --print -- "$p"`,
-		harnessOmpigSlim().Command:  `ompig-slim%s --print -- "$p"`,
-	}[agent]
-	if !ok {
+// TaskCommand is the shell command that has the agent whose CLI is command
+// run the prompt in $p and exit, and whether the agent has such a mode.
+// Approvals are off: nobody is there to answer them, and the sandbox is what
+// contains the agent.
+func TaskCommand(command, model string) (string, bool) {
+	a, ok := agent.ByCommand(command)
+	if !ok || a.Task == "" {
 		return "", false
 	}
-	return fmt.Sprintf(format, modelFlag(model)), true
+	return fmt.Sprintf(a.Task, modelFlag(strings.TrimSpace(model))), true
 }
 
 // ForPool resolves the coding agent harness and selectable models of a pool, from
 // its name, its template's name, and the template's manifest.
 func ForPool(name, template, templateYAML string) v1.Harness {
-	sources := []string{name, template, templateYAML}
-	for _, s := range sources {
-		if h, ok := matchHarness(s); ok {
-			return h
+	for _, s := range []string{name, template, templateYAML} {
+		if a, ok := agent.Match(s); ok {
+			return a.Harness()
 		}
 	}
 	label := template
@@ -76,126 +57,7 @@ func ForPool(name, template, templateYAML string) v1.Harness {
 		Label:   label,
 		Command: "",
 		Models: []v1.HarnessModel{
-			{ID: "", Label: labelDefault, Note: "bash shell"},
+			{ID: "", Label: "default", Note: "bash shell"},
 		},
 	}
-}
-
-func matchHarness(s string) (v1.Harness, bool) {
-	low := strings.ToLower(s)
-	switch {
-	case strings.Contains(low, "claude"):
-		return harnessClaudeCode(), true
-	case strings.Contains(low, "codex"):
-		return harnessCodex(), true
-	case strings.Contains(low, nameOpencode):
-		return harnessOpencode(), true
-	case hasToken(low, "agy"):
-		return harnessAgy(), true
-	case strings.Contains(low, "ompig"):
-		return harnessOmpigSlim(), true
-	case hasToken(low, "pi"):
-		return harnessPi(), true
-	}
-	return v1.Harness{}, false
-}
-
-func harnessClaudeCode() v1.Harness {
-	return v1.Harness{
-		Name:    "claude-code",
-		Label:   "Claude Code",
-		Command: "claude",
-		Models: []v1.HarnessModel{
-			{ID: "sonnet", Label: "sonnet", Note: "latest Sonnet"},
-			{ID: "opus", Label: "opus", Note: "latest Opus"},
-			{ID: "haiku", Label: "haiku", Note: "latest Haiku"},
-			{ID: "", Label: labelDefault, Note: noteDefault},
-		},
-	}
-}
-
-func harnessCodex() v1.Harness {
-	return v1.Harness{
-		Name:    "codex",
-		Label:   "Codex",
-		Command: "codex",
-		Models: []v1.HarnessModel{
-			{ID: "gpt-5.3-codex", Label: "gpt-5.3-codex", Note: "coding"},
-			{ID: "gpt-5.2-codex", Label: "gpt-5.2-codex", Note: "coding"},
-			{ID: "gpt-5.5", Label: "gpt-5.5", Note: "general"},
-			{ID: "gpt-5.2", Label: "gpt-5.2", Note: "general"},
-			{ID: "", Label: labelDefault, Note: noteDefault},
-		},
-	}
-}
-
-func harnessOpencode() v1.Harness {
-	return v1.Harness{
-		Name:    nameOpencode,
-		Label:   "OpenCode",
-		Command: nameOpencode,
-		Models: []v1.HarnessModel{
-			{ID: "opencode/big-pickle", Label: "opencode/big-pickle", Note: nameOpencode},
-			{ID: "opencode/deepseek-v4.1-flash-free", Label: "opencode/deepseek-v4.1-flash-free", Note: "free"},
-			{ID: "opencode/nemotron-3.5-super-vl-free", Label: "opencode/nemotron-3.5-super-vl-free", Note: "free"},
-			{ID: modelClaudeSonnetPi, Label: modelClaudeSonnetPi, Note: noteAnthropic},
-			{ID: modelCodexOpenAI, Label: modelCodexOpenAI, Note: noteOpenAI},
-			{ID: "", Label: labelDefault, Note: noteDefault},
-		},
-	}
-}
-
-func harnessAgy() v1.Harness {
-	return v1.Harness{
-		Name:    "agy",
-		Label:   "Antigravity",
-		Command: "agy",
-		Models: []v1.HarnessModel{
-			{ID: "gemini-3.8-flash-high", Label: "gemini-3.8-flash-high", Note: "gemini"},
-			{ID: "gemini-3.8-flash-medium", Label: "gemini-3.8-flash-medium", Note: "gemini"},
-			{ID: "claude-sonnet-4-6", Label: "claude-sonnet-4-6", Note: noteAnthropic},
-			{ID: "claude-opus-4-6-thinking", Label: "claude-opus-4-6-thinking", Note: noteAnthropic},
-			{ID: "gpt-oss-120b-medium", Label: "gpt-oss-120b-medium", Note: noteOpenAI},
-			{ID: "", Label: labelDefault, Note: noteDefault},
-		},
-	}
-}
-
-func harnessOmpigSlim() v1.Harness {
-	return v1.Harness{
-		Name:    "ompig-slim",
-		Label:   "OMPi slim",
-		Command: "ompig-slim",
-		Models: []v1.HarnessModel{
-			{ID: "anthropic/claude-sonnet-5-5", Label: "anthropic/claude-sonnet-5-5", Note: noteAnthropic},
-			{ID: "anthropic/claude-opus-5-5", Label: "anthropic/claude-opus-5-5", Note: noteAnthropic},
-			{ID: modelCodexOpenAI, Label: modelCodexOpenAI, Note: noteOpenAI},
-			{ID: modelGemini, Label: modelGemini, Note: "google"},
-			{ID: "", Label: labelDefault, Note: noteDefault},
-		},
-	}
-}
-
-func harnessPi() v1.Harness {
-	return v1.Harness{
-		Name:    "pi",
-		Label:   "Pi",
-		Command: "pi",
-		Models: []v1.HarnessModel{
-			{ID: modelClaudeSonnetPi, Label: modelClaudeSonnetPi, Note: noteAnthropic},
-			{ID: "anthropic/claude-opus", Label: "anthropic/claude-opus", Note: noteAnthropic},
-			{ID: modelCodexOpenAI, Label: modelCodexOpenAI, Note: noteOpenAI},
-			{ID: modelGemini, Label: modelGemini, Note: "google"},
-			{ID: "", Label: labelDefault, Note: noteDefault},
-		},
-	}
-}
-
-// hasToken checks whether tok appears as a standalone identifier segment
-// delimited by non-alphanumeric boundaries (so "pi-pool" matches "pi" while
-// "api-pool" does not).
-func hasToken(s, tok string) bool {
-	return slices.Contains(strings.FieldsFunc(s, func(r rune) bool {
-		return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9')
-	}), tok)
 }

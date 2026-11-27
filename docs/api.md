@@ -26,7 +26,7 @@ flowchart LR
   end
   Fleet --> K8s[(Kubernetes API)]
   Terms -->|exec| K8s
-  Accts --> CPA[CLIProxyAPI]
+  Accts --> Auth[nightshift-auth]
   Accts --> Proxy[egress proxy]
 ```
 
@@ -44,9 +44,9 @@ them, with one API either way:
 
 In-cluster is what makes Nightshift distributed. The services live next to the
 sandboxes, many people and many machines connect to one address, and nobody
-needs a kubeconfig. Locally, the services reach CLIProxyAPI and the egress
+needs a kubeconfig. Locally, the services reach nightshift-auth and the egress
 proxy through port-forwards; in-cluster they use the Services' own addresses.
-The choice is configuration, not code: `--cpa-url` and `--proxy-url` replace
+The choice is configuration, not code: `--auth-url` and `--proxy-url` replace
 the port-forwards.
 
 A frontend can talk to several servers, one per cluster. `GET /v1` says which
@@ -81,7 +81,7 @@ replica per cluster; a restart loses nothing but the progress display.
 - **In the cluster.** `k8s/nightshiftd.yaml` runs the services as a Deployment
   with a service account of the least privilege they need (pinned by
   `TestTheServicesHaveLeastPrivilege`), `NIGHTSHIFT_CONTEXT=-` so `kubectl` uses
-  that account instead of a kubeconfig, and `--cpa-url` and `--proxy-url` set to
+  that account instead of a kubeconfig, and `--auth-url` and `--proxy-url` set to
   the Services' addresses. `k8s/nightshiftd-setup.sh` installs it on any
   provider: it builds and loads the image on kind and pulls it anywhere else
   (`NIGHTSHIFTD_IMAGE` and `NIGHTSHIFTD_BUILD=1` point it at your registry),

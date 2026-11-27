@@ -379,7 +379,7 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	tok, scrubbed, err := p.inspectResponse(resp, bindings)
+	tok, scrubbed, err := p.inspectResponse(resp, bindings, rule)
 	if err != nil {
 		http.Error(w, "failed reading upstream response", http.StatusBadGateway)
 		return
@@ -570,7 +570,7 @@ func (p *Proxy) handleMITM(w http.ResponseWriter, r *http.Request, host string, 
 			return
 		}
 
-		tok, scrubbed, err := p.inspectResponse(resp, bindings)
+		tok, scrubbed, err := p.inspectResponse(resp, bindings, rule)
 		if err != nil {
 			drainResponseBody(resp)
 			if werr := writeSimpleResponse(tlsConn, req, http.StatusBadGateway, "failed reading upstream response\n"); werr != nil {
@@ -632,16 +632,20 @@ type forwardReq struct {
 	started    time.Time
 }
 
-func (p *Proxy) inspectResponse(resp *http.Response, bindings []injectedBinding) (tok TokenMetrics, scrubbed bool, err error) {
+func (p *Proxy) inspectResponse(resp *http.Response, bindings []injectedBinding, rule *Rule) (tok TokenMetrics, scrubbed bool, err error) {
 	for _, b := range bindings {
 		p.quota.observeHeaders(b.secret, b.account, b.label, resp.Header)
 	}
 	wantScrub := p.cfg.ShouldScrubResponses()
 	wantTokens := len(bindings) > 0 && resp.StatusCode < http.StatusBadRequest
-	if !wantScrub && !wantTokens {
+	var proto *protoReply
+	if rule != nil && rule.ProtoBodies {
+		proto = &protoReply{email: rule.ProtoEmail}
+	}
+	if !wantScrub && !wantTokens && (proto == nil || proto.email == "") {
 		return TokenMetrics{}, false, nil
 	}
-	body, scrubbed, err := p.secrets.Load().scrubAndCaptureResponse(resp, wantScrub)
+	body, scrubbed, err := p.secrets.Load().captureResponse(resp, wantScrub, proto)
 	if err != nil {
 		return TokenMetrics{}, scrubbed, err
 	}
@@ -660,11 +664,22 @@ func (p *Proxy) buildOutboundRequest(fr forwardReq) *http.Request {
 		outReq.Host = fr.host
 	}
 	stripHopHeaders(outReq.Header)
-	if p.cfg.ShouldScrubResponses() {
+	if p.cfg.ShouldScrubResponses() || fr.rule.ProtoBodies {
 		// Prevent compressed reflections from bypassing plaintext scrubbing.
 		outReq.Header.Del("Accept-Encoding")
+		outReq.Header.Del("Connect-Accept-Encoding")
+		outReq.Header.Del("Grpc-Accept-Encoding")
 	}
 	return outReq
+}
+
+// protoLimit is how much of a request body the proxy reads to swap the
+// placeholders inside it: none unless the rule carries protobuf bodies.
+func (p *Proxy) protoLimit(rule *Rule) int64 {
+	if rule == nil || !rule.ProtoBodies {
+		return 0
+	}
+	return p.maxRetryBodyBytes
 }
 
 func (p *Proxy) roundTripWithFailover(fr forwardReq) (*http.Response, []injectedBinding, error) {
@@ -686,7 +701,7 @@ func (p *Proxy) roundTripWithFailover(fr forwardReq) (*http.Response, []injected
 
 func (p *Proxy) roundTripSingle(fr forwardReq, engine *SecretEngine) (*http.Response, []injectedBinding, error) {
 	outReq := p.buildOutboundRequest(fr)
-	bindings := engine.injectRequestSelected(outReq, fr.rule.Secrets, nil)
+	bindings := engine.injectRequest(outReq, fr.rule.Secrets, nil, p.protoLimit(fr.rule))
 	resp, err := p.tr.RoundTrip(outReq)
 	if err != nil {
 		return nil, bindings, fmt.Errorf("upstream round trip: %w", err)
@@ -697,7 +712,7 @@ func (p *Proxy) roundTripSingle(fr forwardReq, engine *SecretEngine) (*http.Resp
 func (p *Proxy) roundTripOverflow(fr forwardReq, engine *SecretEngine, secretName string, cand resolvedAccount, body io.Reader) (*http.Response, []injectedBinding, error) {
 	outReq := p.buildOutboundRequest(fr)
 	outReq.Body = io.NopCloser(body)
-	bindings := engine.injectRequestSelected(outReq, fr.rule.Secrets, map[string]resolvedAccount{secretName: cand})
+	bindings := engine.injectRequest(outReq, fr.rule.Secrets, map[string]resolvedAccount{secretName: cand}, p.protoLimit(fr.rule))
 	resp, err := p.tr.RoundTrip(outReq)
 	if err != nil {
 		return nil, bindings, fmt.Errorf("upstream round trip: %w", err)
@@ -710,7 +725,7 @@ func (p *Proxy) roundTripPool(fr forwardReq, engine *SecretEngine, secretName st
 	for i, cand := range candidates {
 		outReq := p.buildOutboundRequest(fr)
 		setBufferedBody(outReq, bodyBytes)
-		bindings := engine.injectRequestSelected(outReq, fr.rule.Secrets, map[string]resolvedAccount{secretName: cand})
+		bindings := engine.injectRequest(outReq, fr.rule.Secrets, map[string]resolvedAccount{secretName: cand}, p.protoLimit(fr.rule))
 		resp, err := p.tr.RoundTrip(outReq)
 		if err != nil {
 			return nil, bindings, fmt.Errorf("upstream round trip: %w", err)

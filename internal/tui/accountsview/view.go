@@ -212,13 +212,13 @@ func (m Model) titleLine() string {
 	now := m.now()
 	switch {
 	case m.err != nil && !m.loaded:
-		parts = append(parts, s.bad.Render("● CLIProxyAPI unreachable"))
+		parts = append(parts, s.bad.Render("● nightshift-auth unreachable"))
 	case m.err != nil:
 		parts = append(parts, s.warn.Render("● showing the last read; refresh failed"))
 	case m.loading && !m.loaded:
-		parts = append(parts, s.faint.Render("connecting to CLIProxyAPI…"))
+		parts = append(parts, s.faint.Render("connecting to nightshift-auth…"))
 	default:
-		parts = append(parts, s.ok.Render("● CLIProxyAPI"))
+		parts = append(parts, s.ok.Render("● nightshift-auth"))
 		if !m.snap.PublishedAt.IsZero() {
 			parts = append(parts, s.faint.Render("published "+ago(now, m.snap.PublishedAt)))
 		} else {
@@ -301,10 +301,10 @@ func (m Model) unloaded() []string {
 			lines = append(lines, "  "+s.faint.Render(l))
 		}
 		return append(lines, "",
-			"  "+s.text.Render("The login surface is CLIProxyAPI. Install it with k8s/creds-setup.sh."),
+			"  "+s.text.Render("The login service is nightshift-auth. Install it with k8s/auth-setup.sh."),
 			"  "+s.faint.Render("Press r to try again."))
 	default:
-		return []string{"", "  " + s.faint.Render("Starting a connection to CLIProxyAPI…")}
+		return []string{"", "  " + s.faint.Render("Starting a connection to nightshift-auth…")}
 	}
 }
 
@@ -446,7 +446,7 @@ func (m Model) providerBox() string {
 		lines = append(lines, row)
 	}
 	if m.modal.busy {
-		lines = append(lines, "", s.faint.Render("asking CLIProxyAPI for a sign-in link…"))
+		lines = append(lines, "", s.faint.Render("asking nightshift-auth for a sign-in link…"))
 	} else {
 		lines = append(lines, "", s.faint.Render("⏎ continue • esc cancel"))
 	}
@@ -463,8 +463,8 @@ func (m Model) linkBox() string {
 		lines = append(lines, s.ok.Render(l))
 	}
 	lines = append(lines, "",
-		s.text.Render("2. The browser then lands on a localhost address that will"),
-		s.text.Render("   not load. Copy that whole address and paste it here:"), "",
+		s.text.Render("2. The page then shows a code, or the browser lands on a"),
+		s.text.Render("   localhost address that will not load. Paste either here:"), "",
 		m.modal.input.View(), "")
 	switch {
 	case m.modal.busy:
@@ -499,7 +499,7 @@ func (m Model) helpBox() string {
 		s.title.Render("Accounts"), "",
 		row("u, enter", "use this account: all of this agent's traffic moves to it"),
 		row("K/J", "move this account up or down in its fallback chain"),
-		row("a", "sign an account in (opens a link, paste the address back)"),
+		row("a", "sign an account in (opens a link, paste the code or address back)"),
 		row("d", "disable or enable the account"),
 		row("x", "remove the account and its tokens"),
 		row("r", "read everything again, live quotas included"),

@@ -1,4 +1,4 @@
-.PHONY: help up redeploy images tui once forward status logs build test \
+.PHONY: help up redeploy images warmpool tui once forward status logs build test \
 	lint fmt fmt-check gate gate-full quality-tools quality-baseline
 
 .DEFAULT_GOAL := help
@@ -18,13 +18,13 @@ help: ## List these commands
 	@printf '\nVariables: CONTEXT=%s PORT=%s ARGS="-repos"\n' '$(CONTEXT)' '$(PORT)'
 
 # The setup scripts copy any API keys in your environment into the egress proxy,
-# start the credential refresher, and the manifest resets warm pool sizes.
+# start nightshift-auth, and the manifest resets warm pool sizes.
 up: ## Install or update the whole stack (applies every manifest)
 ifneq ($(filter kind-%,$(CONTEXT)),)
 	docker build -t nightshift-base:local images/base
 endif
 	NIGHTSHIFT_CONTEXT=$(CONTEXT) k8s/egress-setup.sh
-	NIGHTSHIFT_CONTEXT=$(CONTEXT) k8s/creds-setup.sh
+	NIGHTSHIFT_CONTEXT=$(CONTEXT) k8s/auth-setup.sh
 	$(KUBECTL) apply -f k8s/warmpool.yaml
 	NIGHTSHIFT_CONTEXT=$(CONTEXT) k8s/nightshiftd-setup.sh
 
@@ -32,16 +32,21 @@ images: # Builds the local service images and loads them into kind.
 	@case '$(CONTEXT)' in kind-*) ;; *) echo 'redeploy only works on a kind context' >&2; exit 1 ;; esac
 	docker build -t nightshift-base:local images/base
 	docker build -t nightshift-egress-proxy:local -f images/egress/Dockerfile .
-	docker build -t nightshift-creds:local -f images/creds/Dockerfile .
-	kind load docker-image nightshift-egress-proxy:local nightshift-creds:local --name $(KIND_CLUSTER)
+	docker build -t nightshift-auth:local -f images/auth/Dockerfile .
+	kind load docker-image nightshift-egress-proxy:local nightshift-auth:local --name $(KIND_CLUSTER)
 
 # Leaves secrets, replica counts, and warm pools as they are.
 redeploy: images ## Rebuild from this checkout and restart (kind only)
 	$(KUBECTL) apply -f k8s/egress.yaml
 	$(KUBECTL) -n nightshift-egress rollout restart deploy/egress-proxy
 	$(KUBECTL) -n nightshift-egress rollout status deploy/egress-proxy --timeout=120s
-	$(KUBECTL) -n nightshift rollout restart deploy/creds-refresher
+	NIGHTSHIFT_CONTEXT=$(CONTEXT) AUTH_IMAGE=nightshift-auth:local k8s/auth-setup.sh
+	$(KUBECTL) -n nightshift rollout restart deploy/nightshift-auth
 	NIGHTSHIFT_CONTEXT=$(CONTEXT) k8s/nightshiftd-setup.sh
+
+# One template and pool per directory under images/agent/agents.
+warmpool: ## Render k8s/warmpool.yaml from the agents
+	k8s/warmpool.sh > k8s/warmpool.yaml
 
 tui: ## Open the dashboard (forwards the API for you)
 	@$(WITH_API) go run ./cmd/nightshift $(ARGS)
@@ -68,7 +73,7 @@ test: ## Run the Go tests
 # Kubernetes YAML omits document markers and aligns sequences with their keys.
 # Markdown diagrams and tables need no line-length or table-alignment rules.
 lint: ## Lint scripts, manifests, and docs
-	shellcheck k8s/sbx.sh k8s/egress-setup.sh scripts/dev/with-api scripts/quality/gate scripts/quality/stop-hook scripts/quality/bench-compare scripts/quality/diff-check/run
+	shellcheck k8s/sbx.sh k8s/egress-setup.sh k8s/auth-setup.sh k8s/warmpool.sh images/agent/agent.sh images/agent/agents/*/*.sh scripts/dev/with-api scripts/quality/gate scripts/quality/stop-hook scripts/quality/bench-compare scripts/quality/diff-check/run
 	pipx run yamllint -d '{extends: default, rules: {document-start: disable, indentation: {indent-sequences: false}}}' k8s/
 	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
 		printf '%s\n' '{"config":{"default":true,"MD013":false,"MD060":false}}' > "$$tmp/config.jsonc"; \

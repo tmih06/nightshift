@@ -308,7 +308,7 @@ func TestOnlyGitHubIsOfferedTheGitHubToken(t *testing.T) {
 }
 
 func TestEveryPoolAgentCanRunATask(t *testing.T) {
-	for _, pool := range []string{"pi-pool", "codex-pool", "claude-code-pool", "agy-pool", "ompig-slim-pool", "opencode-pool"} {
+	for _, pool := range []string{"pi-pool", "codex-pool", "claude-code-pool", "agy-pool", "ompig-slim-pool", "opencode-pool", "devin-pool"} {
 		if _, ok := checkout.TaskCommand(checkout.ForPool(pool, "", "").Command, ""); !ok {
 			t.Errorf("%s has no command", pool)
 		}

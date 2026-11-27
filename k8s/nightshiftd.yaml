@@ -86,27 +86,22 @@ rules:
 - apiGroups: [""]
   resources: ["pods"]
   verbs: ["get", "list"]
-# Terminals and the live numbers are run inside the sandbox; the credential
-# refresher is asked to publish the same way.
+# Terminals and the live numbers are run inside the sandbox.
 - apiGroups: [""]
   resources: ["pods/exec"]
   verbs: ["create"]
-- apiGroups: ["apps"]
-  resources: ["deployments"]
-  resourceNames: ["creds-refresher"]
-  verbs: ["get"]
-# The egress CA the sandboxes mount, and which account each agent uses.
+# The egress CA the sandboxes mount.
 - apiGroups: [""]
   resources: ["configmaps"]
   verbs: ["create"]
 - apiGroups: [""]
   resources: ["configmaps"]
-  resourceNames: ["egress-ca", "nightshift-accounts"]
+  resourceNames: ["egress-ca"]
   verbs: ["get", "patch", "update"]
-# The key to CLIProxyAPI's management API, and nothing else secret.
+# The key to nightshift-auth's API, and nothing else secret.
 - apiGroups: [""]
   resources: ["secrets"]
-  resourceNames: ["cpa-keys"]
+  resourceNames: ["nightshift-auth-key"]
   verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -191,27 +186,6 @@ spec:
     - protocol: TCP
       port: 9090
 ---
-# Likewise CLIProxyAPI, which only the credential refresher could reach.
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: cpa-from-nightshiftd
-  namespace: nightshift
-spec:
-  podSelector:
-    matchLabels:
-      app: cpa
-  policyTypes:
-  - Ingress
-  ingress:
-  - from:
-    - podSelector:
-        matchLabels:
-          app: nightshiftd
-    ports:
-    - protocol: TCP
-      port: 8317
----
 apiVersion: v1
 kind: Service
 metadata:
@@ -266,7 +240,7 @@ spec:
         # Behind a Service or an ingress the Host header is whatever name it
         # was given. The token is still required for everything.
         - --any-host
-        - --cpa-url=http://cpa.nightshift.svc:8317
+        - --auth-url=http://nightshift-auth.nightshift.svc:8318
         - --proxy-url=http://egress-admin.nightshift-egress.svc:9090
         env:
         # "-" is the cluster this pod runs in: kubectl uses the service

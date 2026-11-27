@@ -15,13 +15,34 @@ runs as the unprivileged `node` user in `/home/node/workspace`.
 | `opencode` | `opencode-ai` from npm | `opencode` |
 | `agy` | Antigravity CLI release download, checksum-verified | `agy` |
 | `ompig-slim` | [tmih06/ompig-slim](https://github.com/tmih06/ompig-slim) release, checksum-verified | `ompig-slim` |
+| `devin` | Devin CLI release bundle from `static.devin.ai`, checksum-verified, in `/opt/devin` | `devin` |
 
 The build verifies the agent's version by running its command and stamps it
 into `/etc/nightshift-agent` as `<agent> <semver>` for the dashboard to read.
-npm packages may execute their install scripts at build time; the agy and
-ompig-slim downloads are checked against the checksum each release
-publishes. No credentials are baked into the images; supply provider
+npm packages may execute their install scripts at build time; the agy,
+ompig-slim, and devin downloads are checked against the checksum each
+release publishes. No credentials are baked into the images; supply provider
 credentials or log in at runtime.
+
+## Adding an agent
+
+Each agent is a directory under `agents/`, named as its image, template, and
+pool will be. `agent.sh` reads it; nothing else in the image build changes.
+
+1. Write `agents/<name>/agent.env` with `COMMAND`, the CLI the image puts on
+   `PATH`. For an npm package, add `NPM_PACKAGE`. Otherwise add an
+   `install.sh` that installs `$VERSION` for `$TARGETARCH` and checks the
+   published checksum, and a `latest.sh` that prints the latest stable
+   release. `agent.env` may also set `PULL_POLICY` (default `Always`) and
+   `MEMORY_REQUEST` (default `128Mi`) for its template.
+2. Add a `boot.sh` beside it if the sandbox must prepare the agent at start,
+   such as turning approvals off. `k8s/warmpool.sh` inlines it.
+3. Add the agent to `internal/services/agent/catalogue.go`: its label, the
+   words that name its pools, its models, and its unattended task command.
+4. Run `make warmpool`, and allow the agent's API hosts in `k8s/egress.yaml`.
+
+`go test ./internal/...` fails until the directory, the catalogue, and
+`k8s/warmpool.yaml` agree. Both image workflows build every directory.
 
 ## Cluster deployment
 
@@ -63,6 +84,7 @@ ghcr.io/tmih06/nightshift-claude-code:<agent-version>
 ghcr.io/tmih06/nightshift-agy:<agent-version>
 ghcr.io/tmih06/nightshift-ompig-slim:<agent-version>
 ghcr.io/tmih06/nightshift-opencode:<agent-version>
+ghcr.io/tmih06/nightshift-devin:<agent-version>
 ```
 
 Each agent also has a `latest` tag. The workflow checks the npm registry's

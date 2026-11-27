@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -349,6 +350,12 @@ func (e *SecretEngine) InjectRequest(req *http.Request, allowedSecrets []string)
 }
 
 func (e *SecretEngine) injectRequestSelected(req *http.Request, allowedSecrets []string, chosen map[string]resolvedAccount) []injectedBinding {
+	return e.injectRequest(req, allowedSecrets, chosen, 0)
+}
+
+// injectRequest swaps placeholders in req's headers and query and, when
+// protoLimit is positive, inside a protobuf body of at most that many bytes.
+func (e *SecretEngine) injectRequest(req *http.Request, allowedSecrets []string, chosen map[string]resolvedAccount, protoLimit int64) []injectedBinding {
 	active := e.selectActiveSecrets(allowedSecrets, chosen)
 	if len(active) == 0 {
 		return nil
@@ -356,7 +363,59 @@ func (e *SecretEngine) injectRequestSelected(req *http.Request, allowedSecrets [
 	used := map[string]resolvedAccount{}
 	injectHeaders(req.Header, active, used)
 	injectQuery(req.URL, active, used)
+	if protoLimit > 0 {
+		injectProtoBody(req, active, used, protoLimit)
+	}
 	return sortedBindings(used)
+}
+
+// injectProtoBody swaps placeholders inside req's protobuf body. A body over
+// limit, or one it cannot read as protobuf, goes on as it was.
+func injectProtoBody(req *http.Request, active []activeSecret, used map[string]resolvedAccount, limit int64) {
+	if protoFramingOf(req.Header.Get("Content-Type")) == protoNone || req.Body == nil || req.Body == http.NoBody {
+		return
+	}
+	body, overflow, rest, err := readBoundedBody(req.Body, limit)
+	if err != nil {
+		req.Body = http.NoBody
+		return
+	}
+	if overflow {
+		req.Body = io.NopCloser(io.MultiReader(bytes.NewReader(body), rest))
+		return
+	}
+	hit := map[string]resolvedAccount{}
+	out, changed, err := rewriteProtoBody(req.Header, body, func(s []byte) ([]byte, bool) {
+		return swapPlaceholders(s, active, hit)
+	})
+	if err != nil || !changed {
+		out = body
+	} else {
+		for name, acct := range hit {
+			used[name] = acct
+		}
+	}
+	req.Body = io.NopCloser(bytes.NewReader(out))
+	req.ContentLength = int64(len(out))
+}
+
+// swapPlaceholders replaces every placeholder (and companion placeholder) of
+// active in s, noting which secrets it used.
+func swapPlaceholders(s []byte, active []activeSecret, used map[string]resolvedAccount) ([]byte, bool) {
+	out, changed := s, false
+	for _, as := range active {
+		if ph := []byte(as.placeholder); bytes.Contains(out, ph) {
+			out = bytes.ReplaceAll(out, ph, []byte(as.account.value))
+			used[as.name], changed = as.account, true
+		}
+		for compPH, compVal := range as.account.companions {
+			if ph := []byte(compPH); bytes.Contains(out, ph) {
+				out = bytes.ReplaceAll(out, ph, []byte(compVal))
+				used[as.name], changed = as.account, true
+			}
+		}
+	}
+	return out, changed
 }
 
 func (e *SecretEngine) selectActiveSecrets(allowedSecrets []string, chosen map[string]resolvedAccount) []activeSecret {
@@ -512,6 +571,18 @@ func (e *SecretEngine) ScrubResponse(resp *http.Response) (bool, error) {
 }
 
 func (e *SecretEngine) scrubAndCaptureResponse(resp *http.Response, scrub bool) (body []byte, scrubbed bool, err error) {
+	return e.captureResponse(resp, scrub, nil)
+}
+
+// protoReply is how a proto rule's protobuf replies are cleaned: their real
+// secrets scrubbed field by field, and with email set, every email address
+// replaced by it.
+type protoReply struct{ email string }
+
+// captureResponse reads resp's body for inspection, scrubbing real secrets
+// from it and its headers when scrub is set. With proto, a protobuf reply is
+// cleaned field by field so its lengths stay true.
+func (e *SecretEngine) captureResponse(resp *http.Response, scrub bool, proto *protoReply) (body []byte, scrubbed bool, err error) {
 	if resp == nil {
 		return nil, false, nil
 	}
@@ -526,11 +597,8 @@ func (e *SecretEngine) scrubAndCaptureResponse(resp *http.Response, scrub bool) 
 	if rerr != nil {
 		return nil, scrubbed, rerr
 	}
-	if canScrub {
-		if cleaned, ok := e.ScrubBytes(out); ok {
-			out = cleaned
-			scrubbed = true
-		}
+	if cleaned, ok := e.cleanBody(resp.Header, out, canScrub, proto); ok {
+		out, scrubbed = cleaned, true
 	}
 	resp.Body = io.NopCloser(bytes.NewReader(out))
 	resp.ContentLength = int64(len(out))
@@ -562,4 +630,42 @@ func (e *SecretEngine) scrubHeaders(hdr http.Header) bool {
 		}
 	}
 	return scrubbed
+}
+
+// cleanBody scrubs a reply body: a protobuf one field by field when proto is
+// set, so its lengths stay true, and any other byte for byte.
+func (e *SecretEngine) cleanBody(hdr http.Header, body []byte, scrub bool, proto *protoReply) ([]byte, bool) {
+	if proto != nil && protoFramingOf(hdr.Get("Content-Type")) != protoNone {
+		if !scrub && proto.email == "" {
+			return body, false
+		}
+		cleaned, hit, err := rewriteProtoBody(hdr, body, func(s []byte) ([]byte, bool) {
+			return e.scrubProtoString(s, scrub, proto.email)
+		})
+		return cleaned, err == nil && hit
+	}
+	if !scrub {
+		return body, false
+	}
+	return e.ScrubBytes(body)
+}
+
+// emailAddress is an email address inside a string.
+var emailAddress = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`)
+
+// scrubProtoString cleans one string field of a protobuf reply.
+func (e *SecretEngine) scrubProtoString(s []byte, scrub bool, email string) ([]byte, bool) {
+	out, changed := s, false
+	if scrub {
+		if cleaned, ok := e.ScrubBytes(out); ok {
+			out, changed = cleaned, true
+		}
+	}
+	if email != "" && emailAddress.Match(out) {
+		next := emailAddress.ReplaceAllLiteral(out, []byte(email))
+		if !bytes.Equal(next, out) {
+			out, changed = next, true
+		}
+	}
+	return out, changed
 }

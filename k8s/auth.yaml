@@ -1,0 +1,199 @@
+# nightshift-auth: Nightshift's login service (cmd/nightshift-auth). It signs
+# coding-agent accounts in, keeps their tokens fresh, and publishes them:
+# real access tokens to the egress proxy (egress-secrets), placeholder
+# logins to the sandboxes (agent-creds), and a warm pool for each agent with
+# an account. It never serves model traffic, and is the only process that
+# holds a refresh token.
+#
+# Install with k8s/auth-setup.sh, then sign accounts in from the Accounts
+# tab. One replica on a ReadWriteOnce volume: refresh tokens rotate, so
+# exactly one process may hold them.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nightshift-auth
+  namespace: nightshift
+  labels:
+    nightshift.dev/component: auth
+---
+# Least privilege: it writes the sandbox logins and sizes the warm pools, and
+# nothing else in nightshift.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: nightshift-auth
+  namespace: nightshift
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["create"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["agent-creds"]
+  verbs: ["get", "patch"]
+- apiGroups: ["extensions.agents.x-k8s.io"]
+  resources: ["sandboxwarmpools"]
+  verbs: ["list", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: nightshift-auth
+  namespace: nightshift
+subjects:
+- kind: ServiceAccount
+  name: nightshift-auth
+  namespace: nightshift
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: nightshift-auth
+---
+# The real access tokens go to the proxy's secret, and nowhere else.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: nightshift-auth
+  namespace: nightshift-egress
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["create"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["egress-secrets"]
+  verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: nightshift-auth
+  namespace: nightshift-egress
+subjects:
+- kind: ServiceAccount
+  name: nightshift-auth
+  namespace: nightshift
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: nightshift-auth
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nightshift-auth-data
+  namespace: nightshift
+  labels:
+    nightshift.dev/component: auth
+spec:
+  # The cluster's default StorageClass; set storageClassName for another.
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 64Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nightshift-auth
+  namespace: nightshift
+  labels:
+    nightshift.dev/component: auth
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: nightshift-auth
+  template:
+    metadata:
+      labels:
+        app: nightshift-auth
+        nightshift.dev/component: auth
+    spec:
+      serviceAccountName: nightshift-auth
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: auth
+        image: ghcr.io/tmih06/nightshift-auth:latest
+        imagePullPolicy: IfNotPresent
+        args: ["-listen", ":8318", "-data", "/data"]
+        env:
+        - name: NIGHTSHIFT_AUTH_KEY
+          valueFrom:
+            secretKeyRef:
+              name: nightshift-auth-key
+              key: key
+        ports:
+        - name: http
+          containerPort: 8318
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          periodSeconds: 5
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 200m
+            memory: 64Mi
+        volumeMounts:
+        - name: data
+          mountPath: /data
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: nightshift-auth-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nightshift-auth
+  namespace: nightshift
+  labels:
+    nightshift.dev/component: auth
+spec:
+  selector:
+    app: nightshift-auth
+  ports:
+  - name: http
+    port: 8318
+    targetPort: http
+---
+# Only nightshiftd may call it inside the cluster. A sandbox cannot reach it
+# (its egress policy denies private ranges), and kubectl port-forward is not
+# a network flow.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nightshift-auth-ingress
+  namespace: nightshift
+spec:
+  podSelector:
+    matchLabels:
+      app: nightshift-auth
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: nightshiftd
+    ports:
+    - protocol: TCP
+      port: 8318

@@ -3,8 +3,8 @@
 #
 # Deploys nightshiftd (the API every frontend uses, docs/api.md) with the least
 # privilege it needs, makes its token, and prints how to reach it. Run
-# k8s/egress-setup.sh and k8s/creds-setup.sh first: it reads the egress proxy
-# and CLIProxyAPI. You need rights to create ClusterRoles (cluster-admin).
+# k8s/egress-setup.sh and k8s/auth-setup.sh first: it reads the egress proxy
+# and nightshift-auth. You need rights to create ClusterRoles (cluster-admin).
 #
 # Env:  NIGHTSHIFT_CONTEXT   kubeconfig context (default kind-agent-sandbox;
 #                            KUBE_CONTEXT is still read)

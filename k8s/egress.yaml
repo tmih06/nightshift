@@ -81,6 +81,25 @@ data:
         mode: mitm
         methods: ["GET", "HEAD", "POST", "PUT", "PATCH"]
         secrets: ["GITHUB_TOKEN"]
+      # Devin CLI speaks Connect RPC to its Windsurf API server and sends
+      # its key in the Authorization header and inside each protobuf
+      # request, so the proxy swaps it there too. Replies name the account
+      # by email; the sandbox sees the fixed identity instead. Devin's login
+      # hosts (app.devin.ai, api.devin.ai) stay closed, so nobody signs in
+      # from a sandbox, and static.devin.ai too: the image pins its version.
+      - name: devin
+        hosts: ["server.codeium.com"]
+        ports: [443]
+        mode: mitm
+        methods: ["GET", "POST"]
+        secrets: ["DEVIN_ACCESS_TOKEN"]
+        proto_bodies: true
+        proto_email: "nightshift@proxy.local"
+      # Feature flags, behind a public client token Devin ships with.
+      - name: devin-flags
+        hosts: ["unleash.codeium.com"]
+        ports: [443]
+        mode: tunnel
       - name: npm
         hosts: ["registry.npmjs.org"]
         ports: [443]
@@ -106,7 +125,7 @@ data:
       GITHUB_TOKEN:
         placeholder: "nightshift:secret:GITHUB_TOKEN"
         env: "REAL_GITHUB_TOKEN"
-      # OAuth access tokens rotate: creds-publish.sh rewrites them in
+      # OAuth access tokens rotate: nightshift-auth rewrites them in
       # egress-secrets and the proxy re-reads these files without a restart.
       CLAUDE_ACCESS_TOKEN:
         placeholder: "nightshift:secret:CLAUDE_ACCESS_TOKEN"
@@ -123,6 +142,11 @@ data:
         file: "/etc/egress-secrets/REAL_AGY_ACCESS_TOKEN"
         label_file: "/etc/egress-secrets/LABEL_AGY_ACCESS_TOKEN"
         pool_file: "/etc/egress-secrets/POOL_AGY_ACCESS_TOKEN"
+      DEVIN_ACCESS_TOKEN:
+        placeholder: "nightshift:secret:DEVIN_ACCESS_TOKEN"
+        file: "/etc/egress-secrets/REAL_DEVIN_ACCESS_TOKEN"
+        label_file: "/etc/egress-secrets/LABEL_DEVIN_ACCESS_TOKEN"
+        pool_file: "/etc/egress-secrets/POOL_DEVIN_ACCESS_TOKEN"
 ---
 ---
 # Static egress environment shared by every sandbox template through
@@ -312,7 +336,7 @@ metadata:
   namespace: nightshift
 spec:
   # Only sandbox pods. An empty selector would put every pod in the namespace
-  # under an egress policy, cutting off the creds refresher's DNS and its
+  # under an egress policy, cutting off the old creds refresher's DNS and its
   # direct path to the agents' login servers.
   podSelector:
     matchExpressions:

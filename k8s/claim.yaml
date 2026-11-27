@@ -1,4 +1,4 @@
-# Claim Pi by default; use codex-pool, claude-code-pool, or opencode-pool
+# Claim Pi by default; use any <agent>-pool, such as codex-pool or devin-pool
 # for another agent.
 # Apply this -> instant adoption (no cold start).
 # Delete this -> shutdownPolicy: Delete tears the sandbox down,

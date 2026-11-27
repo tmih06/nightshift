@@ -396,7 +396,7 @@ func TestFollowingAnUnknownCheckoutFails(t *testing.T) {
 func TestHarnessForPoolResolvesAllHarnesses(t *testing.T) {
 	for pool, want := range map[string]string{
 		"claude-code-pool": "claude-code", "codex-pool": "codex", "opencode-pool": "opencode",
-		"agy-pool": "agy", "ompig-slim-pool": "ompig-slim", "pi-pool": "pi",
+		"agy-pool": "agy", "ompig-slim-pool": "ompig-slim", "pi-pool": "pi", "devin-pool": "devin",
 	} {
 		if got := ForPool(pool, strings.Replace(pool, "pool", "template", 1), ""); got.Name != want || len(got.Models) == 0 || got.Command == "" {
 			t.Errorf("%s: harness = %+v, want %s", pool, got, want)

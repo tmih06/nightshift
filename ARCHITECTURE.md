@@ -26,7 +26,7 @@ flowchart LR
   end
   Fleet --> K8s[(Kubernetes API)]
   Terms -->|kubectl exec| K8s
-  Acc --> CPA[CLIProxyAPI]
+  Acc --> Auth[nightshift-auth]
   Acc --> Proxy[egress proxy]
 ```
 
@@ -34,14 +34,15 @@ flowchart LR
 api/            the contract: openapi.yaml, v1 (types), client (Go SDK)
 cmd/nightshiftd the services as a daemon
 cmd/nightshift  the terminal UI: a client, it runs nothing else
-internal/services/{cluster,session,accounts,checkout,runs,server,live,daemon,egress}
+cmd/nightshift-auth  the login service: signs accounts in, renews, publishes
+internal/services/{cluster,session,accounts,checkout,runs,server,live,daemon,egress,auth}
 internal/tui/{app,dashboard,accountsview,repoview,dialog,fleet}
 ```
 
 Everything runs in the cluster, each part in its own pod: the services
-(`nightshiftd`), the egress proxy, CLIProxyAPI, the credential refresher, and
-the sandboxes. The laptop runs only the terminal. `nightshiftd` acts through a service account with `NIGHTSHIFT_CONTEXT=-` and reach
-CLIProxyAPI and the egress proxy by their Service addresses. In the cluster,
+(`nightshiftd`), the egress proxy, the login service (`nightshift-auth`),
+and the sandboxes. The laptop runs only the terminal. `nightshiftd` acts through a service account with `NIGHTSHIFT_CONTEXT=-` and reach
+nightshift-auth and the egress proxy by their Service addresses. In the cluster,
 many people on many machines use one address and nobody needs a kubeconfig. The
 manifests assume no provider, the setup script builds and loads an image on kind
 and pulls one anywhere else, and the services' permissions are pinned by
@@ -75,9 +76,12 @@ flowchart LR
   Agy[Antigravity pool: 1 warm] -->|restocks| Claim
   Ompig[OMPi slim pool: 1 warm] -->|restocks| Claim
   OpenCode[OpenCode pool: 1 warm] -->|restocks| Claim
+  Devin[Devin pool: 1 warm] -->|restocks| Claim
 ```
 
-`k8s/warmpool.yaml` defines six templates and pools, each with one standby:
+`k8s/warmpool.yaml` defines seven templates and pools, each with one standby.
+`k8s/warmpool.sh` writes it, one pair per directory under
+`images/agent/agents`, so a new agent needs no hand-written YAML:
 
 | Agent | Pool | Template | Image |
 | --- | --- | --- | --- |
@@ -87,6 +91,7 @@ flowchart LR
 | Antigravity | `agy-pool` | `agy-template` | `ghcr.io/tmih06/nightshift-agy:latest` |
 | OMPi slim | `ompig-slim-pool` | `ompig-slim-template` | `ghcr.io/tmih06/nightshift-ompig-slim:latest` |
 | OpenCode | `opencode-pool` | `opencode-template` | `ghcr.io/tmih06/nightshift-opencode:latest` |
+| Devin | `devin-pool` | `devin-template` | `ghcr.io/tmih06/nightshift-devin:latest` |
 
 Every pod requests 100m CPU and is
 limited to 1000m CPU and 2Gi memory; OpenCode requests 512Mi memory and the
@@ -100,7 +105,7 @@ and the limits of this budget.
 Select a warm sandbox in the dashboard and press `c` to claim its pool. When
 no warm sandbox is selected, `c` defaults to Pi. Alternatively, `sbx` defaults
 to Pi and accepts `POOL=codex-pool`, `POOL=claude-code-pool`, `POOL=agy-pool`,
-`POOL=ompig-slim-pool`, or `POOL=opencode-pool`; `k8s/claim.yaml` is a Pi
+`POOL=ompig-slim-pool`, `POOL=opencode-pool`, or `POOL=devin-pool`; `k8s/claim.yaml` is a Pi
 example. A claim adopts any available sandbox in the chosen pool, not
 necessarily the exact selected pod.
 The controller replenishes that pool. Deleting a claim destroys its sandbox
@@ -111,6 +116,28 @@ marks first-run setup done, trusts home and each folder in the workspace (agy
 matches exact paths), and sets agy to proceed without asking. The sandbox and
 the egress proxy are what contain it. A repository cloned later by hand still
 gets agy's one trust question.
+
+A Devin sandbox boots the same way: `devin-template` writes Devin's config with
+approvals off and self-updates off, since the image pins the version that was
+built and checked. Its login comes with the others from nightshift-auth and
+holds only `nightshift:secret:DEVIN_ACCESS_TOKEN`; nobody signs in inside a
+sandbox, and Devin's login hosts are closed to it. Devin speaks
+Connect RPC to `server.codeium.com` and sends its key in the `Authorization`
+header and inside each protobuf request, so its proxy rule sets
+`proto_bodies`: the proxy swaps placeholders inside protobuf string fields,
+re-encoding the lengths around them, and cleans protobuf replies the same way,
+answering every email address in them with `nightshift@proxy.local`
+(`proto_email`).
+
+### One agent, three places
+
+An agent is one entry in `internal/services/agent` (how its pools are named,
+its models, and its unattended task command) and one directory under
+`images/agent/agents` (how its image installs it and finds its latest
+release). `k8s/warmpool.sh` makes its template and pool from that directory,
+and both image workflows list their matrix from it.
+`TestEveryAgentHasAnImageAndAPool` and `TestWarmPoolIsWhatTheAgentsRender`
+fail until the three agree.
 
 ## Pull request, issue, and repository volumes
 
@@ -171,87 +198,88 @@ reflected secrets from responses while `NetworkPolicy` blocks direct internet
 and DNS from checkout sandboxes.
 
 Interactive OAuth logins also fit the proxy model, because an OAuth access
-token is just a bearer string. Claude Code, Codex, and Antigravity (`agy`)
-log in once on a master and every sandbox then boots logged in, yet no real
-credential ever exists inside a sandbox. `k8s/creds-stage.sh` rewrites each
-login file: the access token becomes a placeholder
-(`nightshift:secret:CLAUDE_ACCESS_TOKEN`, `CODEX_ACCESS_TOKEN`, or
-`AGY_ACCESS_TOKEN`), the expiry moves far into the future so the agent never
-tries to refresh, and the refresh token is dropped (Codex insists on one, so
-it gets an inert string). Each copy is built from a named list
-of fields, and none of them names an account: no real email, account or
-organization UUID, or real `id_token`. Where an agent expects an email it
-gets the fixed `nightshift@proxy.local` (Codex needs an `id_token` to start,
-so it gets an unsigned one naming that and a plan). Which account carries a request is
-the proxy's per-attempt decision, so the sandbox is told none. The TUI shows
-it instead, from the proxy's live pool state. `gh`'s `hosts.yml` gets the
-`GITHUB_TOKEN` placeholder. A login with no swap is never distributed. The proxy swaps each
-placeholder for the real token on that agent's hosts: `api.anthropic.com`,
-`chatgpt.com`, and `cloudcode-pa.googleapis.com`. A login file with no
-identity is not enough on its own: agy asks Google who its token belongs to,
-and would be told the real account. The proxy answers that itself with
-`nightshift@proxy.local` (a rule's `answers`; with a blank email agy's
-`/usage` loads forever), forwards nothing under
-`www.googleapis.com`, and injects no login there. Codex looks its
+token is just a bearer string. Claude Code, Codex, Antigravity (`agy`), and
+Devin are signed in once, and every sandbox then boots logged in, yet no real
+credential ever exists inside a sandbox. Each sandbox login holds a
+placeholder (`nightshift:secret:CLAUDE_ACCESS_TOKEN`, `CODEX_ACCESS_TOKEN`,
+`AGY_ACCESS_TOKEN`, or `DEVIN_ACCESS_TOKEN`) instead of the token, an expiry
+far in the future so the agent never tries to refresh, and no usable refresh
+token (Codex insists on one, so it gets an inert string). Each is built from a
+named list of fields, and none of them names an account: no real email,
+account or organization UUID, or real `id_token`. Where an agent expects an
+email it gets the fixed `nightshift@proxy.local` (Codex needs an `id_token` to
+start, so it gets an unsigned one naming that and a plan). Which account
+carries a request is the proxy's per-attempt decision, so the sandbox is told
+none. The TUI shows it instead, from the proxy's live pool state. The proxy
+swaps each placeholder for the real token on that agent's hosts:
+`api.anthropic.com`, `chatgpt.com`, `cloudcode-pa.googleapis.com`, and
+`server.codeium.com`. A login file with no identity is not enough on its own:
+agy asks Google who its token belongs to, and would be told the real account.
+The proxy answers that itself with `nightshift@proxy.local` (a rule's
+`answers`; with a blank email agy's `/usage` loads forever), forwards nothing
+under `www.googleapis.com`, and injects no login there. Codex looks its
 `account_id` up in `chatgpt.com`'s `/backend-api/wham/accounts/check` and
 refuses to run when it is missing, so the proxy answers that path with the
-placeholder id. The proxy carries
-no WebSockets: it answers an upgrade with `426 Upgrade Required`, on which
-Codex switches to HTTP without retrying. The `sandbox-egress-env`
-ConfigMap sets `CLAUDE_CODE_OAUTH_TOKEN` and never `ANTHROPIC_API_KEY`,
-which Claude Code gives precedence over every OAuth path.
+placeholder id. The proxy carries no WebSockets: it answers an upgrade with
+`426 Upgrade Required`, on which Codex switches to HTTP without retrying. The
+`sandbox-egress-env` ConfigMap sets `CLAUDE_CODE_OAUTH_TOKEN` and never
+`ANTHROPIC_API_KEY`, which Claude Code gives precedence over every OAuth path.
 
-Which agents get this treatment is data, not code: `k8s/creds-providers.json`
-lists, per agent, its login file, where the access token sits in it, how to
-swap it, the API hosts that must honor the placeholder, its warm pool, and the
-command that makes it refresh. `creds-stage.sh`, `creds-publish.sh`, and the
-pool sizing all read it, and `TestShippedPolicySwapsEveryRegisteredLogin`
-fails when an entry has no matching proxy rule. Adding an agent is one entry
-plus its proxy rule.
+### nightshift-auth
 
-Where the master logins come from is the one choice to make. Signing in needs a
-person with a browser, and the tokens then expire and rotate, so exactly one
-process must hold the refresh tokens:
+Signing in needs a person with a browser, and the tokens then expire and
+rotate, so exactly one process holds the refresh tokens: `nightshift-auth`
+(`cmd/nightshift-auth`, `internal/services/auth`, `k8s/auth.yaml`, installed
+by `k8s/auth-setup.sh`). It is a small static program of its own, one replica
+on a private volume, and it never serves model traffic.
 
-- **CLIProxyAPI (`k8s/cpa.yaml`)** is the login surface. You open its page
-  once per account (`docs/login-surface.md` explains the choice), and it keeps
-  the tokens fresh. The `creds-refresher` pod (`k8s/creds.yaml`, image
-  `images/creds`) runs `creds-publish.sh --cpa` every five minutes: it lists
-  the accounts over CLIProxyAPI's management API, rebuilds each agent's login
-  file from them (the `cpa` entries of `creds-providers.json`), and publishes
-  as below. Install both with `k8s/creds-setup.sh`. Nothing depends on a
-  laptop staying online.
-- **A laptop** also works: log in with `claude`, `codex`, and `agy`, then run
-  `creds-publish.sh --watch 1200`, which exercises each CLI to refresh it.
-  Do not run both for the same agent: each would overwrite the other's secrets.
+- **Sign-in.** The Accounts tab asks it for a link, the person approves in
+  their browser, and pastes back what the browser ends on: the code
+  Anthropic's page shows, or the localhost address that will not load in a
+  cluster. It exchanges the code with PKCE and keeps the tokens in its vault
+  (`/data/accounts.json`, mode 0600, replaced atomically).
+- **Renewal.** Every minute it renews tokens within ten minutes of lapsing,
+  saving the new refresh token before using it. A failed renewal waits five
+  minutes; a login that can no longer be renewed (Devin's session tokens have
+  no refresh grant) is taken out of its chain and asks to be signed in again.
+- **Publishing.** After every change, and every five minutes, it writes the
+  placeholder logins into `agent-creds` (the tar templates untar into `$HOME`
+  at boot), each agent's ordered chain and primary token into `egress-secrets`
+  (`POOL_`, `REAL_`, `LABEL_<secret>`, with companions such as Codex's
+  `account_id`), and scales each agent's warm pool to one while it has an
+  enabled account and every other pool to zero. It talks to the API server as
+  its service account and needs no kubectl.
 
-Publishing is the same either way. The placeholder copies go into the
-`agent-creds` secret that templates untar into `$HOME` at boot, the real
-access tokens into `egress-secrets`, and a warm sandbox is kept only for
-agents that have a login. The proxy binds those secrets to files on a mounted
-volume and re-reads them every 15 seconds (`internal/services/egress/reload.go`), so a
-refreshed token needs no restart; the kubelet takes up to about two minutes to
-update the volume. The refresher's service account may only edit the two
-credential secrets and the warm pool sizes
-(`TestCredsRefresherHasLeastPrivilege`), and CLIProxyAPI's network policy
-admits only the refresher.
+Each agent is one file in `internal/services/auth/providers` implementing
+`Provider`: start a sign-in, finish it from the paste, renew, build the
+sandbox login, and name the account-bound companions. The flows are ported from
+ompig-slim's PiG (see that directory's README); adding an agent is a file and a
+line in `All`, plus its proxy rule. `TestEveryAgentIsSwappedByTheProxy` fails
+when an agent's secret is not bound and swapped on its hosts, and
+`TestSandboxLoginsNameNoAccount` when a sandbox login carries the account.
+
+The proxy binds those secrets to files on a mounted volume and re-reads them
+every 15 seconds (`internal/services/egress/reload.go`), so a refreshed token
+needs no restart; the kubelet takes up to about two minutes to update the
+volume. nightshift-auth's service account may only write the two credential
+secrets and the warm pool sizes (`TestTheLoginServiceHasLeastPrivilege`), and
+its network policy admits only nightshiftd.
 
 The **Accounts tab** (`internal/tui/accountsview`, over `internal/services/accounts`
 and the `/v1/accounts` endpoints) is how people drive all of this from the TUI.
-The services reach CLIProxyAPI's management API through a `kubectl port-forward`
+The services reach nightshift-auth's API through a `kubectl port-forward`
 that they own and restart, and the egress proxy's admin port through another;
 in the cluster they use the Services' addresses instead, so on a laptop nothing
 is needed but the kubeconfig Nightshift already uses. It lists every signed-in account per agent, runs the
-sign-in (the link, then the pasted callback address), disables, removes, and
+sign-in (the link, then the pasted code or address), disables, removes, and
 renews accounts, and publishes after each change. A change that would move an
 agent's traffic to another account asks first, because prompt caches belong to
 one account. The account marked active is the one the proxy's `/pools` reports,
 not the first in the order. Only the Accounts tab says which account that is:
 neither a sandbox nor its row in the Pods tab names one. Several accounts per
 agent form an ordered fallback chain: the order picked
-with `u` or `K`/`J` is recorded in the `nightshift-accounts` ConfigMap
-(`chains` and `active`), and `creds-publish.sh` publishes the whole enabled
-chain as `POOL_<secret>` in `egress-secrets` (alongside companion placeholders
+with `u` or `K`/`J` is kept by nightshift-auth, which publishes the whole
+enabled chain as `POOL_<secret>` in `egress-secrets` (alongside companion placeholders
 such as Codex's `account_id`). The egress proxy tries the first non-cooled-down
 account (preserving prompt caches and starting rolling reset windows early) and
 fails over down the chain on `429`, `401`, `403`, or `529`, honoring
@@ -293,17 +321,11 @@ passed, then the calendar (`v` switches between this account and all of them)
 and the usage counts. The details scroll with `ctrl+u`/`ctrl+d` or the
 wheel.
 
-One login can serve several clusters: `PUBLISH_CONTEXTS` lists the contexts to
-publish into (`-` is the cluster the refresher runs in), and
-`REMOTE_KUBECONFIG` points at a mounted kubeconfig for the others. Every
-cluster receives the same placeholders and tokens, so no cluster refreshes
-anything and no refresh token is ever held twice.
-
 Nothing here is specific to kind. `NIGHTSHIFT_CONTEXT` selects the kubeconfig
 context for the scripts and the TUI, the manifests pin no service address, and
 `egress-setup.sh` pulls the published proxy image on any cluster that is not
 kind (`EGRESS_IMAGE` points it at your own registry, `EGRESS_BUILD=1` builds
-and pushes one). The cluster needs a default StorageClass for the refresher's
+and pushes one). The cluster needs a default StorageClass for nightshift-auth's
 volume and a network plugin that enforces `NetworkPolicy`. Secrets live in
 ordinary Kubernetes Secrets, so an external secret manager that syncs into
 them (External Secrets, a CSI driver) slots in without changing the proxy.
@@ -318,7 +340,7 @@ egress to the public internet but denying all private ranges, which includes
 the proxy's ClusterIP; `sandbox-egress-proxy-access` additively re-opens the
 proxy path for sandbox pods only (network policies are union-permissive, so no
 rule of the controller's needs changing). It must not select every pod: an
-empty selector would isolate the refresher too. Note the corollary: warm pool
+empty selector would isolate nightshift-auth too. Note the corollary: warm pool
 pods retain direct internet access — credential safety rests on placeholders
 being worthless off the proxy path, not on network restriction. Tightening
 templates to proxy-only egress is possible through the template

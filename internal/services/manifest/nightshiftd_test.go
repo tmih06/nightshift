@@ -51,8 +51,8 @@ func docs(t *testing.T, file string) []doc {
 // The services can open a shell in a sandbox, so what their service account
 // may do is the real boundary around them. It is read-only across the cluster
 // and writes only in nightshift; it never reads a secret but the one key to
-// CLIProxyAPI, and never anything in the proxy's namespace that holds the real
-// credentials.
+// nightshift-auth, and never anything in the proxy's namespace that holds the
+// real credentials.
 func TestTheServicesHaveLeastPrivilege(t *testing.T) {
 	var sawExec bool
 	for _, o := range docs(t, "nightshiftd.yaml") {
@@ -129,7 +129,7 @@ func TestTheServicesDeploymentAssumesNoProvider(t *testing.T) {
 			t.Errorf("nightshiftd.yaml has %q, which ties it to one provider or exposes it on its own", bad)
 		}
 	}
-	for _, want := range []string{"NIGHTSHIFT_CONTEXT", "secretKeyRef", "runAsNonRoot: true", "readOnlyRootFilesystem: true", "--plain-http", "--cpa-url=http://cpa.nightshift.svc", "--proxy-url=http://egress-admin.nightshift-egress.svc"} {
+	for _, want := range []string{"NIGHTSHIFT_CONTEXT", "secretKeyRef", "runAsNonRoot: true", "readOnlyRootFilesystem: true", "--plain-http", "--auth-url=http://nightshift-auth.nightshift.svc", "--proxy-url=http://egress-admin.nightshift-egress.svc"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("nightshiftd.yaml lacks %q", want)
 		}

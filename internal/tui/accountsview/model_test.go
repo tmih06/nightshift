@@ -356,7 +356,7 @@ func TestSigningInAnAccount(t *testing.T) {
 		t.Fatalf("calls: %s", svc.log())
 	}
 	view := plain(m)
-	for _, want := range []string{"Sign in to Claude Code", "https://claude.ai/oauth/authorize?state=abc", "paste the address"} {
+	for _, want := range []string{"Sign in to Claude Code", "https://claude.ai/oauth/authorize?state=abc", "the address the browser ends on"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("the sign-in step lacks %q:\n%s", want, view)
 		}
@@ -396,11 +396,11 @@ func TestEscapingASignInCancelsIt(t *testing.T) {
 	}
 }
 
-func TestUnreachableCLIProxyAPIExplainsHowToInstall(t *testing.T) {
-	svc := &fakeService{fetchErr: errors.New("reach CLIProxyAPI: port-forward svc/cpa ended")}
+func TestUnreachableLoginServiceExplainsHowToInstall(t *testing.T) {
+	svc := &fakeService{fetchErr: errors.New("reach nightshift-auth: port-forward svc/nightshift-auth ended")}
 	m := shown(t, svc)
 	view := plain(m)
-	for _, want := range []string{"unreachable", "Could not read the accounts", "creds-setup.sh", "port-forward"} {
+	for _, want := range []string{"unreachable", "Could not read the accounts", "auth-setup.sh", "port-forward"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("the failure screen lacks %q:\n%s", want, view)
 		}

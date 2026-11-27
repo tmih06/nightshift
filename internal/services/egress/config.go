@@ -57,6 +57,15 @@ type Rule struct {
 	// mode. The request never leaves, so an endpoint that names the account
 	// behind a login tells the sandbox nothing.
 	Answers map[string]string `yaml:"answers"`
+	// ProtoBodies swaps placeholders inside protobuf request bodies too
+	// (Connect, gRPC), re-encoding the lengths around them, and scrubs
+	// protobuf replies the same way. Without it only headers and the query
+	// are touched.
+	ProtoBodies bool `yaml:"proto_bodies"`
+	// ProtoEmail, with ProtoBodies, replaces every email address in a
+	// protobuf reply, so a reply that names the account behind a login
+	// tells the sandbox only this.
+	ProtoEmail string `yaml:"proto_email"`
 }
 
 // SecretBinding maps an opaque placeholder string (exposed inside sandboxes)

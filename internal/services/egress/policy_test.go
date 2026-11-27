@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"slices"
-	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -57,71 +56,6 @@ func TestShippedPolicyBindsEverySecretItNames(t *testing.T) {
 	}
 }
 
-// registry is k8s/creds-providers.json: the agents whose logins Nightshift
-// hands to sandboxes.
-type registry struct {
-	Providers []struct {
-		ID     string   `json:"id"`
-		Secret string   `json:"secret"`
-		Hosts  []string `json:"hosts"`
-	} `json:"providers"`
-}
-
-func loadRegistry(t *testing.T) registry {
-	t.Helper()
-	raw, err := os.ReadFile("../../../k8s/creds-providers.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var reg registry
-	if err := json.Unmarshal(raw, &reg); err != nil {
-		t.Fatal(err)
-	}
-	if len(reg.Providers) == 0 {
-		t.Fatal("registry lists no providers")
-	}
-	return reg
-}
-
-// Every login in the registry must be swappable on each host it names, or a
-// sandbox would send a worthless placeholder. Adding a provider to the
-// registry without a matching proxy rule fails here.
-func TestShippedPolicySwapsEveryRegisteredLogin(t *testing.T) {
-	cfg := shippedPolicy(t)
-	for _, p := range loadRegistry(t).Providers {
-		b, ok := cfg.Secrets[p.Secret]
-		if !ok {
-			t.Errorf("%s: policy has no binding for %s", p.ID, p.Secret)
-			continue
-		}
-		if want := DefaultPlaceholderPrefix + p.Secret; b.Placeholder != want {
-			t.Errorf("%s: placeholder = %q, want %q (what creds-stage.sh writes)", p.ID, b.Placeholder, want)
-		}
-		if want := "/etc/egress-secrets/REAL_" + p.Secret; b.File != want {
-			t.Errorf("%s: %s file = %q, want %q so a refresh needs no restart", p.ID, p.Secret, b.File, want)
-		}
-		if want := "/etc/egress-secrets/LABEL_" + p.Secret; b.LabelFile != want {
-			t.Errorf("%s: %s label_file = %q, want %q so usage is counted per account", p.ID, p.Secret, b.LabelFile, want)
-		}
-		if want := "/etc/egress-secrets/POOL_" + p.Secret; b.PoolFile != want {
-			t.Errorf("%s: %s pool_file = %q, want %q so fallback chains hot-reload", p.ID, p.Secret, b.PoolFile, want)
-		}
-		for _, host := range p.Hosts {
-			r, ok := cfg.MatchHostPort(host, 443)
-			if !ok {
-				t.Errorf("%s: no rule matches %s", p.ID, host)
-				continue
-			}
-			if !r.AllowsRequest("POST", "/v1internal:loadCodeAssist") {
-				t.Errorf("%s: rule %q denies %s", p.ID, r.Name, host)
-			}
-			if !slices.Contains(r.Secrets, p.Secret) {
-				t.Errorf("%s: rule %q does not bind %s on %s", p.ID, r.Name, p.Secret, host)
-			}
-		}
-	}
-}
-
 // Codex looks its login's account_id up in this list and refuses to run when it
 // is missing. A sandbox's account_id is a placeholder, which the real list never
 // holds, and the real list names the account.
@@ -154,14 +88,8 @@ func TestShippedPolicyAnswersCodexWorkspaceDiscovery(t *testing.T) {
 	if a := got.Accounts[0]; a.Origin != "NO_CONSTRAINT" || a.Override != "NO_CONSTRAINT" {
 		t.Errorf("routing = %q %q, want NO_CONSTRAINT", a.Origin, a.Override)
 	}
-	// The id must be the one creds-stage writes into a sandbox's auth.json.
-	providers, err := os.ReadFile("../../../k8s/creds-providers.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(providers), id) {
-		t.Errorf("creds-providers.json no longer gives Codex account_id %s", id)
-	}
+	// TestEveryAgentIsSwappedByTheProxy checks the id is the one a sandbox's
+	// auth.json carries.
 }
 
 // Google names the account behind a token to whoever asks with it, so the
@@ -195,6 +123,32 @@ func TestShippedPolicyNeverAsksGoogleWhoTheAccountIs(t *testing.T) {
 			if _, answered := r.answer(path); !answered {
 				t.Errorf("%s would be forwarded", path)
 			}
+		}
+	}
+}
+
+// Devin's key rides inside protobuf requests to its API server, and the
+// replies name the account by email. The shipped rule must swap the key
+// there and answer with the sandbox identity, and Devin's login hosts must
+// stay closed so nobody signs in from a sandbox.
+func TestShippedPolicyProxiesDevinsKeyAndHidesItsAccount(t *testing.T) {
+	cfg := shippedPolicy(t)
+	r, ok := cfg.MatchHostPort("server.codeium.com", 443)
+	if !ok {
+		t.Fatal("no rule for server.codeium.com")
+	}
+	if r.Mode != ModeMITM || !r.ProtoBodies || !slices.Contains(r.Secrets, "DEVIN_ACCESS_TOKEN") {
+		t.Errorf("rule %q: mode %s, proto_bodies %v, secrets %v", r.Name, r.Mode, r.ProtoBodies, r.Secrets)
+	}
+	if r.ProtoEmail != "nightshift@proxy.local" {
+		t.Errorf("rule %q answers the account's email with %q", r.Name, r.ProtoEmail)
+	}
+	if b, ok := cfg.Secrets["DEVIN_ACCESS_TOKEN"]; !ok || b.Placeholder != DefaultPlaceholderPrefix+"DEVIN_ACCESS_TOKEN" {
+		t.Errorf("DEVIN_ACCESS_TOKEN binding = %+v", b)
+	}
+	for _, host := range []string{"app.devin.ai", "api.devin.ai", "static.devin.ai"} {
+		if r, ok := cfg.MatchHostPort(host, 443); ok {
+			t.Errorf("rule %q opens %s", r.Name, host)
 		}
 	}
 }
