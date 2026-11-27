@@ -90,6 +90,7 @@ func TestCredsStageSwapsEveryAgentLogin(t *testing.T) {
 		"ya29.REAL-agy-access", "1//REAL-agy-refresh",
 		"gho_REAL-github", "opencode-REAL",
 		"mcp-REAL-access", "mcp-REAL-refresh", "sk-REAL-openai-key",
+		"a@b.c",
 	}
 	err := fs.WalkDir(stage.FS(), ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
@@ -150,6 +151,9 @@ func TestCredsStageSwapsEveryAgentLogin(t *testing.T) {
 	}
 	if agy["expiry"] != "2099-01-01T00:00:00Z" {
 		t.Errorf("agy expiry = %v, want far future", agy["expiry"])
+	}
+	if got := readJSON(t, stage, ".gemini/antigravity-cli/antigravity-oauth-token")["id_token_email"]; got != "nightshift@proxy.local" {
+		t.Errorf("agy id_token_email = %v, want the fixed proxy identity, not the account's", got)
 	}
 	claude := object(t, readJSON(t, stage, ".claude/.credentials.json"), "claudeAiOauth")
 	if _, ok := claude["refreshToken"]; ok {

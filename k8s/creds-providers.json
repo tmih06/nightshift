@@ -43,7 +43,7 @@
       "secret": "AGY_ACCESS_TOKEN",
       "file": ".gemini/antigravity-cli/antigravity-oauth-token",
       "access": ".token.access_token",
-      "filter": "{token: (.token | .access_token = $ph | .expiry = $far | .expires_in = 99999999 | del(.refresh_token)), auth_method: .auth_method, id_token_email: .id_token_email}",
+      "filter": "{token: (.token | .access_token = $ph | .expiry = $far | .expires_in = 99999999 | del(.refresh_token)), auth_method: .auth_method, id_token_email: \"nightshift@proxy.local\"}",
       "hosts": [
         "cloudcode-pa.googleapis.com",
         "daily-cloudcode-pa.googleapis.com",

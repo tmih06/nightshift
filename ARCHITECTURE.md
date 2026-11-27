@@ -172,8 +172,12 @@ login file: the access token becomes a placeholder
 (`nightshift:secret:CLAUDE_ACCESS_TOKEN`, `CODEX_ACCESS_TOKEN`, or
 `AGY_ACCESS_TOKEN`), the expiry moves far into the future so the agent never
 tries to refresh, and the refresh token is dropped (Codex insists on one, so
-it gets an inert string). `gh`'s `hosts.yml` gets the `GITHUB_TOKEN`
-placeholder. A login with no swap is never distributed. The proxy swaps each
+it gets an inert string). Identity metadata is replaced with the fixed
+`nightshift@proxy.local`: which account actually carries a request is the
+proxy's per-attempt decision, so a static account email inside the sandbox
+could only lie during fallback. The Accounts tab's usage attribution is the
+truthful answer to which account is in use. `gh`'s `hosts.yml` gets the
+`GITHUB_TOKEN` placeholder. A login with no swap is never distributed. The proxy swaps each
 placeholder for the real token on that agent's hosts: `api.anthropic.com`,
 `chatgpt.com`, and `cloudcode-pa.googleapis.com` (plus Antigravity's token
 check under `www.googleapis.com/oauth2/`). The `sandbox-egress-env`
