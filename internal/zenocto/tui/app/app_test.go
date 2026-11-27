@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"image/color"
 	"slices"
 	"strconv"
 	"strings"
@@ -111,20 +110,6 @@ func (f *fakeSearcher) SearchPullRequests(ctx context.Context, query string, lim
 	}
 	return gh.SearchResult{PullRequests: prs, RateLimit: f.rate}, nil
 }
-
-func (f *fakeSearcher) serve(prs []gh.PullRequest) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.prs = prs
-}
-
-func (f *fakeSearcher) asked() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return slices.Clone(f.queries)
-}
-
-func (f *fakeSearcher) calls() int { return len(f.asked()) }
 
 func (f *fakeSearcher) PullRequest(_ context.Context, id, _ string) (gh.DetailResult, error) {
 	f.mu.Lock()
@@ -872,137 +857,6 @@ func (f *fakeSearcher) fetchedCommits() []string {
 	return slices.Clone(f.commitDiffs)
 }
 
-type querySearcher struct {
-	results map[string]gh.SearchResult
-	errs    map[string]error
-}
-
-func (f *querySearcher) Viewer(context.Context) (gh.ViewerResult, error) {
-	return gh.ViewerResult{Viewer: gh.Actor{Login: "drucial"}}, nil
-}
-
-func (f *querySearcher) SearchPullRequests(_ context.Context, query string, _ int) (gh.SearchResult, error) {
-	if err, ok := f.errs[query]; ok {
-		return gh.SearchResult{}, err
-	}
-	return f.results[query], nil
-}
-
-func (f *querySearcher) PullRequest(_ context.Context, id, _ string) (gh.DetailResult, error) {
-	return gh.DetailResult{Detail: gh.PullRequestDetail{PullRequest: gh.PullRequest{ID: id}}}, nil
-}
-
-func (f *querySearcher) Pulse(_ context.Context, _ string) (gh.PulseResult, error) {
-	return gh.PulseResult{}, nil
-}
-
-func (f *querySearcher) PullRequestFiles(_ context.Context, _, _ string, _, _ int) (gh.FilesResult, error) {
-	return gh.FilesResult{}, nil
-}
-
-func (f *querySearcher) SetFileViewed(_ context.Context, _, _ string, _ bool) error { return nil }
-
-func (f *querySearcher) CommitFiles(_ context.Context, _, _ string) (gh.FilesResult, error) {
-	return gh.FilesResult{}, nil
-}
-
-func (f *querySearcher) Job(_ context.Context, _ string, id int64) (gh.Job, error) {
-	return gh.Job{ID: id}, nil
-}
-
-func (f *querySearcher) JobLogs(_ context.Context, _ string, _ int64) ([]byte, error) {
-	return nil, nil
-}
-
-func (f *querySearcher) RerunJob(context.Context, string, int64) (time.Time, error) {
-	return time.Now(), nil
-}
-
-func (f *querySearcher) RerunFailedJobs(context.Context, string, int64) error { return nil }
-func (f *querySearcher) RerunAllJobs(context.Context, string, int64) error    { return nil }
-
-func (f *querySearcher) AddComment(_ context.Context, _, _ string) (gh.CommentResult, error) {
-	return gh.CommentResult{}, nil
-}
-
-func (f *querySearcher) AddReply(_ context.Context, _, _, _ string) (gh.CommentResult, error) {
-	return gh.CommentResult{}, nil
-}
-
-func (f *querySearcher) AddReviewThread(_ context.Context, _ gh.ReviewThreadInput) (gh.ReviewThreadResult, error) {
-	return gh.ReviewThreadResult{}, nil
-}
-
-func (f *querySearcher) SetThreadResolved(_ context.Context, _ string, _ bool) (gh.ThreadResult, error) {
-	return gh.ThreadResult{}, nil
-}
-
-func (f *querySearcher) SetReaction(_ context.Context, _ string,
-	_ gh.ReactionContent, _ bool,
-) (gh.ReactionResult, error) {
-	return gh.ReactionResult{}, nil
-}
-
-func (f *querySearcher) UpdateComment(_ context.Context, _ gh.CommentKind, _, _ string) (gh.CommentResult, error) {
-	return gh.CommentResult{}, nil
-}
-
-func (f *querySearcher) DeleteComment(_ context.Context, _ gh.CommentKind, _ string) error {
-	return nil
-}
-
-func (f *querySearcher) SetBody(_ context.Context, _, _ string) (gh.BodyResult, error) {
-	return gh.BodyResult{}, nil
-}
-
-func (f *querySearcher) RepoMeta(_ context.Context, _ string) (gh.RepoMetaResult, error) {
-	return gh.RepoMetaResult{}, nil
-}
-
-func (f *querySearcher) SetLabels(_ context.Context, _ string, _ []string) (gh.LabelsResult, error) {
-	return gh.LabelsResult{}, nil
-}
-
-func (f *querySearcher) SetState(_ context.Context, _ string, _ gh.PRTransition) (gh.PRStateResult, error) {
-	return gh.PRStateResult{}, nil
-}
-
-func (f *querySearcher) SetAssignees(_ context.Context, _ string, _ []string) (gh.AssigneesResult, error) {
-	return gh.AssigneesResult{}, nil
-}
-
-func (f *querySearcher) SetBase(_ context.Context, _, _ string) (gh.BaseResult, error) {
-	return gh.BaseResult{}, nil
-}
-
-func (f *querySearcher) Merge(_ context.Context, _ string, _ gh.MergeOptions) (gh.MergeResult, error) {
-	return gh.MergeResult{}, nil
-}
-
-func (f *querySearcher) DeleteRef(_ context.Context, _ string) error { return nil }
-
-func (f *querySearcher) Branches(_ context.Context, _, _ string) (gh.BranchResult, error) {
-	return gh.BranchResult{}, nil
-}
-
-func (f *querySearcher) RequestReviews(_ context.Context, _ string, _ int, _ []string) error {
-	return nil
-}
-
-func (f *querySearcher) RemoveReviewRequests(_ context.Context, _ string, _ int, _ []string) error {
-	return nil
-}
-
-func (f *querySearcher) StartReview(context.Context, string, gh.ReviewEvent, string) (gh.ReviewResult, error) {
-	return gh.ReviewResult{}, nil
-}
-
-func (f *querySearcher) SubmitReview(context.Context, string, gh.ReviewEvent, string) (gh.ReviewResult, error) {
-	return gh.ReviewResult{}, nil
-}
-
-func (f *querySearcher) DiscardReview(context.Context, string) error { return nil }
-
 func samplePRs() []gh.PullRequest {
 	return []gh.PullRequest{
 		{
@@ -1317,24 +1171,6 @@ func TestTheListBarNamesNeitherTheSectionNorAHealthyBudget(t *testing.T) {
 	}
 }
 
-func topRow(t *testing.T, m tea.Model) int {
-	t.Helper()
-
-	for _, l := range strings.Split(stripANSI(render(t, m)), "\n") {
-		i := strings.Index(l, "Change ")
-		if i < 0 {
-			continue
-		}
-		n, err := strconv.Atoi(strings.Fields(l[i+len("Change "):])[0])
-		if err != nil {
-			t.Fatalf("cannot read a row number out of %q: %v", l, err)
-		}
-		return n
-	}
-	t.Fatal("no pull request on screen")
-	return 0
-}
-
 func TestTheBarCarriesWhoOpenedItWhenNothingElseNeedsTheSide(t *testing.T) {
 	client := &fakeSearcher{prs: samplePRs()}
 	client.serveDetail("PR_412", "Caps the backoff at 30s.")
@@ -1384,10 +1220,6 @@ func TestAViewerThatCannotBeReadChangesNothingOnScreen(t *testing.T) {
 	}
 }
 
-func ctrl(r rune) tea.KeyPressMsg { return tea.KeyPressMsg{Code: r, Mod: tea.ModCtrl} }
-
-func fgSeq(c color.Color) string { return sgrParams(lipgloss.NewStyle().Foreground(c)) }
-
 // One repo and one clock reading, so the newest-first tiebreak cannot reorder rows.
 func manyPRs(n int) []gh.PullRequest {
 	at := time.Now()
@@ -1400,28 +1232,6 @@ func manyPRs(n int) []gh.PullRequest {
 		}
 	}
 	return prs
-}
-
-func selectionSeq() string {
-	r, g, b, _ := testTheme.SelectedBackground.RGBA()
-	return fmt.Sprintf("48;2;%d;%d;%d", r>>8, g>>8, b>>8)
-}
-
-func selectedLine(t *testing.T, m tea.Model) string {
-	t.Helper()
-
-	var out []string
-	for _, line := range strings.Split(render(t, m), "\n") {
-		if strings.Contains(line, selectionSeq()) {
-			out = append(out, line)
-		}
-	}
-	return strings.Join(out, "\n")
-}
-
-func selectedText(t *testing.T, m tea.Model) string {
-	t.Helper()
-	return stripANSI(selectedLine(t, m))
 }
 
 func stripANSI(s string) string {
@@ -2906,16 +2716,6 @@ func TestSideBySideInAPaneTooNarrowSaysHowShortItIs(t *testing.T) {
 	if !strings.Contains(got, "Side by side needs") || !strings.Contains(got, "more columns in the pane") {
 		t.Errorf("status bar = %q, want it to name the columns the pane is short", strings.TrimSpace(got))
 	}
-}
-
-// Read off a rendered cell: a slot goes over the wire as its own SGR code, not 38;2;r;g;b.
-func sgrParams(s lipgloss.Style) string {
-	out := s.Render("x")
-	end := strings.Index(out, "m")
-	if end < 0 {
-		return ""
-	}
-	return out[len("\x1b["):end]
 }
 
 func (f *fakeSearcher) askedRunReruns() []runRerun {

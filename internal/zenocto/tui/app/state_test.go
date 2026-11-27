@@ -82,23 +82,6 @@ func TestAStateWriteRefetchesTheDetail(t *testing.T) {
 	}
 }
 
-func groupOf(t *testing.T, frame, row string) (string, bool) {
-	t.Helper()
-
-	var group string
-	for _, line := range strings.Split(frame, "\n") {
-		for _, name := range []string{"Ready", "Draft", "Merged", "Closed"} {
-			if strings.Contains(line, name) {
-				group = name
-			}
-		}
-		if strings.Contains(line, row) {
-			return group, true
-		}
-	}
-	return "", false
-}
-
 func TestAStateWriteRaisesOneToast(t *testing.T) {
 	client := &fakeSearcher{prs: samplePRs()}
 

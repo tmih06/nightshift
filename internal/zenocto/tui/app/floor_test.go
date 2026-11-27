@@ -6,7 +6,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/tmih06/nightshift/internal/zenocto/gh"
 	"github.com/tmih06/nightshift/internal/zenocto/tui/app"
 )
 
@@ -23,41 +22,6 @@ func TestAPickerSurvivesADragBelowTheFloor(t *testing.T) {
 	if out := stripANSI(render(t, m)); !strings.Contains(out, "space toggle") {
 		t.Errorf("the picker did not come back with the terminal:\n%s", out)
 	}
-}
-
-func (f *fakeSearcher) serveBypassMerge(id string) {
-	f.serveMergeable(id)
-
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	held := f.details[id]
-	held.Merge = gh.MergeBlocked
-	held.Viewer.CanMergeAsAdmin = true
-	f.details[id] = held
-}
-
-// The config notice takes a row, so the frame is as short as the shell will draw.
-func atTheFloor(t *testing.T, client *fakeSearcher) tea.Model {
-	t.Helper()
-
-	cfg := testConfig()
-	sized := drive(t, newApp(cfg, client, testSurface, nil), tea.WindowSizeMsg{Width: app.MinWidth, Height: app.MinHeight})
-	if !strings.Contains(stripANSI(render(t, sized)), "Theme names are gone") {
-		t.Fatal("setup: no config notice, so the frame is a row taller than this is measuring")
-	}
-	return sized
-}
-
-func footerRow(t *testing.T, lines []string) int {
-	t.Helper()
-
-	for i, line := range lines {
-		if strings.Contains(line, "esc cancel") {
-			return i
-		}
-	}
-	t.Fatal("the form has no footer, so it is clipped further up than this measures")
-	return 0
 }
 
 func TestKeysUnderTheMessageDoNotReachTheScreen(t *testing.T) {

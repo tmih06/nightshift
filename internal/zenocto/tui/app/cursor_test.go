@@ -29,17 +29,6 @@ func filteringPicker(t *testing.T, client *fakeSearcher) tea.Model {
 	return m
 }
 
-func noticing(t *testing.T, client *fakeSearcher, width, height int) tea.Model {
-	t.Helper()
-
-	cfg := testConfig()
-	m := drive(t, newApp(cfg, client, testSurface, nil), tea.WindowSizeMsg{Width: width, Height: height})
-	if out := stripANSI(render(t, m)); !strings.Contains(out, "Theme names are gone") {
-		t.Fatalf("no notice on the frame\n%s", out)
-	}
-	return m
-}
-
 func cursorOf(t *testing.T, m tea.Model) *tea.Cursor {
 	t.Helper()
 	return m.View().Cursor

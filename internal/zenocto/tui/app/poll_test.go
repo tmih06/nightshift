@@ -169,17 +169,6 @@ func TestABeatSaysNothingOnTheStatusBar(t *testing.T) {
 	}
 }
 
-func polling(t *testing.T, m tea.Model) (tea.Model, []tea.Msg) {
-	t.Helper()
-
-	m, cmd := m.Update(app.PollTick(time.Now().Add(app.PollIdle + time.Second)))
-	held := responses(cmd)
-	if len(held) != 1 {
-		t.Fatalf("setup: the beat produced %d responses, want the one section on screen", len(held))
-	}
-	return m, held
-}
-
 func TestACommentArrivingBringsTheWholePage(t *testing.T) {
 	client := &fakeSearcher{prs: samplePRs()}
 	m := opened(t, client)

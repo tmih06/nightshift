@@ -5,18 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tmih06/nightshift/internal/zenocto/gh"
 	"github.com/tmih06/nightshift/internal/zenocto/tui/app"
 )
-
-func (f *fakeSearcher) setDetailState(id string, state gh.PRState) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	held := f.details[id]
-	held.State = state
-	f.details[id] = held
-}
 
 func TestAPulseSaysNothingOnTheStatusBar(t *testing.T) {
 	client := &fakeSearcher{prs: samplePRs()}
