@@ -262,7 +262,11 @@ Nightshift runs on the kind cluster `kind-agent-sandbox` in the namespace
   focuses the shell; middle-clicking a tab closes it; `C-b` prefix chords
   (`C-b c` new, `C-b n`/`p`/`h`/`l`/`1-9` switch, `C-b x` close, `C-b f`
   zoom, `C-b C-b` literal, `C-b q`/`d` leave) provide full keyboard
-  control. Zoom gives the shell the whole window, drawn from the same screen
+  control. Dragging the mouse over the shell's screen selects its text alone
+  and copies it on release through OSC 52, so it reaches the local clipboard
+  over SSH too (inside tmux this needs `set-clipboard on`). The screen holds
+  still while the button is down; only what is on screen can be selected.
+  Zoom gives the shell the whole window, drawn from the same screen
   API, so it works against a server on another machine.
 - Focus is in the table during navigation and in the sidebar while bash or
   the configs have it; the sidebar's heading turns green and says how to

@@ -716,13 +716,17 @@ func (m model) shellLinesView(l layout) []string {
 	case m.shellPod != b.Name || (m.shellTerm != "" && m.shellTerm != m.activeTerm(b.Name)):
 		return nil
 	}
-	content := m.shellLines
-	if len(content) > l.docH {
-		content = content[len(content)-l.docH:]
+	screen := m.shellScreen(l)
+	s := m.shownSelection(screen)
+	if s == nil {
+		return screen
 	}
-	lines := make([]string, 0, len(content))
-	for _, ln := range content {
-		lines = append(lines, truncateANSI(ln, l.docW))
+	if s.dragging {
+		screen = s.lines
+	}
+	lines := make([]string, len(screen))
+	for row, ln := range screen {
+		lines[row] = s.highlight(ln, row)
 	}
 	return lines
 }

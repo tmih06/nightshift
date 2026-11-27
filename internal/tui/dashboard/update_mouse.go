@@ -5,6 +5,24 @@ import tea "charm.land/bubbletea/v2"
 func (m model) updateMouse(msg tea.MouseMsg) (model, tea.Cmd) {
 	mouse := msg.Mouse()
 	x, y := mouse.X, mouse.Y
+	if m.selection != nil && m.selection.dragging {
+		switch msg.(type) {
+		case tea.MouseMotionMsg:
+			return m.dragShell(x, y), nil
+		case tea.MouseReleaseMsg:
+			return m.dragShell(x, y).releaseShell()
+		case tea.MouseWheelMsg:
+			return m, nil
+		}
+	}
+	if click, ok := msg.(tea.MouseClickMsg); ok {
+		m.selection = nil
+		if click.Button == tea.MouseLeft {
+			if next, handled := m.pressShell(x, y); handled {
+				return next, nil
+			}
+		}
+	}
 	if m.focus == focusShell && !m.dragging {
 		if click, ok := msg.(tea.MouseClickMsg); ok {
 			if next, cmd, handled := m.clickSubTabs(x, y, click.Button); handled {

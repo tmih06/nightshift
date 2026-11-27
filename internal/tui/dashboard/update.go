@@ -19,6 +19,7 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 			m.scrollInspect(0)
 		}
 	case tea.PasteMsg:
+		m.selection = nil
 		if m.destroy != nil {
 			return m, nil
 		}
@@ -26,6 +27,7 @@ func (m model) Update(msg tea.Msg) (model, tea.Cmd) {
 			return m.pasteIntoShell(msg.Content)
 		}
 	case tea.KeyPressMsg:
+		m.selection = nil
 		if m.destroy != nil {
 			return m.updateDestroyKeys(msg)
 		}

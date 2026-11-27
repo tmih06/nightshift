@@ -28,7 +28,7 @@ func (helpKeys) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{keyMove, keyEnds, keySection, viewKeyBinding(), logsKeyBinding(), keyDrag},
 		{keyOpen, keyClaim, keyBash, keyDestroy2, keyFull},
-		{keyWinNew, keyWinSwitch, keyWinClose, keyLeave},
+		{keyWinNew, keyWinSwitch, keyWinClose, keyLeave, key.NewBinding(key.WithKeys(""), key.WithHelp("drag shell", "copy text"))},
 		{keyScroll, keyPage, keyBack, keyRefresh, keyTabs, keyHelp, keyQuit},
 	}
 }

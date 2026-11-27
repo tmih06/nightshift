@@ -94,6 +94,8 @@ type model struct {
 	shellPod       string
 	shellTerm      string
 	shellW, shellH int
+	// selection is the mouse selection on the shell's screen, if any.
+	selection *shellSelection
 	// zoom gives the shell the whole window.
 	zoom          bool
 	watchingShell bool
