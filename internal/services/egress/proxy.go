@@ -534,6 +534,20 @@ func (p *Proxy) handleMITM(w http.ResponseWriter, r *http.Request, host string, 
 			continue
 		}
 
+		if body, ok := rule.answer(req.URL.Path); ok {
+			p.record(r.Context(), AuditEvent{
+				Action: "ALLOW", Mode: "mitm", Client: r.RemoteAddr,
+				Method: req.Method, Host: host, Port: port, Path: req.URL.Path,
+				Rule: rule.Name, Status: http.StatusOK, Reason: "answered by the proxy",
+			})
+			werr := writeResponse(tlsConn, req, http.StatusOK, "application/json", body)
+			cerr := req.Body.Close()
+			if werr != nil || cerr != nil || req.Close {
+				return
+			}
+			continue
+		}
+
 		fr := forwardReq{
 			ctx: r.Context(), req: req, host: host, port: port,
 			hostPort: hostPort, scheme: "https", mode: "mitm",
@@ -770,13 +784,17 @@ func primaryAccountLabel(bindings []injectedBinding) string {
 }
 
 func writeSimpleResponse(w io.Writer, req *http.Request, status int, msg string) error {
+	return writeResponse(w, req, status, "text/plain; charset=utf-8", msg)
+}
+
+func writeResponse(w io.Writer, req *http.Request, status int, contentType, msg string) error {
 	resp := &http.Response{
 		StatusCode:    status,
 		Status:        fmt.Sprintf("%d %s", status, http.StatusText(status)),
 		Proto:         "HTTP/1.1",
 		ProtoMajor:    1,
 		ProtoMinor:    1,
-		Header:        http.Header{"Content-Type": []string{"text/plain; charset=utf-8"}},
+		Header:        http.Header{"Content-Type": []string{contentType}},
 		Body:          io.NopCloser(strings.NewReader(msg)),
 		ContentLength: int64(len(msg)),
 		Request:       req,

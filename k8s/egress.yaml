@@ -38,12 +38,17 @@ data:
         ports: [443]
         mode: mitm
         secrets: ["AGY_ACCESS_TOKEN"]
-      - name: antigravity-token-check
+      # agy asks who its token belongs to, and Google would name the real
+      # account. The proxy answers with no identity and forwards nothing.
+      - name: antigravity-userinfo
         hosts: ["www.googleapis.com"]
         ports: [443]
         mode: mitm
-        path_prefixes: ["/oauth2/"]
-        secrets: ["AGY_ACCESS_TOKEN"]
+        methods: ["GET"]
+        path_prefixes: ["/oauth2/v2/userinfo", "/oauth2/v3/userinfo"]
+        answers:
+          /oauth2/v2/userinfo: "{}"
+          /oauth2/v3/userinfo: "{}"
       - name: openai
         hosts: ["api.openai.com"]
         ports: [443]

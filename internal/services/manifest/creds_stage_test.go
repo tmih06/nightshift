@@ -3,6 +3,7 @@ package manifest
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io/fs"
 	"os"
@@ -66,9 +67,9 @@ func TestCredsStageSwapsEveryAgentLogin(t *testing.T) {
 	}
 	homeDir, stageDir, tokenDir := t.TempDir(), t.TempDir(), t.TempDir()
 	home := openRoot(t, homeDir)
-	writeFixture(t, home, ".claude/.credentials.json", `{"claudeAiOauth":{"accessToken":"sk-ant-oat-REAL-access","refreshToken":"sk-ant-ort-REAL-refresh","expiresAt":1,"scopes":["a"]},"mcpOAuth":{"server|1":{"accessToken":"mcp-REAL-access","refreshToken":"mcp-REAL-refresh"}}}`)
-	writeFixture(t, home, ".codex/auth.json", `{"auth_mode":"chatgpt","OPENAI_API_KEY":"sk-REAL-openai-key","tokens":{"id_token":"idtok","access_token":"codex-REAL-access","refresh_token":"codex-REAL-refresh","account_id":"acct"},"last_refresh":"2026-01-01T00:00:00Z"}`)
-	writeFixture(t, home, ".gemini/antigravity-cli/antigravity-oauth-token", `{"token":{"access_token":"ya29.REAL-agy-access","token_type":"Bearer","refresh_token":"1//REAL-agy-refresh","expiry":"2026-01-01T00:00:00Z","expires_in":3599},"auth_method":"oauth","id_token_email":"a@b.c"}`)
+	writeFixture(t, home, ".claude/.credentials.json", `{"claudeAiOauth":{"accessToken":"sk-ant-oat-REAL-access","refreshToken":"sk-ant-ort-REAL-refresh","expiresAt":1,"scopes":["a"],"accountUuid":"uuid-REAL-account","organizationUuid":"uuid-REAL-org","emailAddress":"REAL@claude.example"},"mcpOAuth":{"server|1":{"accessToken":"mcp-REAL-access","refreshToken":"mcp-REAL-refresh"}}}`)
+	writeFixture(t, home, ".codex/auth.json", `{"auth_mode":"chatgpt","OPENAI_API_KEY":"sk-REAL-openai-key","tokens":{"id_token":"idtok-REAL-identity","access_token":"codex-REAL-access","refresh_token":"codex-REAL-refresh","account_id":"acct","email":"REAL@codex.example"},"last_refresh":"2026-01-01T00:00:00Z"}`)
+	writeFixture(t, home, ".gemini/antigravity-cli/antigravity-oauth-token", `{"token":{"access_token":"ya29.REAL-agy-access","token_type":"Bearer","refresh_token":"1//REAL-agy-refresh","expiry":"2026-01-01T00:00:00Z","expires_in":3599,"id_token":"idtok-REAL-agy"},"auth_method":"oauth","id_token_email":"a@b.c"}`)
 	writeFixture(t, home, ".config/gh/hosts.yml", "github.com:\n    users:\n        u:\n            oauth_token: gho_REAL-github\n    oauth_token: gho_REAL-github\n    user: u\n")
 	writeFixture(t, home, ".local/share/opencode/auth.json", `{"x":{"type":"oauth","access":"opencode-REAL"}}`)
 
@@ -90,7 +91,10 @@ func TestCredsStageSwapsEveryAgentLogin(t *testing.T) {
 		"ya29.REAL-agy-access", "1//REAL-agy-refresh",
 		"gho_REAL-github", "opencode-REAL",
 		"mcp-REAL-access", "mcp-REAL-refresh", "sk-REAL-openai-key",
-		"a@b.c",
+		// Nothing that names the account either: which one carries a request
+		// is the proxy's choice, so a sandbox is told none.
+		"a@b.c", "uuid-REAL-account", "uuid-REAL-org", "REAL@claude.example",
+		"idtok-REAL-identity", "REAL@codex.example", "idtok-REAL-agy",
 	}
 	err := fs.WalkDir(stage.FS(), ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
@@ -152,9 +156,10 @@ func TestCredsStageSwapsEveryAgentLogin(t *testing.T) {
 	if agy["expiry"] != "2099-01-01T00:00:00Z" {
 		t.Errorf("agy expiry = %v, want far future", agy["expiry"])
 	}
-	if got := readJSON(t, stage, ".gemini/antigravity-cli/antigravity-oauth-token")["id_token_email"]; got != "nightshift@proxy.local" {
-		t.Errorf("agy id_token_email = %v, want the fixed proxy identity, not the account's", got)
+	if got, ok := readJSON(t, stage, ".gemini/antigravity-cli/antigravity-oauth-token")["id_token_email"]; ok {
+		t.Errorf("agy id_token_email = %v, want no identity at all", got)
 	}
+	assertAnonymousIDToken(t, codex["id_token"])
 	claude := object(t, readJSON(t, stage, ".claude/.credentials.json"), "claudeAiOauth")
 	if _, ok := claude["refreshToken"]; ok {
 		t.Error("claude refreshToken must be removed")
@@ -165,5 +170,27 @@ func TestCredsStageSwapsEveryAgentLogin(t *testing.T) {
 	}
 	if _, err := stage.Stat(".local/share/opencode/auth.json"); err == nil {
 		t.Error("a login with no swap must not be distributed")
+	}
+}
+
+// assertAnonymousIDToken checks the id_token Codex needs to start: a JWT whose
+// claims name a plan and no account.
+func assertAnonymousIDToken(t *testing.T, token any) {
+	t.Helper()
+	s, ok := token.(string)
+	if !ok {
+		t.Fatalf("codex id_token = %v, want a JWT", token)
+	}
+	parts := strings.Split(s, ".")
+	if len(parts) != 3 {
+		t.Fatalf("codex id_token has %d parts, want 3", len(parts))
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatalf("codex id_token claims: %v", err)
+	}
+	const want = `{"https://api.openai.com/auth":{"chatgpt_plan_type":"pro"}}`
+	if string(raw) != want {
+		t.Errorf("codex id_token claims = %s, want %s", raw, want)
 	}
 }

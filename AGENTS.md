@@ -158,6 +158,17 @@ Prune rules that no longer apply. Past about 200 lines, move older detail into
     `TestSQLiteUsagePrunesRawEventsAfterTheRecentWindow`,
     `TestSQLiteUsageHandlesConcurrentRecords`.
 
+- **Rule**: Build each sandbox login from a named list of fields, none of which
+  names the real account.
+  - **Why**: Filters that copied the rest of a login sent Codex's `id_token`
+    (an email) and Claude's account UUIDs into sandboxes.
+  - **Enforced by**: `TestCredsStageSwapsEveryAgentLogin`.
+- **Rule**: Never forward an endpoint that names a login's account; have the
+  egress proxy answer it with no identity.
+  - **Why**: agy fetched the real email from Google's `userinfo` through the
+    proxy, although its login file held none.
+  - **Enforced by**: `TestShippedPolicyNeverAsksGoogleWhoTheAccountIs`,
+    `TestProxyAnswersAListedPathWithoutForwardingIt`.
 ## Commit messages
 
 Every commit message follows [Conventional Commits 1.0.0](https://www.conventionalcommits.org/). The format is `type(scope): subject`.

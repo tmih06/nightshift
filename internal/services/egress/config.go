@@ -5,6 +5,7 @@
 package egress
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -52,6 +53,10 @@ type Rule struct {
 	Methods      []string `yaml:"methods"`
 	PathPrefixes []string `yaml:"path_prefixes"`
 	Secrets      []string `yaml:"secrets"`
+	// Answers maps a path to the JSON the proxy replies with itself, in MITM
+	// mode. The request never leaves, so an endpoint that names the account
+	// behind a login tells the sandbox nothing.
+	Answers map[string]string `yaml:"answers"`
 }
 
 // SecretBinding maps an opaque placeholder string (exposed inside sandboxes)
@@ -147,7 +152,7 @@ func (c *Config) Validate() error {
 			}
 		}
 		if r.Mode == "" {
-			if len(r.Secrets) > 0 || len(r.Methods) > 0 || len(r.PathPrefixes) > 0 {
+			if len(r.Secrets) > 0 || len(r.Methods) > 0 || len(r.PathPrefixes) > 0 || len(r.Answers) > 0 {
 				r.Mode = ModeMITM
 			} else {
 				r.Mode = ModeTunnel
@@ -159,6 +164,9 @@ func (c *Config) Validate() error {
 		if r.Mode == ModeTunnel && (len(r.Secrets) > 0 || len(r.Methods) > 0 || len(r.PathPrefixes) > 0) {
 			return fmt.Errorf("rule %q uses mode tunnel with L7 secrets/methods/path_prefixes (use mode: mitm)", r.Name)
 		}
+		if err := r.validateAnswers(); err != nil {
+			return err
+		}
 		for j, m := range r.Methods {
 			r.Methods[j] = strings.ToUpper(strings.TrimSpace(m))
 		}
@@ -169,6 +177,24 @@ func (c *Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+func (r *Rule) validateAnswers() error {
+	if len(r.Answers) > 0 && r.Mode != ModeMITM {
+		return fmt.Errorf("rule %q has answers, which need mode: mitm", r.Name)
+	}
+	for p, body := range r.Answers {
+		if !json.Valid([]byte(body)) {
+			return fmt.Errorf("rule %q answers %q with invalid JSON", r.Name, p)
+		}
+	}
+	return nil
+}
+
+// answer is the proxy's own reply for reqPath, when the rule has one.
+func (r *Rule) answer(reqPath string) (string, bool) {
+	body, ok := r.Answers[cleanHTTPPath(reqPath)]
+	return body, ok
 }
 
 // MatchHostPort returns the first rule permitting host and port.

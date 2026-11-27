@@ -111,7 +111,7 @@ func TestShippedPolicySwapsEveryRegisteredLogin(t *testing.T) {
 				t.Errorf("%s: no rule matches %s", p.ID, host)
 				continue
 			}
-			if !r.AllowsRequest("POST", "/oauth2/v3/tokeninfo") {
+			if !r.AllowsRequest("POST", "/v1internal:loadCodeAssist") {
 				t.Errorf("%s: rule %q denies %s", p.ID, r.Name, host)
 			}
 			if !slices.Contains(r.Secrets, p.Secret) {
@@ -121,13 +121,27 @@ func TestShippedPolicySwapsEveryRegisteredLogin(t *testing.T) {
 	}
 }
 
-func TestShippedPolicyKeepsGoogleScopedToOAuth(t *testing.T) {
+// Google names the account behind a token to whoever asks with it, so the
+// proxy answers those questions itself and sends none upstream.
+func TestShippedPolicyNeverAsksGoogleWhoTheAccountIs(t *testing.T) {
 	cfg := shippedPolicy(t)
 	r, ok := cfg.MatchHostPort("www.googleapis.com", 443)
 	if !ok {
 		t.Fatal("no rule for www.googleapis.com")
 	}
-	if r.AllowsRequest("GET", "/drive/v3/files") {
-		t.Error("www.googleapis.com must only allow /oauth2/ paths")
+	if len(r.Secrets) > 0 {
+		t.Errorf("rule %q injects %v, which would let a sandbox ask Google who it is", r.Name, r.Secrets)
+	}
+	for _, path := range []string{"/oauth2/v2/userinfo", "/oauth2/v3/userinfo"} {
+		if body, answered := r.answer(path); !answered || body != "{}" || !r.AllowsRequest("GET", path) {
+			t.Errorf("%s = %q (answered %v), want an empty answer from the proxy", path, body, answered)
+		}
+	}
+	for _, path := range []string{"/oauth2/v3/tokeninfo", "/drive/v3/files"} {
+		if r.AllowsRequest("GET", path) {
+			if _, answered := r.answer(path); !answered {
+				t.Errorf("%s would be forwarded", path)
+			}
+		}
 	}
 }
