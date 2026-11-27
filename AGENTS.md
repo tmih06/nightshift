@@ -169,6 +169,17 @@ Prune rules that no longer apply. Past about 200 lines, move older detail into
     proxy, although its login file held none.
   - **Enforced by**: `TestShippedPolicyNeverAsksGoogleWhoTheAccountIs`,
     `TestProxyAnswersAListedPathWithoutForwardingIt`.
+- **Rule**: Mark an account active only from the proxy's live pool state, never
+  from the chain order.
+  - **Why**: The Accounts tab called a cooling first account the one in use
+    while another carried the traffic.
+  - **Enforced by**: `TestInUseFollowsTheProxyNotTheOrder`.
+- **Rule**: Say an account is active on its chain, never that a sandbox uses it,
+  and name none on a pod or inside a sandbox.
+  - **Why**: "in use by sandboxes", then an account line on each pod, described
+    something that does not happen: the proxy picks an account per request.
+  - **Enforced by**: `TestTheTabNeverSaysASandboxUsesAnAccount`.
+
 ## Commit messages
 
 Every commit message follows [Conventional Commits 1.0.0](https://www.conventionalcommits.org/). The format is `type(scope): subject`.

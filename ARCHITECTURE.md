@@ -230,8 +230,13 @@ that they own and restart, and the egress proxy's admin port through another;
 in the cluster they use the Services' addresses instead, so on a laptop nothing
 is needed but the kubeconfig Nightshift already uses. It lists every signed-in account per agent, runs the
 sign-in (the link, then the pasted callback address), disables, removes, and
-refreshes accounts, and publishes on demand. Several accounts per agent form an ordered fallback chain: the order picked
-with `enter` or `K`/`J` is recorded in the `nightshift-accounts` ConfigMap
+renews accounts, and publishes after each change. A change that would move an
+agent's traffic to another account asks first, because prompt caches belong to
+one account. The account marked active is the one the proxy's `/pools` reports,
+not the first in the order. Only the Accounts tab says which account that is:
+neither a sandbox nor its row in the Pods tab names one. Several accounts per
+agent form an ordered fallback chain: the order picked
+with `u` or `K`/`J` is recorded in the `nightshift-accounts` ConfigMap
 (`chains` and `active`), and `creds-publish.sh` publishes the whole enabled
 chain as `POOL_<secret>` in `egress-secrets` (alongside companion placeholders
 such as Codex's `account_id`). The egress proxy tries the first non-cooled-down
@@ -245,7 +250,7 @@ rate-limit headers, counts them in ten-minute request and token windows at
 `/usage` and `/analytics`, exposes live chain and cooldown state at `/pools`,
 and actively fetches provider quota windows and next reset times from Claude,
 Codex, and Antigravity at `/quota` and `POST /quota/refresh` (triggered with
-`Q` in the Accounts tab or periodically in the background). Antigravity's
+`r` in the Accounts tab or periodically in the background). Antigravity's
 reading is the grouped weekly and five-hour pool summary its own `/usage`
 shows, not the per-model availability catalog. Cooldowns and the quota cache
 live in the proxy's memory and start over when it restarts.

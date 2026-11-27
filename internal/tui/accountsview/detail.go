@@ -31,11 +31,18 @@ func (m Model) detailHead(a v1.Account) []string {
 	s := m.st
 	p := providerByID(m.snap, a.Provider)
 	title := s.title.Render(label(a))
+	_, known := inUse(m.snap, a.Provider)
 	switch {
-	case a.Active:
-		title += "  " + s.ok.Render("in use by sandboxes")
+	case a.ActiveNow && a.Active:
+		title += "  " + s.ok.Render("active on the chain")
 	case a.ActiveNow:
-		title += "  " + s.ok.Render("handling failover")
+		title += "  " + s.ok.Render("active on the chain (failover)")
+	case m.pending(a):
+		title += "  " + s.warn.Render("first · waiting for the proxy")
+	case a.Active && known:
+		title += "  " + s.warn.Render("first, but not active")
+	case a.Active:
+		title += "  " + s.faint.Render("first in the chain")
 	case a.Priority > 1:
 		title += "  " + s.faint.Render(fmt.Sprintf("fallback #%d", a.Priority))
 	}
@@ -187,11 +194,9 @@ func (m Model) stateHint(a v1.Account) string {
 	switch {
 	case a.Disabled:
 		return m.st.faint.Render("d enables it again, x removes it")
-	case a.Priority > 1:
-		return m.st.faint.Render("enter makes it primary · K/J reorders the fallback chain")
 	case !a.Active:
-		return m.st.faint.Render("enter makes sandboxes use this account")
+		return m.st.faint.Render("u makes this account active · K/J reorders the fallback chain")
 	default:
-		return m.st.faint.Render("primary account · K/J reorders the fallback chain")
+		return m.st.faint.Render("first in the chain · K/J reorders it")
 	}
 }

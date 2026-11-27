@@ -162,7 +162,7 @@ func press(t *testing.T, m Model, keys ...string) Model {
 func plain(m Model) string { return ansi.Strip(m.View()) }
 
 func TestShowingTheTabFetchesAndDrawsAccounts(t *testing.T) {
-	svc := &fakeService{snap: sampleSnapshot()}
+	svc := &fakeService{snap: chainSnapshot()}
 	m := newTestModel(svc)
 	if svc.log() != "" {
 		t.Fatal("a tab that was never shown must not touch the cluster")
@@ -173,7 +173,7 @@ func TestShowingTheTabFetchesAndDrawsAccounts(t *testing.T) {
 	for _, want := range []string{
 		"Claude Code", "Codex", "Antigravity",
 		"a@example.com", "b@example.com", "c@example.com", "d@example.com",
-		"120 requests", "published 2m ago", "in use by sandboxes", "disabled",
+		"120 requests", "published 2m ago", "active on the chain", "disabled",
 	} {
 		if !strings.Contains(view, want) {
 			t.Errorf("the tab does not show %q:\n%s", want, view)
@@ -208,15 +208,15 @@ func TestMovingSelectsAnotherAccountsDetail(t *testing.T) {
 	}
 	m = press(t, m, "j")
 	view := plain(m)
-	if !strings.Contains(view, "claude-b.json") || !strings.Contains(view, "Not in use") {
-		t.Errorf("after moving down the detail must show claude-b and say it is not in use:\n%s", view)
+	if !strings.Contains(view, "claude-b.json") || !strings.Contains(view, "Not active") {
+		t.Errorf("after moving down the detail must show claude-b and say it is not active:\n%s", view)
 	}
 }
 
 func TestEnterSwitchesTheAgentsAccountAndPublishes(t *testing.T) {
 	svc := &fakeService{snap: sampleSnapshot()}
 	m := shown(t, svc)
-	press(t, m, "j", "enter")
+	press(t, m, "j", "enter", "y")
 	got := svc.log()
 	if !strings.Contains(got, "active claude claude-b.json|publish") {
 		t.Errorf("enter must choose the account and then publish, calls: %s", got)
@@ -238,15 +238,89 @@ func TestDisabledAccountCannotBeChosen(t *testing.T) {
 	}
 }
 
-func TestToggleRefreshAndPublishCallTheService(t *testing.T) {
+func TestDisablingTheAccountInUseAsksThenPublishes(t *testing.T) {
 	svc := &fakeService{snap: sampleSnapshot()}
 	m := shown(t, svc)
-	press(t, m, "d", "r", "p")
-	got := svc.log()
-	for _, want := range []string{"disabled claude-a.json on", "refresh claude-a.json", "publish"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("calls lack %q: %s", want, got)
+	m = press(t, m, "d")
+	if !m.Capturing() || !strings.Contains(plain(m), "Disable a@example.com?") || !strings.Contains(plain(m), "Cache miss") {
+		t.Fatalf("disabling the account in use must warn first:\n%s", plain(m))
+	}
+	press(t, m, "y")
+	// The saved order drops it, so enabling it later moves no traffic.
+	if want := "disabled claude-a.json on|chain claude claude-b.json|publish"; !strings.Contains(svc.log(), want) {
+		t.Errorf("calls lack %q: %s", want, svc.log())
+	}
+}
+
+func TestDisablingASpareAccountDoesNotAsk(t *testing.T) {
+	svc := &fakeService{snap: sampleSnapshot()}
+	m := shown(t, svc)
+	m = press(t, m, "j", "d")
+	if m.Capturing() || !strings.Contains(svc.log(), "disabled claude-b.json on|chain claude claude-a.json|publish") {
+		t.Errorf("a spare account moves no traffic, so d must just do it: %s", svc.log())
+	}
+}
+
+func TestTRenewsTheToken(t *testing.T) {
+	svc := &fakeService{snap: sampleSnapshot()}
+	press(t, shown(t, svc), "t")
+	if !strings.Contains(svc.log(), "refresh claude-a.json") {
+		t.Errorf("t must renew the token: %s", svc.log())
+	}
+}
+
+// chainSnapshot is Claude's two accounts in order, the proxy on the first.
+func chainSnapshot() v1.Accounts {
+	snap := sampleSnapshot()
+	snap.Accounts[0].Priority, snap.Accounts[0].ActiveNow = 1, true
+	snap.Accounts[1].Priority = 2
+	return snap
+}
+
+func TestUsingAnotherAccountWarnsOfTheCacheMiss(t *testing.T) {
+	svc := &fakeService{snap: chainSnapshot()}
+	m := press(t, shown(t, svc), "j", "u")
+	view := plain(m)
+	for _, want := range []string{"Use b@example.com for Claude Code?", "from a@example.com", "Cache miss", "y switch", "n cancel"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the warning lacks %q:\n%s", want, view)
 		}
+	}
+	m = press(t, m, "n")
+	if m.Capturing() || strings.Contains(svc.log(), "active") {
+		t.Errorf("n must change nothing: %s", svc.log())
+	}
+	press(t, m, "u", "y")
+	if !strings.Contains(svc.log(), "active claude claude-b.json|publish") {
+		t.Errorf("y must switch and publish: %s", svc.log())
+	}
+}
+
+func TestUsingTheAccountInUseChangesNothing(t *testing.T) {
+	svc := &fakeService{snap: chainSnapshot()}
+	m := press(t, shown(t, svc), "u")
+	if m.Capturing() || strings.Contains(svc.log(), "active") || !strings.Contains(plain(m), "already active") {
+		t.Errorf("u on the account in use must only say so: %s\n%s", svc.log(), plain(m))
+	}
+}
+
+// The order says who should carry the traffic; only the proxy says who does.
+func TestInUseFollowsTheProxyNotTheOrder(t *testing.T) {
+	snap := chainSnapshot()
+	snap.Accounts[0].ActiveNow, snap.Accounts[1].ActiveNow = false, true
+	snap.Accounts[0].CooldownUntil = testNow().Add(4 * time.Minute)
+	m := shown(t, &fakeService{snap: snap})
+	if view := plain(m); strings.Contains(view, "active on the chain") || !strings.Contains(view, "first, but not active") {
+		t.Errorf("a cooling first account is not in use:\n%s", view)
+	}
+	if view := plain(press(t, m, "j")); !strings.Contains(view, "active on the chain (failover)") {
+		t.Errorf("the account the proxy picked is in use:\n%s", view)
+	}
+
+	snap.Accounts[0].CooldownUntil = time.Time{}
+	m = shown(t, &fakeService{snap: snap})
+	if view := plain(m); !strings.Contains(view, "waiting for the proxy") || !strings.Contains(view, "pending") {
+		t.Errorf("a switch the proxy has not picked up must show as pending:\n%s", view)
 	}
 }
 
@@ -262,7 +336,7 @@ func TestRemoveAsksFirst(t *testing.T) {
 		t.Error("n must not remove anything")
 	}
 	m = press(t, m, "x", "y")
-	if !strings.Contains(svc.log(), "remove claude-a.json") {
+	if !strings.Contains(svc.log(), "remove claude-a.json|publish") {
 		t.Errorf("y must remove the account: %s", svc.log())
 	}
 	if m.Capturing() {
@@ -332,9 +406,9 @@ func TestUnreachableCLIProxyAPIExplainsHowToInstall(t *testing.T) {
 		}
 	}
 	svc.fetchErr, svc.snap = nil, sampleSnapshot()
-	m = press(t, m, "R")
+	m = press(t, m, "r")
 	if !strings.Contains(plain(m), "a@example.com") {
-		t.Error("R must try again")
+		t.Error("r must try again")
 	}
 }
 
@@ -342,7 +416,7 @@ func TestAFailedRefreshKeepsTheLastReading(t *testing.T) {
 	svc := &fakeService{snap: sampleSnapshot()}
 	m := shown(t, svc)
 	svc.fetchErr = errors.New("timeout")
-	m = press(t, m, "R")
+	m = press(t, m, "r")
 	if !strings.Contains(plain(m), "a@example.com") || !strings.Contains(plain(m), "last read") {
 		t.Errorf("accounts must stay on screen when a refresh fails:\n%s", plain(m))
 	}
@@ -413,7 +487,7 @@ func TestReorderChainMovesAccountAndPublishes(t *testing.T) {
 		}
 	}
 	// Move down to claude-b (#2) and press K to move it above claude-a.
-	m = press(t, m, "j", "K")
+	m = press(t, m, "j", "K", "y")
 	got := svc.log()
 	if !strings.Contains(got, "chain claude claude-b.json,claude-a.json|publish") {
 		t.Errorf("K must reorder the fallback chain and publish, calls: %s", got)
@@ -421,7 +495,7 @@ func TestReorderChainMovesAccountAndPublishes(t *testing.T) {
 	_ = m
 }
 
-func TestQuotaAndTokenAnalyticsRenderAndRefreshWithQ(t *testing.T) {
+func TestQuotaAndTokenAnalyticsRenderAndRefresh(t *testing.T) {
 	snap := sampleSnapshot()
 	snap.Analytics = &v1.AnalyticsSummary{
 		Requests: 120, OK: 115, RateLimited: 5,
@@ -461,9 +535,22 @@ func TestQuotaAndTokenAnalyticsRenderAndRefreshWithQ(t *testing.T) {
 			t.Errorf("detail pane lacks %q:\n%s", want, view)
 		}
 	}
-	m = press(t, m, "Q")
-	if !strings.Contains(svc.log(), "refresh-quotas|fetch") {
-		t.Errorf("Q must refresh live quotas and refetch, calls: %s", svc.log())
+	m = press(t, m, "r")
+	if !strings.Contains(svc.log(), "refresh-quotas") || !strings.HasSuffix(svc.log(), "fetch") {
+		t.Errorf("r must refresh live quotas and refetch, calls: %s", svc.log())
 	}
 	_ = m
+}
+
+// A sandbox has no account: the proxy picks one for each request outside it,
+// so the tab says which is active and never that sandboxes use one.
+func TestTheTabNeverSaysASandboxUsesAnAccount(t *testing.T) {
+	m := shown(t, &fakeService{snap: chainSnapshot()})
+	for range m.flat {
+		m, _ = m.Update(tea.WindowSizeMsg{Width: 140, Height: 80})
+		if view := strings.ToLower(plain(m)); strings.Contains(view, "sandbox") {
+			t.Errorf("the tab ties an account to a sandbox:\n%s", view)
+		}
+		m = press(t, m, "j")
+	}
 }

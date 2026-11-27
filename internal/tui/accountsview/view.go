@@ -242,7 +242,7 @@ func (m Model) titleLine() string {
 }
 
 func (m Model) helpLine() string {
-	keys := [][2]string{{"j/k", "move"}, {"v", "calendar"}, {"K/J", "order"}, {"a", "add"}, {"⏎", "primary"}, {"Q", "quota"}, {"d", "disable"}, {"x", "remove"}, {"r", "refresh"}, {"p", "publish"}, {"R", "reload"}, {"⇥", "tabs"}, {"q", "quit"}, {"?", "help"}}
+	keys := [][2]string{{"j/k", "move"}, {"u", "use"}, {"K/J", "order"}, {"a", "add"}, {"d", "disable"}, {"x", "remove"}, {"r", "refresh"}, {"v", "calendar"}, {"⇥", "tabs"}, {"q", "quit"}, {"?", "help"}}
 	var b strings.Builder
 	b.WriteString(" ")
 	for i, k := range keys {
@@ -302,7 +302,7 @@ func (m Model) unloaded() []string {
 		}
 		return append(lines, "",
 			"  "+s.text.Render("The login surface is CLIProxyAPI. Install it with k8s/creds-setup.sh."),
-			"  "+s.faint.Render("Press R to try again."))
+			"  "+s.faint.Render("Press r to try again."))
 	default:
 		return []string{"", "  " + s.faint.Render("Starting a connection to CLIProxyAPI…")}
 	}
@@ -313,8 +313,8 @@ func (m Model) noSelection() []string {
 		m.st.title.Render("No accounts yet"),
 		"",
 		m.st.text.Render("Press a to sign an account in to Claude Code, Codex, or Antigravity."),
-		m.st.faint.Render("Sign in as many accounts as you like, then pick the one each"),
-		m.st.faint.Render("agent's sandboxes should use with enter."),
+		m.st.faint.Render("Sign in as many accounts as you like, then pick the active"),
+		m.st.faint.Render("one for each agent with u."),
 	}
 }
 
@@ -369,16 +369,22 @@ func (m Model) accountRow(a v1.Account, selected bool, width int) string {
 	}
 	blank := func(n int) string { return on(s.text).Render(strings.Repeat(" ", max(0, n))) }
 	cooling := a.CooldownUntil.After(m.now())
+	_, known := inUse(m.snap, a.Provider)
 	mark, markStyle := "○", s.faint
 	switch {
 	case cooling:
 		mark, markStyle = "◔", s.warn
-	case a.ActiveNow || a.Active:
+	case a.ActiveNow || (a.Active && !known):
 		mark, markStyle = "●", s.ok
 	}
 	state, stateStyle := stateName(a.State), m.stateStyle(a.State)
-	if cooling {
+	switch {
+	case cooling:
 		state, stateStyle = "cooldown", s.warn
+	case a.ActiveNow && a.State == v1.AccountOK:
+		state, stateStyle = "active", s.ok
+	case m.pending(a):
+		state, stateStyle = "pending", s.warn
 	}
 	tail := m.listQuota(a, width, on) + on(stateStyle).Render(pad(state, 10))
 	if width >= 70 {
@@ -419,8 +425,8 @@ func (m Model) modalBox() string {
 		return m.providerBox()
 	case modalLink:
 		return m.linkBox()
-	case modalRemove:
-		return m.removeBox()
+	case modalConfirm:
+		return m.confirmBox()
 	case modalNone:
 	}
 	return ""
@@ -474,14 +480,16 @@ func (m Model) linkBox() string {
 	return dialog.Box(m.theme, lines)
 }
 
-func (m Model) removeBox() string {
+func (m Model) confirmBox() string {
 	s := m.st
-	return dialog.Box(m.theme, []string{
-		s.title.Render("Remove " + m.modal.label + "?"), "",
-		s.text.Render("This deletes its saved tokens. Sandboxes already running keep"),
-		s.text.Render("their login until they are replaced."), "",
-		s.faint.Render("y remove • n cancel"),
-	})
+	text := s.text.Width(m.modalInner())
+	lines := make([]string, 0, len(m.modal.body)+4)
+	lines = append(lines, s.title.Width(m.modalInner()).Render(m.modal.title), "")
+	for _, l := range m.modal.body {
+		lines = append(lines, text.Render(l))
+	}
+	lines = append(lines, "", s.key.Render("y")+s.faint.Render(" "+m.modal.verb+" • ")+s.key.Render("n")+s.faint.Render(" cancel"))
+	return dialog.Box(m.theme, lines)
 }
 
 func (m Model) helpBox() string {
@@ -489,15 +497,13 @@ func (m Model) helpBox() string {
 	row := func(k, d string) string { return s.key.Render(pad(k, 10)) + s.text.Render(d) }
 	return dialog.Box(m.theme, []string{
 		s.title.Render("Accounts"), "",
+		row("u, enter", "use this account: all of this agent's traffic moves to it"),
+		row("K/J", "move this account up or down in its fallback chain"),
 		row("a", "sign an account in (opens a link, paste the address back)"),
-		row("enter, s", "promote this account to #1 in its fallback chain"),
-		row("K/J, [/]", "move this account up or down in its fallback chain"),
-		row("Q", "fetch live provider quotas and reset times now"),
 		row("d", "disable or enable the account"),
 		row("x", "remove the account and its tokens"),
-		row("r", "refresh the account's token now"),
-		row("p", "publish to sandboxes now instead of within five minutes"),
-		row("R", "read everything again"),
+		row("r", "read everything again, live quotas included"),
+		row("t", "renew the account's token now"),
 		row("j/k, g/G", "move"),
 		row("ctrl+d/u", "scroll the account's details (or the wheel, pgdn/pgup)"),
 		row("v", "calendar of this account, or of all accounts"), "",

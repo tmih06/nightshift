@@ -167,7 +167,7 @@ func TestDetailScrollsAndEveryLineFits(t *testing.T) {
 	for _, size := range [][2]int{{120, 24}, {70, 30}} {
 		m := shown(t, &fakeService{snap: richSnapshot()})
 		m, _ = m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
-		if strings.Contains(plain(m), "primary account") {
+		if strings.Contains(plain(m), "K/J reorders it") {
 			t.Fatalf("%v: the end of the details must start out of view", size)
 		}
 		for range 20 {
@@ -177,7 +177,7 @@ func TestDetailScrollsAndEveryLineFits(t *testing.T) {
 		for range 40 {
 			m, _ = m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown, X: size[0] - 2, Y: size[1] - 3})
 		}
-		if m.cursor != 0 || !strings.Contains(plain(m), "primary account") {
+		if m.cursor != 0 || !strings.Contains(plain(m), "K/J reorders it") {
 			t.Errorf("%v: the wheel over the details must scroll them to the end:\n%s", size, plain(m))
 		}
 		for i, l := range strings.Split(m.View(), "\n") {

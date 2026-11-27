@@ -127,7 +127,7 @@ func (m Model) quotaBlock(a v1.Account, width int) []string {
 	s := m.st
 	q := a.Quota
 	if q == nil {
-		return []string{m.section("Quota", "", width), s.faint.Render("No quota reading yet — press Q to fetch live quotas.")}
+		return []string{m.section("Quota", "", width), s.faint.Render("No quota reading yet — press r to fetch live quotas.")}
 	}
 	now := m.now()
 	out := []string{m.section("Quota", quotaMeta(now, q), width)}

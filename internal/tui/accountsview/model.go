@@ -1,5 +1,5 @@
 // Package accountsview is the Accounts tab: the coding-agent accounts signed
-// in to Nightshift, which one each agent's sandboxes use, and how much each has
+// in to Nightshift, which one is active for each agent, and how much each has
 // been used. It draws what internal/accounts fetches and sends its actions
 // back; it reaches the cluster only through API.
 package accountsview
@@ -7,8 +7,10 @@ package accountsview
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -40,7 +42,7 @@ const (
 	modalNone modalKind = iota
 	modalProvider
 	modalLink
-	modalRemove
+	modalConfirm
 )
 
 type modal struct {
@@ -55,9 +57,10 @@ type modal struct {
 	busy  bool
 	err   string
 
-	// removal
-	name  string
-	label string
+	// confirmation
+	title, verb, progress string
+	body                  []string
+	run                   tea.Cmd
 }
 
 // Model is the tab.
@@ -302,8 +305,8 @@ func (m Model) key(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m.keyProvider(msg)
 	case modalLink:
 		return m.keyLink(msg)
-	case modalRemove:
-		return m.keyRemove(msg)
+	case modalConfirm:
+		return m.keyConfirm(msg)
 	case modalNone:
 	}
 	if m.help {
@@ -347,15 +350,10 @@ func (m Model) actionKey(k string) (Model, tea.Cmd) {
 		return m, tea.Quit
 	case "?":
 		m.help = true
-	case "R", "ctrl+r":
-		m.loading = true
-		return m, m.fetch()
+	case "r":
+		return m.reload()
 	case "a":
 		return m.openProviderPicker(), nil
-	case "Q":
-		return m.refreshQuotas()
-	case "p":
-		return m.publishNow("Publishing…")
 	default:
 		return m.accountKey(k)
 	}
@@ -365,20 +363,18 @@ func (m Model) actionKey(k string) (Model, tea.Cmd) {
 // accountKey acts on the selected account.
 func (m Model) accountKey(k string) (Model, tea.Cmd) {
 	switch k {
-	case keyEnter, "s":
+	case "u", keyEnter:
 		return m.useSelected()
-	case "K", "[":
+	case "K":
 		return m.moveInChain(-1)
-	case "J", "]":
+	case "J":
 		return m.moveInChain(1)
 	case "d":
 		return m.toggleSelected()
 	case "x":
-		if a, ok := m.selected(); ok {
-			m.modal = modal{kind: modalRemove, name: a.Name, label: label(a)}
-		}
-	case "r":
-		return m.refreshSelected()
+		return m.askRemove(), nil
+	case "t":
+		return m.renewSelected()
 	}
 	return m, nil
 }
@@ -485,24 +481,24 @@ func (m Model) loginDone(msg loginDoneMsg) (Model, tea.Cmd) {
 	}
 	m.modal = modal{}
 	p := providerByID(m.snap, msg.label)
-	m.loading = true
-	return m, tea.Batch(m.fetch(), m.say("Signed in to "+p.Name+". Press enter on it to use it for sandboxes.", false))
+	return m.start("Publishing the new "+p.Name+" account…",
+		m.change("Signed in to "+p.Name+". Press u on it to use it.", func(context.Context) error { return nil }))
 }
 
-func (m Model) keyRemove(msg tea.KeyPressMsg) (Model, tea.Cmd) {
+func (m Model) keyConfirm(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y":
-		name, label, svc := m.modal.name, m.modal.label, m.svc
+		c := m.modal
 		m.modal = modal{}
-		return m, act(fetchWindow, "Removed "+label, func(ctx context.Context) error {
-			return svc.RemoveAccount(ctx, name)
-		})
+		return m.start(c.progress, c.run)
 	case "n", "N", keyEsc, "q", keyCtrlC:
 		m.modal = modal{}
 	}
 	return m, nil
 }
 
+// useSelected makes the selected account first in its agent's chain, which
+// sends that agent's traffic to it.
 func (m Model) useSelected() (Model, tea.Cmd) {
 	a, ok := m.selected()
 	if !ok {
@@ -512,22 +508,31 @@ func (m Model) useSelected() (Model, tea.Cmd) {
 		cmd := m.say("That account is disabled; press d to enable it first.", true)
 		return m, cmd
 	}
-	p := providerByID(m.snap, a.Provider)
-	svc := m.svc
-	m.notice, m.noticeBad, m.noticeAt = "Switching "+p.Name+" to "+label(a)+"…", false, m.now()
-	return m, func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		if err := svc.SetActive(ctx, a.Provider, a.Name); err != nil {
-			return doneMsg{err: err}
+	before := enabledChain(m.snap, a.Provider)
+	after := []v1.Account{a}
+	for i := range before {
+		if before[i].Name != a.Name {
+			after = append(after, before[i])
 		}
-		if _, err := svc.Publish(ctx); err != nil {
-			return doneMsg{err: err, refetch: true}
-		}
-		return doneMsg{text: p.Name + " primary is now " + label(a) + " (fallback chain updated)", refetch: true}
 	}
+	r := reorder{provider: a.Provider, before: before, after: after}
+	if !m.movesTraffic(r) {
+		text := label(a) + " is already active."
+		if from, to := m.carriers(r); from.Name != a.Name {
+			text = label(a) + " is first but cooling down; " + label(to) + " carries the traffic."
+		}
+		cmd := m.say(text, false)
+		return m, cmd
+	}
+	p, svc := providerByID(m.snap, a.Provider), m.svc
+	run := m.change(label(a)+" is first for "+p.Name+". The proxy switches within about 2 minutes.", func(ctx context.Context) error {
+		return svc.SetActive(ctx, a.Provider, a.Name)
+	})
+	return m.confirm("Use "+label(a)+" for "+p.Name+"?", m.warning(r), "switch", "Switching "+p.Name+" to "+label(a)+"…", run), nil
 }
 
+// moveInChain moves the selected account up or down the fallback order. It
+// asks first when that would move traffic.
 func (m Model) moveInChain(delta int) (Model, tea.Cmd) {
 	a, ok := m.selected()
 	if !ok {
@@ -537,70 +542,121 @@ func (m Model) moveInChain(delta int) (Model, tea.Cmd) {
 		cmd := m.say("That account is disabled; press d to enable it first.", true)
 		return m, cmd
 	}
-	accts := byProvider(m.snap, a.Provider)
-	enabled := make([]string, 0, len(accts))
-	idx := -1
-	for i := range accts {
-		if accts[i].Disabled {
-			continue
-		}
-		if accts[i].Name == a.Name {
-			idx = len(enabled)
-		}
-		enabled = append(enabled, accts[i].Name)
-	}
+	before := enabledChain(m.snap, a.Provider)
+	idx := slices.IndexFunc(before, func(b v1.Account) bool { return b.Name == a.Name })
 	next := idx + delta
-	if idx < 0 || next < 0 || next >= len(enabled) {
+	if idx < 0 || next < 0 || next >= len(before) {
 		return m, nil
 	}
-	enabled[idx], enabled[next] = enabled[next], enabled[idx]
-	p := providerByID(m.snap, a.Provider)
-	svc := m.svc
-	m.notice, m.noticeBad, m.noticeAt = "Updating "+p.Name+" fallback order…", false, m.now()
-	return m, func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		if err := svc.SetChain(ctx, a.Provider, enabled); err != nil {
-			return doneMsg{err: err}
-		}
-		if _, err := svc.Publish(ctx); err != nil {
-			return doneMsg{err: err, refetch: true}
-		}
-		return doneMsg{text: p.Name + " fallback order updated", refetch: true}
+	after := slices.Clone(before)
+	after[idx], after[next] = after[next], after[idx]
+	r := reorder{provider: a.Provider, before: before, after: after}
+	p, svc, order := providerByID(m.snap, a.Provider), m.svc, names(after)
+	run := m.change(p.Name+" fallback order updated", func(ctx context.Context) error {
+		return svc.SetChain(ctx, a.Provider, order)
+	})
+	progress := "Updating " + p.Name + " fallback order…"
+	if !m.movesTraffic(r) {
+		return m.start(progress, run)
 	}
+	return m.confirm("Put "+label(after[0])+" first for "+p.Name+"?", m.warning(r), "switch", progress, run), nil
 }
 
+func names(accts []v1.Account) []string {
+	out := make([]string, len(accts))
+	for i := range accts {
+		out[i] = accts[i].Name
+	}
+	return out
+}
+
+// without is the agent's chain with a taken out.
+func (m Model) without(a v1.Account) reorder {
+	before := enabledChain(m.snap, a.Provider)
+	after := slices.DeleteFunc(slices.Clone(before), func(b v1.Account) bool { return b.Name == a.Name })
+	return reorder{provider: a.Provider, before: before, after: after}
+}
+
+// leaving is what taking a out of the chain does to running sandboxes, or nil
+// when it carries no traffic.
+func (m Model) leaving(a v1.Account) []string {
+	r := m.without(a)
+	if len(r.before) == 0 {
+		return nil
+	}
+	if len(r.after) == 0 {
+		return []string{"It is the only enabled account for this agent."}
+	}
+	if !m.movesTraffic(r) {
+		return nil
+	}
+	return m.warning(r)
+}
+
+// toggleSelected disables or enables the selected account and publishes that.
 func (m Model) toggleSelected() (Model, tea.Cmd) {
 	a, ok := m.selected()
 	if !ok {
 		return m, nil
 	}
 	svc := m.svc
-	disable := !a.Disabled
-	verb := "Disabled "
-	if !disable {
-		verb = "Enabled "
+	if a.Disabled {
+		return m.start("Enabling "+label(a)+"…", m.change("Enabled "+label(a), func(ctx context.Context) error {
+			return svc.SetDisabled(ctx, a.Name, false)
+		}))
 	}
-	return m, act(fetchWindow, verb+label(a)+". Press p to publish the change.", func(ctx context.Context) error {
-		return svc.SetDisabled(ctx, a.Name, disable)
+	rest := names(m.without(a).after)
+	run := m.change("Disabled "+label(a), func(ctx context.Context) error {
+		if err := svc.SetDisabled(ctx, a.Name, true); err != nil {
+			return fmt.Errorf("disable: %w", err)
+		}
+		if len(rest) == 0 {
+			return nil
+		}
+		// Take it out of the saved order too, so that enabling it later adds
+		// it at the end and moves no traffic unasked.
+		return svc.SetChain(ctx, a.Provider, rest)
 	})
+	progress := "Disabling " + label(a) + "…"
+	if body := m.leaving(a); body != nil {
+		return m.confirm("Disable "+label(a)+"?", body, "disable", progress, run), nil
+	}
+	return m.start(progress, run)
 }
 
-func (m Model) refreshSelected() (Model, tea.Cmd) {
+func (m Model) askRemove() Model {
+	a, ok := m.selected()
+	if !ok {
+		return m
+	}
+	body := []string{"This deletes its saved tokens."}
+	if more := m.leaving(a); !a.Disabled && more != nil {
+		body = append(append(body, ""), more...)
+	}
+	svc := m.svc
+	run := m.change("Removed "+label(a), func(ctx context.Context) error {
+		return svc.RemoveAccount(ctx, a.Name)
+	})
+	return m.confirm("Remove "+label(a)+"?", body, "remove", "Removing "+label(a)+"…", run)
+}
+
+// renewSelected renews the selected account's token now.
+func (m Model) renewSelected() (Model, tea.Cmd) {
 	a, ok := m.selected()
 	if !ok {
 		return m, nil
 	}
 	svc := m.svc
-	return m, act(fetchWindow, "Refreshed "+label(a), func(ctx context.Context) error {
+	return m, act(fetchWindow, "Renewed the token of "+label(a), func(ctx context.Context) error {
 		return svc.RefreshAccount(ctx, a.Name)
 	})
 }
 
-func (m Model) refreshQuotas() (Model, tea.Cmd) {
+// reload reads the accounts again and has the proxy fetch live quotas.
+func (m Model) reload() (Model, tea.Cmd) {
+	m.loading = true
 	svc := m.svc
-	m.notice, m.noticeBad, m.noticeAt = "Fetching live quotas…", false, m.now()
-	return m, func() tea.Msg {
+	quotas := func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), fetchWindow)
 		defer cancel()
 		if err := svc.RefreshQuotas(ctx); err != nil {
@@ -608,19 +664,7 @@ func (m Model) refreshQuotas() (Model, tea.Cmd) {
 		}
 		return doneMsg{text: "Live quotas updated", refetch: true}
 	}
-}
-
-func (m Model) publishNow(label string) (Model, tea.Cmd) {
-	svc := m.svc
-	m.notice, m.noticeBad, m.noticeAt = label, false, m.now()
-	return m, func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		if _, err := svc.Publish(ctx); err != nil {
-			return doneMsg{err: err}
-		}
-		return doneMsg{text: "Published. New sandboxes pick it up; running ones keep their login.", refetch: true}
-	}
+	return m, tea.Batch(m.fetch(), quotas)
 }
 
 // act runs one change to the accounts, then says ok and reads them again, or

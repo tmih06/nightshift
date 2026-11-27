@@ -21,9 +21,9 @@ func (m Model) usageBlock(a v1.Account, width int) []string {
 	if u == nil {
 		note := "No request has been recorded for this account's token."
 		if !a.Active && a.Priority > 1 {
-			note = fmt.Sprintf("Not in use yet (fallback #%d). Press enter to make it primary, or K/J to reorder.", a.Priority)
+			note = fmt.Sprintf("Not active yet (fallback #%d). Press u to use it, or K/J to reorder.", a.Priority)
 		} else if !a.Active {
-			note = "Not in use, so no requests. Press enter to use it for sandboxes."
+			note = "Not active, so no requests. Press u to use it."
 		}
 		return []string{m.section("Usage", "", width), s.faint.Render(note)}
 	}
